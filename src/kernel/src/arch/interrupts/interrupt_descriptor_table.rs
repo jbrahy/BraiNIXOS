@@ -73,8 +73,9 @@ fn register_double_fault_handler(
     interrupt_descriptor_table: &mut InterruptDescriptorTable,
     double_fault_stack_index: u16,
 ) {
-    let double_fault_entry =
-        interrupt_descriptor_table.double_fault.set_handler_fn(handle_double_fault);
+    let double_fault_entry = interrupt_descriptor_table
+        .double_fault
+        .set_handler_fn(handle_double_fault);
     // SAFETY: double_fault_stack_index is DOUBLE_FAULT_INTERRUPT_STACK_TABLE_INDEX (0),
     // which references IST[0] in the TSS initialized by initialize_task_state_segment().
     // The x86_64 crate handles the hardware +1 offset internally.
@@ -97,25 +98,45 @@ fn register_catch_all_exception_handlers(
     register_virtualization_and_security_handlers(interrupt_descriptor_table);
 }
 
-fn register_low_exception_handlers(
-    interrupt_descriptor_table: &mut InterruptDescriptorTable,
-) {
-    interrupt_descriptor_table.divide_error.set_handler_fn(handle_division_error);
-    interrupt_descriptor_table.debug.set_handler_fn(handle_debug_exception);
-    interrupt_descriptor_table.non_maskable_interrupt.set_handler_fn(handle_non_maskable_interrupt);
-    interrupt_descriptor_table.breakpoint.set_handler_fn(handle_breakpoint);
-    interrupt_descriptor_table.overflow.set_handler_fn(handle_overflow);
-    interrupt_descriptor_table.bound_range_exceeded.set_handler_fn(handle_bound_range_exceeded);
+fn register_low_exception_handlers(interrupt_descriptor_table: &mut InterruptDescriptorTable) {
+    interrupt_descriptor_table
+        .divide_error
+        .set_handler_fn(handle_division_error);
+    interrupt_descriptor_table
+        .debug
+        .set_handler_fn(handle_debug_exception);
+    interrupt_descriptor_table
+        .non_maskable_interrupt
+        .set_handler_fn(handle_non_maskable_interrupt);
+    interrupt_descriptor_table
+        .breakpoint
+        .set_handler_fn(handle_breakpoint);
+    interrupt_descriptor_table
+        .overflow
+        .set_handler_fn(handle_overflow);
+    interrupt_descriptor_table
+        .bound_range_exceeded
+        .set_handler_fn(handle_bound_range_exceeded);
 }
 
 fn register_fault_handlers_with_error_codes(
     interrupt_descriptor_table: &mut InterruptDescriptorTable,
 ) {
-    interrupt_descriptor_table.invalid_opcode.set_handler_fn(handle_invalid_opcode);
-    interrupt_descriptor_table.device_not_available.set_handler_fn(handle_device_not_available);
-    interrupt_descriptor_table.invalid_tss.set_handler_fn(handle_invalid_task_state_segment);
-    interrupt_descriptor_table.segment_not_present.set_handler_fn(handle_segment_not_present);
-    interrupt_descriptor_table.stack_segment_fault.set_handler_fn(handle_stack_segment_fault);
+    interrupt_descriptor_table
+        .invalid_opcode
+        .set_handler_fn(handle_invalid_opcode);
+    interrupt_descriptor_table
+        .device_not_available
+        .set_handler_fn(handle_device_not_available);
+    interrupt_descriptor_table
+        .invalid_tss
+        .set_handler_fn(handle_invalid_task_state_segment);
+    interrupt_descriptor_table
+        .segment_not_present
+        .set_handler_fn(handle_segment_not_present);
+    interrupt_descriptor_table
+        .stack_segment_fault
+        .set_handler_fn(handle_stack_segment_fault);
     interrupt_descriptor_table
         .general_protection_fault
         .set_handler_fn(handle_general_protection_fault);
@@ -124,12 +145,24 @@ fn register_fault_handlers_with_error_codes(
 fn register_floating_point_and_check_handlers(
     interrupt_descriptor_table: &mut InterruptDescriptorTable,
 ) {
-    interrupt_descriptor_table.page_fault.set_handler_fn(handle_page_fault);
-    interrupt_descriptor_table.x87_floating_point.set_handler_fn(handle_x87_floating_point_exception);
-    interrupt_descriptor_table.alignment_check.set_handler_fn(handle_alignment_check);
-    interrupt_descriptor_table.machine_check.set_handler_fn(handle_machine_check);
-    interrupt_descriptor_table.simd_floating_point.set_handler_fn(handle_simd_floating_point_exception);
-    interrupt_descriptor_table.virtualization.set_handler_fn(handle_virtualization_exception);
+    interrupt_descriptor_table
+        .page_fault
+        .set_handler_fn(handle_page_fault);
+    interrupt_descriptor_table
+        .x87_floating_point
+        .set_handler_fn(handle_x87_floating_point_exception);
+    interrupt_descriptor_table
+        .alignment_check
+        .set_handler_fn(handle_alignment_check);
+    interrupt_descriptor_table
+        .machine_check
+        .set_handler_fn(handle_machine_check);
+    interrupt_descriptor_table
+        .simd_floating_point
+        .set_handler_fn(handle_simd_floating_point_exception);
+    interrupt_descriptor_table
+        .virtualization
+        .set_handler_fn(handle_virtualization_exception);
 }
 
 fn register_virtualization_and_security_handlers(
@@ -279,9 +312,7 @@ extern "x86-interrupt" fn handle_control_protection_exception(
     disable_interrupts_and_halt();
 }
 
-extern "x86-interrupt" fn handle_hypervisor_injection_exception(
-    _stack_frame: InterruptStackFrame,
-) {
+extern "x86-interrupt" fn handle_hypervisor_injection_exception(_stack_frame: InterruptStackFrame) {
     print_fault_message("Hypervisor Injection Exception (vector 28)");
     disable_interrupts_and_halt();
 }

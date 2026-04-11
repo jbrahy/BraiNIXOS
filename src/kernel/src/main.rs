@@ -46,7 +46,11 @@ pub unsafe extern "C" fn _start() -> ! {
     );
     let serial_output_port = SerialOutputPort::initialize();
     let mut boot_step_logger = BootStepLogger::new(serial_output_port);
-    execute_boot_sequence(multiboot2_magic_value, multiboot2_info_address, &mut boot_step_logger);
+    execute_boot_sequence(
+        multiboot2_magic_value,
+        multiboot2_info_address,
+        &mut boot_step_logger,
+    );
     // SAFETY: hlt suspends the processor until the next interrupt. The loop
     // ensures we never return to the bootloader if execute_boot_sequence exits.
     // Allowlist: src/kernel/src/main.rs — hlt in boot completion loop.

@@ -43,8 +43,14 @@ impl SerialOutputPort {
 
 fn configure_baud_rate_divisor() {
     write_port_byte(SERIAL_LINE_CONTROL_REGISTER, SERIAL_LINE_CONTROL_DLAB_BIT);
-    write_port_byte(SERIAL_BAUD_RATE_DIVISOR_LOW_REGISTER, SERIAL_BAUD_115200_DIVISOR_LOW_BYTE);
-    write_port_byte(SERIAL_BAUD_RATE_DIVISOR_HIGH_REGISTER, SERIAL_BAUD_115200_DIVISOR_HIGH_BYTE);
+    write_port_byte(
+        SERIAL_BAUD_RATE_DIVISOR_LOW_REGISTER,
+        SERIAL_BAUD_115200_DIVISOR_LOW_BYTE,
+    );
+    write_port_byte(
+        SERIAL_BAUD_RATE_DIVISOR_HIGH_REGISTER,
+        SERIAL_BAUD_115200_DIVISOR_HIGH_BYTE,
+    );
 }
 
 fn configure_line_format() {
@@ -53,7 +59,10 @@ fn configure_line_format() {
 }
 
 fn configure_fifo_and_modem_control() {
-    write_port_byte(SERIAL_FIFO_CONTROL_REGISTER, SERIAL_FIFO_ENABLED_14_BYTE_THRESHOLD);
+    write_port_byte(
+        SERIAL_FIFO_CONTROL_REGISTER,
+        SERIAL_FIFO_ENABLED_14_BYTE_THRESHOLD,
+    );
     write_port_byte(SERIAL_MODEM_CONTROL_REGISTER, SERIAL_MODEM_CONTROL_READY);
 }
 

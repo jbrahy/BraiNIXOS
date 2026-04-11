@@ -39,13 +39,11 @@ fn populate_global_descriptor_table(task_state_segment: &'static TaskStateSegmen
     // - Evidence: test_gdt_loaded_with_kernel_segments.
     // Allowlist: src/kernel/src/arch/interrupts/ — GDT segment descriptor setup.
     unsafe {
-        let kernel_code_selector =
-            (*core::ptr::addr_of_mut!(GLOBAL_DESCRIPTOR_TABLE))
-                .append(Descriptor::kernel_code_segment());
+        let kernel_code_selector = (*core::ptr::addr_of_mut!(GLOBAL_DESCRIPTOR_TABLE))
+            .append(Descriptor::kernel_code_segment());
         core::ptr::addr_of_mut!(KERNEL_CODE_SEGMENT_SELECTOR).write(kernel_code_selector);
-        let task_state_segment_selector =
-            (*core::ptr::addr_of_mut!(GLOBAL_DESCRIPTOR_TABLE))
-                .append(Descriptor::tss_segment(task_state_segment));
+        let task_state_segment_selector = (*core::ptr::addr_of_mut!(GLOBAL_DESCRIPTOR_TABLE))
+            .append(Descriptor::tss_segment(task_state_segment));
         core::ptr::addr_of_mut!(TASK_STATE_SEGMENT_SELECTOR).write(task_state_segment_selector);
     }
 }

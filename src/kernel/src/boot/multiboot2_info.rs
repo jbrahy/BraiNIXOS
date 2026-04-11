@@ -50,7 +50,11 @@ pub fn initialize_memory_subsystem(
     multiboot2_info_address: u64,
     boot_step_logger: &mut BootStepLogger,
 ) {
-    validate_multiboot2_magic(multiboot2_magic_value, multiboot2_info_address, boot_step_logger);
+    validate_multiboot2_magic(
+        multiboot2_magic_value,
+        multiboot2_info_address,
+        boot_step_logger,
+    );
     log_memory_map_discovery(multiboot2_info_address, boot_step_logger);
 }
 
@@ -82,10 +86,7 @@ fn halt_on_invalid_multiboot2_info(boot_step_logger: &mut BootStepLogger) -> ! {
 ///
 /// Enforces invariant INV-MEM-005: memory ownership begins with discovery.
 /// Verified by: QEMU integration test observes memory map log output.
-fn log_memory_map_discovery(
-    multiboot2_info_address: u64,
-    boot_step_logger: &mut BootStepLogger,
-) {
+fn log_memory_map_discovery(multiboot2_info_address: u64, boot_step_logger: &mut BootStepLogger) {
     let boot_information = load_boot_information(multiboot2_info_address, boot_step_logger);
     populate_allocator_from_boot_information(&boot_information, boot_step_logger);
 }

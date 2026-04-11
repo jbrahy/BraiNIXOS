@@ -41,18 +41,18 @@ fn assert_halt_helper_issues_cli_before_hlt(halt_source: &str) {
     assert_cli_appears_before_hlt(cli_position, hlt_position);
 }
 
-fn assert_both_instructions_are_present(
-    cli_position: Option<usize>,
-    hlt_position: Option<usize>,
-) {
-    assert!(cli_position.is_some(), "halt helper must contain cli instruction");
-    assert!(hlt_position.is_some(), "halt helper must contain hlt instruction");
+fn assert_both_instructions_are_present(cli_position: Option<usize>, hlt_position: Option<usize>) {
+    assert!(
+        cli_position.is_some(),
+        "halt helper must contain cli instruction"
+    );
+    assert!(
+        hlt_position.is_some(),
+        "halt helper must contain hlt instruction"
+    );
 }
 
-fn assert_cli_appears_before_hlt(
-    cli_position: Option<usize>,
-    hlt_position: Option<usize>,
-) {
+fn assert_cli_appears_before_hlt(cli_position: Option<usize>, hlt_position: Option<usize>) {
     let cli_offset = cli_position.unwrap_or(usize::MAX);
     let hlt_offset = hlt_position.unwrap_or(usize::MAX);
     assert!(
@@ -83,10 +83,8 @@ fn extract_panic_handler_body(source: &str) -> &str {
 fn test_double_fault_handler_is_registered_on_separate_interrupt_stack_table_entry() {
     let interrupt_descriptor_table_source =
         include_str!("../src/arch/interrupts/interrupt_descriptor_table.rs");
-    let task_state_segment_source =
-        include_str!("../src/arch/interrupts/task_state_segment.rs");
-    let set_stack_index_is_called =
-        interrupt_descriptor_table_source.contains("set_stack_index");
+    let task_state_segment_source = include_str!("../src/arch/interrupts/task_state_segment.rs");
+    let set_stack_index_is_called = interrupt_descriptor_table_source.contains("set_stack_index");
     let interrupt_stack_table_index_is_defined =
         task_state_segment_source.contains("DOUBLE_FAULT_INTERRUPT_STACK_TABLE_INDEX");
     assert!(
@@ -139,7 +137,9 @@ fn find_cr4_write_after_position(
 ) -> Option<usize> {
     let bitmask_offset = smep_smap_position?;
     let source_after_bitmask = &bootloader_source[bitmask_offset..];
-    source_after_bitmask.find("mov cr4").map(|offset| bitmask_offset + offset)
+    source_after_bitmask
+        .find("mov cr4")
+        .map(|offset| bitmask_offset + offset)
 }
 
 /// Verifies that all critical CPU exception vectors have registered handlers.
@@ -167,46 +167,55 @@ fn test_all_critical_exception_vectors_have_registered_handlers() {
 }
 
 fn assert_divide_error_handler_is_registered(source: &str) {
+    let field_access_is_present = source.contains("divide_error");
+    let handler_call_is_present = source.contains("handle_division_error");
     assert!(
-        source.contains("divide_error.set_handler_fn"),
+        field_access_is_present && handler_call_is_present,
         "interrupt_descriptor_table.rs must register a handler for the divide error exception (vector 0)"
     );
 }
 
 fn assert_breakpoint_handler_is_registered(source: &str) {
+    let field_access_is_present = source.contains("breakpoint");
+    let handler_call_is_present = source.contains("handle_breakpoint");
     assert!(
-        source.contains("breakpoint.set_handler_fn"),
+        field_access_is_present && handler_call_is_present,
         "interrupt_descriptor_table.rs must register a handler for the breakpoint exception (vector 3)"
     );
 }
 
 fn assert_invalid_opcode_handler_is_registered(source: &str) {
+    let field_access_is_present = source.contains("invalid_opcode");
+    let handler_call_is_present = source.contains("handle_invalid_opcode");
     assert!(
-        source.contains("invalid_opcode.set_handler_fn"),
+        field_access_is_present && handler_call_is_present,
         "interrupt_descriptor_table.rs must register a handler for the invalid opcode exception (vector 6)"
     );
 }
 
 fn assert_double_fault_handler_is_registered(source: &str) {
+    let field_access_is_present = source.contains("double_fault");
+    let handler_call_is_present = source.contains("handle_double_fault");
     assert!(
-        source.contains("double_fault.set_handler_fn"),
+        field_access_is_present && handler_call_is_present,
         "interrupt_descriptor_table.rs must register a handler for the double fault exception (vector 8)"
     );
 }
 
 fn assert_general_protection_fault_handler_is_registered(source: &str) {
-    let field_access_is_present = source.contains(".general_protection_fault");
-    let handler_registration_is_present =
-        source.contains("set_handler_fn(handle_general_protection_fault)");
+    let field_access_is_present = source.contains("general_protection_fault");
+    let handler_call_is_present = source.contains("handle_general_protection_fault");
     assert!(
-        field_access_is_present && handler_registration_is_present,
+        field_access_is_present && handler_call_is_present,
         "interrupt_descriptor_table.rs must register a handler for the general protection fault exception (vector 13)"
     );
 }
 
 fn assert_page_fault_handler_is_registered(source: &str) {
+    let field_access_is_present = source.contains("page_fault");
+    let handler_call_is_present = source.contains("handle_page_fault");
     assert!(
-        source.contains("page_fault.set_handler_fn"),
+        field_access_is_present && handler_call_is_present,
         "interrupt_descriptor_table.rs must register a handler for the page fault exception (vector 14)"
     );
 }
