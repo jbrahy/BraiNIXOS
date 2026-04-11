@@ -29,6 +29,9 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
     swtpm \
     swtpm-tools \
     socat \
+    grub-pc-bin \
+    grub-common \
+    xorriso \
     && rm -rf /var/lib/apt/lists/*
 
 # SSH server setup
