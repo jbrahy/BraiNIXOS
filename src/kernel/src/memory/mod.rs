@@ -7,4 +7,5 @@ pub mod allocation_error;
 pub mod bounded_stack;
 pub mod page_type;
 pub mod physical_allocator;
+pub mod pool_allocator;
 pub mod virtual_address_layout;
