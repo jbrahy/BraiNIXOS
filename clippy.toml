@@ -1,0 +1,9 @@
+# Kernel-grade lint thresholds for Brainix
+# Lint denials are in Cargo.toml [workspace.lints.clippy]
+
+# Threshold for cognitive_complexity lint.
+# Maps to the 6-line function body limit from CODE_STANDARDS.md.
+cognitive-complexity-threshold = 6
+
+# Disallow common abbreviations that violate CODE_STANDARDS.md Rule 1 (full-word names)
+disallowed-names = ["buf", "ptr", "idx", "len", "num", "err", "res", "tmp", "cap", "mem", "addr"]
