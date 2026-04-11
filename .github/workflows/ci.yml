@@ -22,8 +22,11 @@ jobs:
       - name: Install Rust (pinned nightly)
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-01-2025-12-01
-          components: rustfmt, clippy
+          toolchain: nightly-2025-12-01
+          components: rustfmt, clippy, rust-src
+
+      - name: cargo check
+        run: cargo check --workspace --exclude brainix-capability-verify --target x86_64-unknown-none
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
