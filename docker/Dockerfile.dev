@@ -1,0 +1,66 @@
+# Brainix development environment
+#
+# Contains: Rust nightly (pinned), QEMU x86_64, OpenSSH server, build tools.
+# Run via:  bin/deploy-docker.sh
+#
+# When Phase 1 adds a kernel entry point, deploy-docker.sh launches QEMU
+# inside this container and exposes the serial console on port 4444.
+
+FROM ubuntu:22.04
+
+ARG RUST_NIGHTLY=nightly-2025-12-01
+ARG USERNAME=dev
+ARG UID=1000
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CARGO_HOME=/home/${USERNAME}/.cargo
+ENV RUSTUP_HOME=/home/${USERNAME}/.rustup
+ENV PATH=/home/${USERNAME}/.cargo/bin:${PATH}
+
+# System packages
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    curl \
+    git \
+    openssh-server \
+    qemu-system-x86 \
+    ovmf \
+    swtpm \
+    swtpm-tools \
+    socat \
+    && rm -rf /var/lib/apt/lists/*
+
+# SSH server setup
+RUN mkdir /var/run/sshd \
+    && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config \
+    && sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config \
+    && echo "AllowUsers ${USERNAME}" >> /etc/ssh/sshd_config
+
+# Dev user
+RUN useradd -m -u ${UID} -s /bin/bash ${USERNAME} \
+    && mkdir -p /home/${USERNAME}/.ssh \
+    && chmod 700 /home/${USERNAME}/.ssh \
+    && chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.ssh
+
+# Rust toolchain — installed as dev user
+USER ${USERNAME}
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain ${RUST_NIGHTLY} \
+    && /home/${USERNAME}/.cargo/bin/rustup component add \
+        rust-src rustfmt clippy llvm-tools-preview \
+    && /home/${USERNAME}/.cargo/bin/rustup target add x86_64-unknown-none
+
+WORKDIR /home/${USERNAME}/brainix
+
+USER root
+
+# Mount point for authorized_keys — populated at runtime by deploy-docker.sh
+VOLUME /home/${USERNAME}/.ssh/authorized_keys
+
+EXPOSE 22 4444
+
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
