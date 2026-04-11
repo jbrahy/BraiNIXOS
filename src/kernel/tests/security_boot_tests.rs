@@ -19,9 +19,16 @@ fn test_panic_handler_disables_interrupts_before_halt() {
     let panic_handler_body = extract_panic_handler_body(main_source);
     let cli_position = panic_handler_body.find("\"cli\"");
     let hlt_position = panic_handler_body.find("\"hlt\"");
+    assert_both_instructions_are_present(cli_position, hlt_position);
+    assert_cli_appears_before_hlt(cli_position, hlt_position);
+}
+
+fn assert_both_instructions_are_present(
+    cli_position: Option<usize>,
+    hlt_position: Option<usize>,
+) {
     assert!(cli_position.is_some(), "panic handler must contain cli instruction");
     assert!(hlt_position.is_some(), "panic handler must contain hlt instruction");
-    assert_cli_appears_before_hlt(cli_position, hlt_position);
 }
 
 fn assert_cli_appears_before_hlt(
