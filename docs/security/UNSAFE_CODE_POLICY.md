@@ -1,0 +1,168 @@
+# Brainix Unsafe Code Policy
+
+## Purpose
+
+Unsafe Rust is **prohibited by default** in Brainix. This is not "allowed with documentation" or "permitted when justified." Unsafe is prohibited. The policy mirrors the capability model: no ambient authority means no ambient unsafe.
+
+Every crate in the Brainix workspace applies `#![deny(unsafe_code)]` at the crate root. Only files explicitly listed in the allowlist below may use `#![allow(unsafe_code)]` at the file level to override this denial.
+
+This document is the authoritative specification for all unsafe code governance in Brainix. It defines the default policy, the complete allowlist, the exception process, the enforcement mechanism, and the audit trail requirements.
+
+---
+
+## Default Policy
+
+The default policy is total prohibition:
+
+1. **Every Brainix crate** includes `#![deny(unsafe_code)]` at the crate root.
+2. **Every `unsafe` block** outside the allowlist is a CI merge blocker. Not a warning, not an advisory, not a suggestion. A blocker.
+3. **No `unsafe` block** may exist without an accompanying `// SAFETY:` comment that explains the invariant being upheld.
+4. **No `unsafe` function** may be declared without a documented safety contract in its doc comment specifying assumptions, ownership rules, aliasing constraints, preconditions, postconditions, and what would make it unsound.
+
+The burden of proof is on the author of the unsafe code, not on the reviewer. Unsafe code is guilty until proven sound.
+
+---
+
+## Allowlisted Locations
+
+The following table is the exhaustive list of source locations where `unsafe` is permitted. Each location uses `#![allow(unsafe_code)]` at the file level. Any `unsafe` code outside these locations is a CI merge blocker.
+
+| Module/File Path | Justification | Specific Operations Permitted |
+|---|---|---|
+| `src/kernel/src/arch/paging/` | Page table construction requires raw pointer writes to page table entries. There is no safe Rust abstraction for writing to hardware-defined page table structures at physical addresses. | `write_volatile` to page table entries, raw pointer arithmetic for page table walks, casting physical addresses to page table entry pointers |
+| `src/kernel/src/arch/interrupts/` | Interrupt Stack Table (IST) setup and Interrupt Descriptor Table (IDT) loading require direct manipulation of CPU control structures that have no safe Rust interface. | `lidt` instruction via inline assembly, stack pointer manipulation for IST entries, writing to the Task State Segment (TSS) |
+| `src/kernel/src/memory/` | Capability slot zeroing on revocation requires `write_volatile` to prevent the compiler from eliding the zero-write as a dead store. This upholds invariant INV-AUTH-004 (revocation is final) and the CAP-04 requirement that revoked slots must not contain stale data. | `core::ptr::write_volatile` for capability slot zeroing, `core::ptr::write_bytes` for page zeroing before reuse |
+| `src/bootloader/src/` | The bootloader executes before the kernel's safe abstractions are available. Hardware register access and memory mapping at this stage have no safe alternative. | Port I/O (`in`/`out` instructions), MSR reads and writes (`rdmsr`/`wrmsr`), memory-mapped I/O for early hardware initialization, raw address manipulation for initial memory mapping |
+| `src/kernel/src/arch/` (assembly stubs) | Interrupt handler entry and exit, syscall entry and exit, and context switching require inline assembly that manipulates registers and stack frames directly. These operations are inherently outside Rust's safety model. | Inline assembly (`core::arch::asm!`) for interrupt entry/exit trampolines, `syscall`/`sysret` instruction sequences, register save/restore sequences, `cli`/`sti` for interrupt flag manipulation |
+| `src/kernel/src/boot/` | Identity mapping during early boot occurs before the kernel's page table abstractions are initialized. Raw address manipulation is required to establish the initial address space. | Raw address manipulation for identity mapping, writing to CR3 to load the initial page table, reading/writing control registers (CR0, CR4) for enabling paging and protection features |
+
+### Allowlist Scope Rules
+
+1. **File-level, not block-level.** The `#![allow(unsafe_code)]` attribute is applied at the file level for allowlisted modules. Individual blocks within those files still require `// SAFETY:` comments.
+2. **No transitive expansion.** Being in an allowlisted module does not grant permission to use unsafe in helper modules that the allowlisted module depends on. Each file that contains unsafe must be independently allowlisted.
+3. **Minimal scope within allowlisted files.** Even within an allowlisted file, unsafe blocks must be as small as possible. A function that performs one unsafe operation and ten safe operations must wrap only the unsafe operation in an `unsafe` block, not the entire function body.
+
+---
+
+## Exception Process
+
+Adding a new location to the allowlist requires all of the following:
+
+1. **A pull request** that modifies this document to add the new entry to the allowlist table above.
+2. **A written security exception** per PROJECT_RULES.md Rule 19, including:
+   - The exact rule being deviated from (this policy's default prohibition)
+   - Why the operation cannot be performed safely (with evidence, not assertion)
+   - What risk the unsafe code introduces
+   - Why safer alternatives were rejected (with specific alternatives named and their limitations described)
+   - What compensating controls exist (tests, proofs, fuzzing, review requirements)
+   - How long the exception remains active (permanent for hardware-interface code, time-bounded for workarounds)
+   - What conditions would remove the need for the unsafe code
+3. **At least one reviewer approval** with the reviewer confirming they have read and understood the safety contract.
+4. **The new unsafe code must include:**
+   - A `// SAFETY:` comment on every `unsafe` block
+   - A doc-comment safety contract on every `unsafe` function
+   - At least one test that exercises the unsafe code path
+   - A reference to which allowlist entry the unsafe falls under
+
+No exception is valid without documentation. Undocumented exceptions are prohibited per PROJECT_RULES.md Rule 17.5.
+
+---
+
+## Enforcement
+
+Enforcement operates at three levels:
+
+### Level 1: Compile-Time Denial
+
+The workspace-level configuration in `Cargo.toml` includes:
+
+```toml
+[workspace.lints.clippy]
+unsafe_code = "deny"
+```
+
+This causes `cargo clippy` to reject any `unsafe` block in any crate that does not explicitly override the denial. Allowlisted files use `#![allow(unsafe_code)]` at the file level to override.
+
+### Level 2: CI Merge Gate
+
+The CI pipeline runs `cargo clippy` with `-D warnings` as part of the `style` job. This job is the first job in the pipeline and must pass before any other job runs. Any `unsafe` block outside an allowlisted file fails the clippy check, which fails the style job, which blocks the merge.
+
+This is enforced via GitHub branch protection rules that require all CI jobs to pass before merging to the main branch.
+
+### Level 3: Code Review
+
+Every pull request that introduces or modifies `unsafe` code requires:
+
+1. The reviewer to verify the `// SAFETY:` comment is accurate and complete.
+2. The reviewer to verify the code falls under an existing allowlist entry.
+3. If the code requires a new allowlist entry, the reviewer to verify the exception process has been followed.
+4. The reviewer to verify that tests exist for the unsafe code path.
+
+A pull request that visibly violates this policy must not be approved, per PROJECT_RULES.md Rule 20.
+
+### SAFETY Comment Format
+
+Every `unsafe` block must be preceded by a comment in this format:
+
+```rust
+// SAFETY: [Explanation of why this operation is sound]
+// - Precondition: [What must be true before this block executes]
+// - Invariant: [Which security invariant this upholds, using IDs from SECURITY_INVARIANTS.md]
+// - Evidence: [Test name or proof that validates this safety claim]
+unsafe {
+    // ... minimal unsafe operation ...
+}
+```
+
+---
+
+## Audit Trail
+
+### Per-Commit Requirements
+
+Every commit that adds or modifies `unsafe` code must include in its commit message:
+
+1. Which allowlist entry the unsafe code falls under (by module path from the table above).
+2. A one-sentence justification for why this specific change requires unsafe.
+3. Confirmation that a `// SAFETY:` comment exists for every new or modified `unsafe` block.
+
+### Tracking Metrics
+
+The following metrics are tracked as part of the project's security posture:
+
+1. **Total `unsafe` block count** across the workspace (measured by `cargo geiger` or equivalent).
+2. **Unsafe blocks per allowlisted module** to detect scope creep within allowlisted files.
+3. **New unsafe blocks per release** to track growth rate.
+
+Any increase in the unsafe surface is reviewed as a security event per INV-UNSAFE-003 (unsafe growth is reviewed as a security event) from SECURITY_INVARIANTS.md.
+
+### Periodic Review
+
+The allowlist is reviewed at every phase transition to determine:
+
+1. Whether any allowlisted location can be made safe due to new abstractions or library support.
+2. Whether any allowlisted location has grown beyond its original scope.
+3. Whether the `// SAFETY:` comments remain accurate after code changes.
+
+---
+
+## Relationship to Security Invariants
+
+This policy directly enforces the following invariants from `docs/security/SECURITY_INVARIANTS.md`:
+
+| Invariant ID | Invariant | How This Policy Enforces It |
+|---|---|---|
+| INV-UNSAFE-001 | Every unsafe block has a local soundness contract | Mandatory `// SAFETY:` comments with preconditions, invariants, and evidence |
+| INV-UNSAFE-002 | Unsafe scope is minimized | Prohibited by default; hard allowlist limits where unsafe can exist |
+| INV-UNSAFE-003 | Unsafe growth is reviewed as a security event | Exception process requires PR with security review; metrics tracked per release |
+| INV-UNSAFE-004 | Assurance claims are traceable | Every `// SAFETY:` comment references the invariant ID and test name |
+| INV-AUTH-004 | Revocation is final within defined scope | `write_volatile` for capability slot zeroing is allowlisted in `src/kernel/src/memory/` |
+| INV-MEM-006 | Freed memory is sanitized before reuse | Page zeroing via `write_bytes` is allowlisted in `src/kernel/src/memory/` |
+
+---
+
+## Final Rule
+
+Unsafe code in Brainix is not a convenience escape hatch. It is a managed hazard surface that exists only where hardware forces it. Every `unsafe` block is a place where Rust's safety guarantees do not apply, which means every `unsafe` block is a place where a bug can become a security vulnerability.
+
+The default is prohibition. The exception is documented, reviewed, and tracked. There is no third option.
