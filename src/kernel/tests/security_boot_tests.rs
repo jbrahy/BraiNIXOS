@@ -21,17 +21,28 @@ fn test_panic_handler_disables_interrupts_before_halt() {
     let hlt_position = panic_handler_body.find("\"hlt\"");
     assert!(cli_position.is_some(), "panic handler must contain cli instruction");
     assert!(hlt_position.is_some(), "panic handler must contain hlt instruction");
+    assert_cli_appears_before_hlt(cli_position, hlt_position);
+}
+
+fn assert_cli_appears_before_hlt(
+    cli_position: Option<usize>,
+    hlt_position: Option<usize>,
+) {
+    let cli_offset = cli_position.unwrap_or(usize::MAX);
+    let hlt_offset = hlt_position.unwrap_or(usize::MAX);
     assert!(
-        cli_position.unwrap() < hlt_position.unwrap(),
+        cli_offset < hlt_offset,
         "cli must appear before hlt in panic handler body"
     );
 }
 
 fn extract_panic_handler_body(source: &str) -> &str {
-    let panic_handler_start = source
-        .find("fn handle_kernel_panic")
-        .expect("handle_kernel_panic function must exist in main.rs");
-    &source[panic_handler_start..]
+    // If the function is not found, return an empty string. The caller's
+    // subsequent assert!(cli_position.is_some()) will fail with a clear message.
+    match source.find("fn handle_kernel_panic") {
+        Some(panic_handler_start) => &source[panic_handler_start..],
+        None => "",
+    }
 }
 
 /// Verifies that the double-fault IDT entry is registered with an IST index.
@@ -75,6 +86,6 @@ fn test_stack_guard_page_is_unmapped_below_kernel_stack() {
     // Phase 1 stub — stack guard page enforcement is implemented in Phase 2
     // (memory management). This test will be updated to verify that the linker
     // script's _kernel_stack_guard_page symbol corresponds to an unmapped page
-    // in the active page table.
-    assert!(true, "Phase 1 stub: stack guard page enforcement deferred to Phase 2");
+    // in the active page table. The test is intentionally a no-op in Phase 1
+    // to document the deferred requirement without failing.
 }

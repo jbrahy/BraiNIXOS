@@ -2,6 +2,7 @@
 members = [
     "src/kernel",
     "src/bootloader",
+    "src/bootloader-verify",
     "src/servers/*",
     "src/capability-verify",
 ]

@@ -1,0 +1,20 @@
+[package]
+name = "brainix-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# The fuzz/ directory is NOT a workspace member. cargo-fuzz manages it
+# as a separate crate. Do not add fuzz/ to the workspace Cargo.toml members.
+
+[dependencies]
+libfuzzer-sys = "0.4"
+brainix-bootloader-verify = { path = "../src/bootloader-verify" }
+
+[[bin]]
+name = "fuzz_bootloader_multiboot2_info_struct_parsing"
+path = "fuzz_targets/fuzz_bootloader_multiboot2_info_struct_parsing.rs"
+doc = false
