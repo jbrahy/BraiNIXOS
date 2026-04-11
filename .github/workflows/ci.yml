@@ -169,14 +169,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install QEMU + swtpm
+      - name: Install QEMU + swtpm + GRUB2 ISO tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             qemu-system-x86 \
             swtpm \
             swtpm-tools \
-            ovmf
+            ovmf \
+            grub-pc-bin \
+            grub-common \
+            xorriso
 
       - name: Install Rust (nightly + x86_64-unknown-none)
         uses: dtolnay/rust-toolchain@master
@@ -197,6 +200,23 @@ jobs:
       - name: Build kernel
         working-directory: src/kernel
         run: cargo build --target x86_64-unknown-none --release
+
+      - name: Build bootloader
+        working-directory: src/bootloader
+        run: cargo build --target x86_64-unknown-none --release
+
+      - name: Create GRUB2 boot ISO
+        run: |
+          mkdir -p iso/boot/grub
+          cp target/x86_64-unknown-none/release/brainix-bootloader iso/boot/
+          cat > iso/boot/grub/grub.cfg << 'GRUBEOF'
+          set timeout=0
+          menuentry "Brainix" {
+              multiboot2 /boot/brainix-bootloader
+              boot
+          }
+          GRUBEOF
+          grub-mkrescue -o brainix.iso iso/
 
       - name: Initialize swtpm (clean state)
         run: |
@@ -233,8 +253,7 @@ jobs:
             -chardev socket,id=chrtpm,path=/tmp/swtpm-test.sock \
             -tpmdev emulator,id=tpm0,chardev=chrtpm \
             -device tpm-tis,tpmdev=tpm0 \
-            -kernel target/x86_64-unknown-none/release/brainix \
-            -append "smt=off" \
+            -cdrom brainix.iso \
             2>&1 | tee /tmp/boot.log || true
 
       - name: Assert boot success
