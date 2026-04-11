@@ -7,5 +7,8 @@ edition.workspace = true
 name = "brainix"
 path = "src/main.rs"
 
+[dependencies]
+x86_64 = { version = "0.15.4", default-features = false, features = ["instructions"] }
+
 [lints]
 workspace = true

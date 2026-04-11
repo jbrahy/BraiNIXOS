@@ -19,3 +19,9 @@ unimplemented = "deny"
 expect_used = "deny"
 arithmetic_side_effects = "deny"
 cognitive_complexity = "deny"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
