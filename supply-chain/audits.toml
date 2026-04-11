@@ -1,0 +1,23 @@
+
+# cargo-vet audits file
+
+[[audits.multiboot2]]
+criteria = "safe-to-deploy"
+version = "0.24.1"
+notes = """
+Reviewed Cargo.toml and src/lib.rs entry points. Pure Rust, no_std compatible, MIT/Apache-2.0.
+Multiboot2 info struct parser for bootloader use. Parses GRUB-provided memory maps and module info.
+No unsafe blocks in the core parsing path; uses ptr_meta for trait object size metadata.
+Bounded to bootloader crate only (not compiled into kernel binary per D-06).
+"""
+
+[[audits.x86_64]]
+criteria = "safe-to-deploy"
+version = "0.15.4"
+notes = """
+Reviewed Cargo.toml and src/lib.rs entry points. Pure Rust, no proc macros, MIT/Apache-2.0.
+Standard x86-64 hardware abstraction crate providing GDT, IDT, TSS, paging, and port I/O types.
+Unsafe blocks are limited to hardware register access (lgdt, lidt, ltr, rdmsr, wrmsr, inb, outb)
+which are inherently unsafe system operations. No network access, no file I/O, no dynamic allocation.
+Crate has been widely used in the bare-metal Rust community (Phil Opp's OS blog, Redox OS).
+"""
