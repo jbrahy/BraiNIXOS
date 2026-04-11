@@ -2,12 +2,18 @@
 
 use crate::arch::interrupts::initialize_interrupt_handling;
 use crate::boot::logger::BootStepLogger;
+use crate::boot::multiboot2_info::initialize_memory_subsystem;
 
 /// Run the full boot sequence. Called from `_start` after serial is ready.
-pub fn execute_boot_sequence(boot_step_logger: &mut BootStepLogger) {
+pub fn execute_boot_sequence(
+    multiboot2_magic_value: u32,
+    multiboot2_info_address: u64,
+    boot_step_logger: &mut BootStepLogger,
+) {
     log_kernel_banner(boot_step_logger);
     log_boot_infrastructure_status(boot_step_logger);
     initialize_interrupt_handling(boot_step_logger);
+    initialize_memory_subsystem(multiboot2_magic_value, multiboot2_info_address, boot_step_logger);
     log_boot_complete(boot_step_logger);
 }
 

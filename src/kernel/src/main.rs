@@ -27,9 +27,26 @@ use core::fmt::Write;
 // Allowlist: src/kernel/src/main.rs — _start entry ABI.
 #[no_mangle]
 pub unsafe extern "C" fn _start() -> ! {
+    // SAFETY: eax contains the multiboot2 magic value (0x36D76289) and rbx
+    // contains the multiboot2 info structure pointer, both placed by GRUB per
+    // the multiboot2 specification (D-02, D-03). Must be captured before any
+    // Rust prologue or function call that might clobber these registers.
+    // - Precondition: GRUB has placed magic in eax, info pointer in rbx.
+    // - Invariant: INV-BOOT-001 (boot parameters captured before use).
+    // - Evidence: QEMU integration test observes multiboot2 validation log.
+    // Allowlist: src/kernel/src/main.rs — inline assembly for register capture.
+    let multiboot2_magic_value: u32;
+    let multiboot2_info_address: u64;
+    core::arch::asm!(
+        "mov {:e}, eax",
+        "mov {}, rbx",
+        out(reg) multiboot2_magic_value,
+        out(reg) multiboot2_info_address,
+        options(nomem, nostack, preserves_flags),
+    );
     let serial_output_port = SerialOutputPort::initialize();
     let mut boot_step_logger = BootStepLogger::new(serial_output_port);
-    execute_boot_sequence(&mut boot_step_logger);
+    execute_boot_sequence(multiboot2_magic_value, multiboot2_info_address, &mut boot_step_logger);
     // SAFETY: hlt suspends the processor until the next interrupt. The loop
     // ensures we never return to the bootloader if execute_boot_sequence exits.
     // Allowlist: src/kernel/src/main.rs — hlt in boot completion loop.
