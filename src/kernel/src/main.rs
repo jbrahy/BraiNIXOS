@@ -44,10 +44,16 @@ fn handle_kernel_panic(panic_information: &core::panic::PanicInfo) -> ! {
     let mut emergency_serial_port = SerialOutputPort::initialize();
     write_panic_banner(&mut emergency_serial_port);
     write_panic_details(&mut emergency_serial_port, panic_information);
-    // SAFETY: hlt is the correct instruction to halt the processor in kernel mode.
+    // SAFETY: cli disables interrupts before hlt to prevent recursive panics if an
+    // interrupt fires during panic handling. hlt suspends the processor until the
+    // next interrupt (which cannot arrive with interrupts disabled), halting cleanly.
+    // - Precondition: executing in ring 0.
+    // - Invariant: INV-BOOT-003 (panic handler disables interrupts before halt).
+    // - Evidence: test_panic_handler_disables_interrupts_before_halt.
     // Allowlist: src/kernel/src/main.rs — hlt in panic halt loop.
     loop {
         unsafe {
+            core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
             core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
         }
     }
