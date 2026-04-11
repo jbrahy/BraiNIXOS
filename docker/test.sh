@@ -12,6 +12,19 @@ set -euo pipefail
 REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPOSITORY_ROOT}"
 
+# Ensure the nightly Rust toolchain (pinned in rust-toolchain.toml) takes
+# precedence over any system cargo/rustc (e.g. Homebrew on macOS). The
+# toolchain is discovered from rust-toolchain.toml; if rustup is not on PATH
+# at all, bare `cargo` is used and will fail with a clear error.
+if command -v rustup &>/dev/null; then
+    TOOLCHAIN_CHANNEL=$(grep '^channel' rust-toolchain.toml | sed 's/.*"\(.*\)"/\1/')
+    TOOLCHAIN_DIR="$(rustup toolchain list --verbose 2>/dev/null \
+        | grep "^${TOOLCHAIN_CHANNEL}" | awk '{print $NF}' | head -1)"
+    if [[ -n "${TOOLCHAIN_DIR}" && -d "${TOOLCHAIN_DIR}/bin" ]]; then
+        export PATH="${TOOLCHAIN_DIR}/bin:${PATH}"
+    fi
+fi
+
 echo "[test.sh] Building kernel..."
 cargo build --target x86_64-unknown-none --release \
     --manifest-path src/kernel/Cargo.toml
