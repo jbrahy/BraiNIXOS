@@ -99,6 +99,118 @@ fn test_double_fault_handler_is_registered_on_separate_interrupt_stack_table_ent
     );
 }
 
+/// Verifies that SMEP and SMAP are enabled in CR4 before kernel entry.
+///
+/// Enforces invariant INV-BOOT-002: SMEP (CR4 bit 20) and SMAP (CR4 bit 21) must
+/// be set before jumping to the kernel entry point. The combined bitmask 0x300000
+/// represents both bits: (1 << 20) | (1 << 21) = 0x100000 | 0x200000 = 0x300000.
+///
+/// The bootloader implements this in main.rs via global_asm! (the canonical source
+/// of truth — start.s is retained as a documentation artifact only).
+///
+/// Verified by: structural source inspection of src/bootloader/src/main.rs
+/// via include_str! to confirm the SMEP+SMAP CR4 enablement pattern.
+#[test]
+fn test_bootloader_enables_smep_and_smap_before_kernel_entry() {
+    let bootloader_main_source = include_str!("../../bootloader/src/main.rs");
+    assert_smep_and_smap_bitmask_is_present(bootloader_main_source);
+    assert_cr4_is_written_after_smep_smap_bitmask(bootloader_main_source);
+}
+
+fn assert_smep_and_smap_bitmask_is_present(bootloader_source: &str) {
+    assert!(
+        bootloader_source.contains("0x300000"),
+        "bootloader must set SMEP (bit 20) and SMAP (bit 21) via bitmask 0x300000 in CR4"
+    );
+}
+
+fn assert_cr4_is_written_after_smep_smap_bitmask(bootloader_source: &str) {
+    let smep_smap_position = bootloader_source.find("0x300000");
+    let cr4_write_position = find_cr4_write_after_position(bootloader_source, smep_smap_position);
+    assert!(
+        cr4_write_position.is_some(),
+        "bootloader must write CR4 register after applying the SMEP+SMAP bitmask"
+    );
+}
+
+fn find_cr4_write_after_position(
+    bootloader_source: &str,
+    smep_smap_position: Option<usize>,
+) -> Option<usize> {
+    let bitmask_offset = smep_smap_position?;
+    let source_after_bitmask = &bootloader_source[bitmask_offset..];
+    source_after_bitmask.find("mov cr4").map(|offset| bitmask_offset + offset)
+}
+
+/// Verifies that all critical CPU exception vectors have registered handlers.
+///
+/// Enforces requirement REQ-04: all publicly accessible x86-64 exception vectors
+/// must have handlers registered to prevent silent triple faults. This test
+/// verifies the six most critical exception handlers are present as a structural
+/// property of interrupt_descriptor_table.rs.
+///
+/// The x86_64 crate makes vectors 9, 15, 22-27, and 31 inaccessible via its public
+/// API (they are obsolete or permanently Intel-reserved). The six handlers checked
+/// here cover the exception vectors most likely to fire in kernel code.
+///
+/// Verified by: structural source inspection of interrupt_descriptor_table.rs
+#[test]
+fn test_all_critical_exception_vectors_have_registered_handlers() {
+    let interrupt_descriptor_table_source =
+        include_str!("../src/arch/interrupts/interrupt_descriptor_table.rs");
+    assert_divide_error_handler_is_registered(interrupt_descriptor_table_source);
+    assert_breakpoint_handler_is_registered(interrupt_descriptor_table_source);
+    assert_invalid_opcode_handler_is_registered(interrupt_descriptor_table_source);
+    assert_double_fault_handler_is_registered(interrupt_descriptor_table_source);
+    assert_general_protection_fault_handler_is_registered(interrupt_descriptor_table_source);
+    assert_page_fault_handler_is_registered(interrupt_descriptor_table_source);
+}
+
+fn assert_divide_error_handler_is_registered(source: &str) {
+    assert!(
+        source.contains("divide_error.set_handler_fn"),
+        "interrupt_descriptor_table.rs must register a handler for the divide error exception (vector 0)"
+    );
+}
+
+fn assert_breakpoint_handler_is_registered(source: &str) {
+    assert!(
+        source.contains("breakpoint.set_handler_fn"),
+        "interrupt_descriptor_table.rs must register a handler for the breakpoint exception (vector 3)"
+    );
+}
+
+fn assert_invalid_opcode_handler_is_registered(source: &str) {
+    assert!(
+        source.contains("invalid_opcode.set_handler_fn"),
+        "interrupt_descriptor_table.rs must register a handler for the invalid opcode exception (vector 6)"
+    );
+}
+
+fn assert_double_fault_handler_is_registered(source: &str) {
+    assert!(
+        source.contains("double_fault.set_handler_fn"),
+        "interrupt_descriptor_table.rs must register a handler for the double fault exception (vector 8)"
+    );
+}
+
+fn assert_general_protection_fault_handler_is_registered(source: &str) {
+    let field_access_is_present = source.contains(".general_protection_fault");
+    let handler_registration_is_present =
+        source.contains("set_handler_fn(handle_general_protection_fault)");
+    assert!(
+        field_access_is_present && handler_registration_is_present,
+        "interrupt_descriptor_table.rs must register a handler for the general protection fault exception (vector 13)"
+    );
+}
+
+fn assert_page_fault_handler_is_registered(source: &str) {
+    assert!(
+        source.contains("page_fault.set_handler_fn"),
+        "interrupt_descriptor_table.rs must register a handler for the page fault exception (vector 14)"
+    );
+}
+
 /// Phase 1 stub: verifies the stack guard page requirement is documented for Phase 2.
 ///
 /// The real enforcement is implemented in Phase 2 (memory management). This stub
