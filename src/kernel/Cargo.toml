@@ -9,7 +9,7 @@ name = "brainix"
 path = "src/main.rs"
 
 [dependencies]
-x86_64 = { version = "0.15.4", default-features = false, features = ["instructions"] }
+x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "abi_x86_interrupt"] }
 
 [lints]
 workspace = true
