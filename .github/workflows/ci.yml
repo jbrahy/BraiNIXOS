@@ -31,8 +31,11 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
-      - name: cargo clippy
-        run: cargo clippy --workspace --exclude brainix-capability-verify --features brainix-kernel/kernel-binary -- -D warnings
+      - name: cargo clippy (bare-metal target)
+        run: cargo clippy --workspace --exclude brainix-capability-verify --features brainix-kernel/kernel-binary --target x86_64-unknown-none -- -D warnings
+
+      - name: cargo clippy (host target)
+        run: cargo clippy --workspace --exclude brainix-capability-verify -- -D warnings
 
   # ---------------------------------------------------------------------------
   # 1. Supply chain audit — runs after style gate
