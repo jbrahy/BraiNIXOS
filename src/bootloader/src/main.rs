@@ -60,6 +60,13 @@ fn handle_bootloader_panic(_info: &PanicInfo) -> ! {
         // UNSAFE_CODE_POLICY.md (src/bootloader/src/).
         // Precondition: none (last-resort halt, no other safe option).
         // Invariant: system halts rather than continuing in undefined state.
+        //
+        // Intentional divergence from kernel halt pattern: the kernel uses
+        // arch::interrupts::halt::disable_interrupts_and_halt() which issues
+        // cli and hlt as two separate asm! calls. The bootloader is a separate
+        // crate with no access to the kernel lib; the combined "cli; hlt" form
+        // is equivalent and acceptable here as a last-resort halt with no
+        // diagnostic infrastructure available.
         unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)) };
     }
 }

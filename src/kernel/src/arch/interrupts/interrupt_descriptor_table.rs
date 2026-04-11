@@ -12,6 +12,7 @@
 
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
+use crate::arch::interrupts::halt::disable_interrupts_and_halt;
 use crate::boot::serial::SerialOutputPort;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -154,59 +155,44 @@ fn print_fault_message(vector_name: &str) {
     let _ = writeln!(emergency_serial_port, "[FAULT] System halted");
 }
 
-fn halt_processor_loop() -> ! {
-    loop {
-        // SAFETY: cli disables interrupts; hlt suspends until next interrupt.
-        // Combined in a loop they halt the processor permanently after a fault.
-        // - Precondition: executing in ring 0.
-        // - Invariant: INV-FAULT-003 (fault handlers do not return to corrupted state).
-        // - Evidence: QEMU integration test observes halt after fault.
-        // Allowlist: src/kernel/src/arch/interrupts/ — cli/sti interrupt flag manipulation.
-        unsafe {
-            core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
-            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
-        }
-    }
-}
-
 extern "x86-interrupt" fn handle_division_error(_stack_frame: InterruptStackFrame) {
     print_fault_message("Division Error (vector 0)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_debug_exception(_stack_frame: InterruptStackFrame) {
     print_fault_message("Debug Exception (vector 1)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_non_maskable_interrupt(_stack_frame: InterruptStackFrame) {
     print_fault_message("Non-Maskable Interrupt (vector 2)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_breakpoint(_stack_frame: InterruptStackFrame) {
     print_fault_message("Breakpoint (vector 3)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_overflow(_stack_frame: InterruptStackFrame) {
     print_fault_message("Overflow (vector 4)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_bound_range_exceeded(_stack_frame: InterruptStackFrame) {
     print_fault_message("Bound Range Exceeded (vector 5)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_invalid_opcode(_stack_frame: InterruptStackFrame) {
     print_fault_message("Invalid Opcode (vector 6)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_device_not_available(_stack_frame: InterruptStackFrame) {
     print_fault_message("Device Not Available (vector 7)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_double_fault(
@@ -214,7 +200,7 @@ extern "x86-interrupt" fn handle_double_fault(
     _error_code: u64,
 ) -> ! {
     print_fault_message("Double Fault (vector 8)");
-    halt_processor_loop()
+    disable_interrupts_and_halt()
 }
 
 extern "x86-interrupt" fn handle_invalid_task_state_segment(
@@ -222,7 +208,7 @@ extern "x86-interrupt" fn handle_invalid_task_state_segment(
     _error_code: u64,
 ) {
     print_fault_message("Invalid Task State Segment (vector 10)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_segment_not_present(
@@ -230,7 +216,7 @@ extern "x86-interrupt" fn handle_segment_not_present(
     _error_code: u64,
 ) {
     print_fault_message("Segment Not Present (vector 11)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_stack_segment_fault(
@@ -238,7 +224,7 @@ extern "x86-interrupt" fn handle_stack_segment_fault(
     _error_code: u64,
 ) {
     print_fault_message("Stack Segment Fault (vector 12)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_general_protection_fault(
@@ -246,7 +232,7 @@ extern "x86-interrupt" fn handle_general_protection_fault(
     _error_code: u64,
 ) {
     print_fault_message("General Protection Fault (vector 13)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_page_fault(
@@ -254,12 +240,12 @@ extern "x86-interrupt" fn handle_page_fault(
     _error_code: PageFaultErrorCode,
 ) {
     print_fault_message("Page Fault (vector 14)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_x87_floating_point_exception(_stack_frame: InterruptStackFrame) {
     print_fault_message("x87 Floating Point Exception (vector 16)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_alignment_check(
@@ -267,22 +253,22 @@ extern "x86-interrupt" fn handle_alignment_check(
     _error_code: u64,
 ) {
     print_fault_message("Alignment Check (vector 17)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_machine_check(_stack_frame: InterruptStackFrame) -> ! {
     print_fault_message("Machine Check (vector 18)");
-    halt_processor_loop()
+    disable_interrupts_and_halt()
 }
 
 extern "x86-interrupt" fn handle_simd_floating_point_exception(_stack_frame: InterruptStackFrame) {
     print_fault_message("SIMD Floating Point Exception (vector 19)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_virtualization_exception(_stack_frame: InterruptStackFrame) {
     print_fault_message("Virtualization Exception (vector 20)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_control_protection_exception(
@@ -290,14 +276,14 @@ extern "x86-interrupt" fn handle_control_protection_exception(
     _error_code: u64,
 ) {
     print_fault_message("Control Protection Exception (vector 21)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_hypervisor_injection_exception(
     _stack_frame: InterruptStackFrame,
 ) {
     print_fault_message("Hypervisor Injection Exception (vector 28)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_vmm_communication_exception(
@@ -305,7 +291,7 @@ extern "x86-interrupt" fn handle_vmm_communication_exception(
     _error_code: u64,
 ) {
     print_fault_message("VMM Communication Exception (vector 29)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }
 
 extern "x86-interrupt" fn handle_security_exception(
@@ -313,5 +299,5 @@ extern "x86-interrupt" fn handle_security_exception(
     _error_code: u64,
 ) {
     print_fault_message("Security Exception (vector 30)");
-    halt_processor_loop();
+    disable_interrupts_and_halt();
 }

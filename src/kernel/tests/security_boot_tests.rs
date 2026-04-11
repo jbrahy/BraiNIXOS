@@ -12,13 +12,31 @@
 /// Enforces invariant INV-BOOT-003: the panic handler calls cli before hlt
 /// to prevent recursive panics from interrupts firing during panic handling.
 ///
+/// The cli+hlt sequence is now centralised in arch::interrupts::halt. This
+/// test verifies two structural properties:
+/// 1. The panic handler delegates to `disable_interrupts_and_halt`.
+/// 2. The halt helper contains "cli" before "hlt".
+///
 /// Verified by: structural source inspection via include_str!
 #[test]
 fn test_panic_handler_disables_interrupts_before_halt() {
     let main_source = include_str!("../src/main.rs");
+    let halt_source = include_str!("../src/arch/interrupts/halt.rs");
+    assert_panic_handler_delegates_to_halt_helper(main_source);
+    assert_halt_helper_issues_cli_before_hlt(halt_source);
+}
+
+fn assert_panic_handler_delegates_to_halt_helper(main_source: &str) {
     let panic_handler_body = extract_panic_handler_body(main_source);
-    let cli_position = panic_handler_body.find("\"cli\"");
-    let hlt_position = panic_handler_body.find("\"hlt\"");
+    assert!(
+        panic_handler_body.contains("disable_interrupts_and_halt"),
+        "panic handler must delegate to disable_interrupts_and_halt"
+    );
+}
+
+fn assert_halt_helper_issues_cli_before_hlt(halt_source: &str) {
+    let cli_position = halt_source.find("\"cli\"");
+    let hlt_position = halt_source.find("\"hlt\"");
     assert_both_instructions_are_present(cli_position, hlt_position);
     assert_cli_appears_before_hlt(cli_position, hlt_position);
 }
@@ -27,8 +45,8 @@ fn assert_both_instructions_are_present(
     cli_position: Option<usize>,
     hlt_position: Option<usize>,
 ) {
-    assert!(cli_position.is_some(), "panic handler must contain cli instruction");
-    assert!(hlt_position.is_some(), "panic handler must contain hlt instruction");
+    assert!(cli_position.is_some(), "halt helper must contain cli instruction");
+    assert!(hlt_position.is_some(), "halt helper must contain hlt instruction");
 }
 
 fn assert_cli_appears_before_hlt(

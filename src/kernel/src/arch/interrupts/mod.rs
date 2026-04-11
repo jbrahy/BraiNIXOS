@@ -5,6 +5,7 @@
 #![allow(unsafe_code)]
 
 pub mod global_descriptor_table;
+pub mod halt;
 pub mod interrupt_descriptor_table;
 pub mod task_state_segment;
 

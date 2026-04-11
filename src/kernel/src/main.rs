@@ -5,6 +5,7 @@
 #![no_main]
 #![allow(unsafe_code)]
 
+use brainix_kernel::arch::interrupts::halt::disable_interrupts_and_halt;
 use brainix_kernel::boot::logger::BootStepLogger;
 use brainix_kernel::boot::phases::execute_boot_sequence;
 use brainix_kernel::boot::serial::SerialOutputPort;
@@ -44,19 +45,11 @@ fn handle_kernel_panic(panic_information: &core::panic::PanicInfo) -> ! {
     let mut emergency_serial_port = SerialOutputPort::initialize();
     write_panic_banner(&mut emergency_serial_port);
     write_panic_details(&mut emergency_serial_port, panic_information);
-    // SAFETY: cli disables interrupts before hlt to prevent recursive panics if an
-    // interrupt fires during panic handling. hlt suspends the processor until the
-    // next interrupt (which cannot arrive with interrupts disabled), halting cleanly.
-    // - Precondition: executing in ring 0.
-    // - Invariant: INV-BOOT-003 (panic handler disables interrupts before halt).
-    // - Evidence: test_panic_handler_disables_interrupts_before_halt.
-    // Allowlist: src/kernel/src/main.rs — hlt in panic halt loop.
-    loop {
-        unsafe {
-            core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
-            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
-        }
-    }
+    // Enforces INV-BOOT-003 (panic handler disables interrupts before halt) and
+    // INV-FAULT-003 (fault paths halt with interrupts disabled). The shared helper
+    // in arch::interrupts::halt issues cli then hlt in a loop.
+    // Verified by: test_panic_handler_disables_interrupts_before_halt.
+    disable_interrupts_and_halt()
 }
 
 fn write_panic_banner(serial_output_port: &mut SerialOutputPort) {
