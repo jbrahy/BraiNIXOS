@@ -25,17 +25,17 @@ jobs:
           toolchain: nightly-2025-12-01
           components: rustfmt, clippy, rust-src
 
-      - name: cargo check
-        run: cargo check --workspace --exclude brainix-capability-verify --features brainix-kernel/kernel-binary --target x86_64-unknown-none
+      - name: cargo check (bare-metal crates)
+        run: cargo check -p brainix-kernel -p brainix-bootloader --features brainix-kernel/kernel-binary --target x86_64-unknown-none
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
       - name: cargo clippy (bare-metal target)
-        run: cargo clippy --workspace --exclude brainix-capability-verify --features brainix-kernel/kernel-binary --target x86_64-unknown-none -- -D warnings
+        run: cargo clippy -p brainix-kernel -p brainix-bootloader --features brainix-kernel/kernel-binary --target x86_64-unknown-none -- -D warnings
 
       - name: cargo clippy (host target)
-        run: cargo clippy --workspace --exclude brainix-capability-verify -- -D warnings
+        run: cargo clippy --workspace --exclude brainix-capability-verify --exclude brainix-kernel --exclude brainix-bootloader -- -D warnings
 
   # ---------------------------------------------------------------------------
   # 1. Supply chain audit — runs after style gate
