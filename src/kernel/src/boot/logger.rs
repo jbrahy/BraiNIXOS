@@ -17,12 +17,15 @@ impl BootStepLogger {
 
     /// Print a full-width separator line.
     pub fn separator(&mut self) {
-        let _ = write!(self.serial_output_port, "================================================================================\n");
+        let _ = writeln!(
+            self.serial_output_port,
+            "================================================================================"
+        );
     }
 
     /// Print a raw line with no `[BOOT]` prefix (used for the banner).
     pub fn line(&mut self, message: &str) {
-        let _ = write!(self.serial_output_port, "{}\n", message);
+        let _ = writeln!(self.serial_output_port, "{}", message);
     }
 
     /// `[OK  ]` — step completed successfully.
@@ -57,6 +60,6 @@ impl BootStepLogger {
     }
 
     fn write_prefixed_line(&mut self, tag: &str, message: &str) {
-        let _ = write!(self.serial_output_port, "[BOOT] {} {}\n", tag, message);
+        let _ = writeln!(self.serial_output_port, "[BOOT] {} {}", tag, message);
     }
 }

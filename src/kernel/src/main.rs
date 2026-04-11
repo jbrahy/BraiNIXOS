@@ -47,17 +47,32 @@ fn handle_kernel_panic(panic_information: &core::panic::PanicInfo) -> ! {
     // SAFETY: hlt is the correct instruction to halt the processor in kernel mode.
     // Allowlist: src/kernel/src/main.rs — hlt in panic halt loop.
     loop {
-        unsafe { core::arch::asm!("hlt", options(nomem, nostack, preserves_flags)); }
+        unsafe {
+            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+        }
     }
 }
 
 fn write_panic_banner(serial_output_port: &mut SerialOutputPort) {
-    let _ = write!(serial_output_port, "\n[PANIC] ========================================\n");
-    let _ = write!(serial_output_port, "[PANIC] KERNEL PANIC -- system halted\n");
-    let _ = write!(serial_output_port, "[PANIC] ========================================\n");
+    let _ = writeln!(serial_output_port);
+    let _ = writeln!(
+        serial_output_port,
+        "[PANIC] ========================================"
+    );
+    let _ = writeln!(serial_output_port, "[PANIC] KERNEL PANIC -- system halted");
+    let _ = writeln!(
+        serial_output_port,
+        "[PANIC] ========================================"
+    );
 }
 
-fn write_panic_details(serial_output_port: &mut SerialOutputPort, panic_information: &core::panic::PanicInfo) {
-    let _ = write!(serial_output_port, "[PANIC] {}\n", panic_information);
-    let _ = write!(serial_output_port, "[PANIC] Inspect serial output above for context\n");
+fn write_panic_details(
+    serial_output_port: &mut SerialOutputPort,
+    panic_information: &core::panic::PanicInfo,
+) {
+    let _ = writeln!(serial_output_port, "[PANIC] {}", panic_information);
+    let _ = writeln!(
+        serial_output_port,
+        "[PANIC] Inspect serial output above for context"
+    );
 }
