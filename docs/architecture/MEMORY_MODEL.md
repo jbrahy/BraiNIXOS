@@ -345,7 +345,26 @@ If a page fault occurs while the kernel is already handling a page fault (e.g., 
 
 ---
 
-## 10. Fixed-Size Pool Allocators
+## 10. Virtual Address Layout
+
+This layout is locked per Phase 2 CONTEXT.md D-10/D-11. No phase may allocate VA regions outside this map without updating this document.
+
+| Region | Start Address | End Address | Size | Purpose |
+|---|---|---|---|---|
+| User space | `0x0000_0000_0000_0000` | `0x0000_7FFF_FFFF_FFFF` | 128 TB | Canonical lower half for user processes |
+| Non-canonical gap | `0x0000_8000_0000_0000` | `0xFFFF_7FFF_FFFF_FFFF` | (hardware) | Hardware-enforced unmapped hole |
+| Kernel stack region | `0xFFFF_8000_0000_0000` | `0xFFFF_8000_FFFF_FFFF` | 4 GB | Per-thread kernel stacks with guard pages |
+| Pool region | `0xFFFF_8001_0000_0000` | `0xFFFF_8001_FFFF_FFFF` | 4 GB | Fixed-size pool allocators (512 MB per object type) |
+| Direct map | `0xFFFF_8800_0000_0000` | `0xFFFF_8800_FFFF_FFFF` | 4 GB | Physical-to-virtual 1:1 mapping |
+| Kernel binary | `0xFFFF_FFFF_8010_0000` | — | Fixed | Kernel code and data (matches linker.ld) |
+
+### Constants
+
+The canonical constants for this layout are defined in `src/kernel/src/memory/virtual_address_layout.rs` and must be used by all kernel code referencing these addresses.
+
+---
+
+## 11. Fixed-Size Pool Allocators
 
 The kernel uses fixed-size pool allocators for all kernel objects. There is no general-purpose dynamic kernel heap. No `malloc`, no `alloc::vec`, no unbounded growth.
 
@@ -390,7 +409,7 @@ The total kernel memory footprint is fixed at boot. The kernel cannot allocate m
 
 ---
 
-## 11. Security Invariants
+## 12. Security Invariants
 
 The memory model must uphold the following invariants from `docs/security/SECURITY_INVARIANTS.md`:
 
