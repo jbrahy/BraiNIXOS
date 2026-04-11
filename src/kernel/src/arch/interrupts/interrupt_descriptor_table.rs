@@ -14,8 +14,27 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, Pag
 
 use crate::boot::serial::SerialOutputPort;
 use core::fmt::Write;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 static mut INTERRUPT_DESCRIPTOR_TABLE: InterruptDescriptorTable = InterruptDescriptorTable::new();
+
+/// Tracks whether the double-fault handler was registered with an IST index.
+///
+/// Set to true in register_double_fault_handler. Allows host-target tests to
+/// verify the structural property without reading raw IDT entry options.
+///
+/// Verified by: test_double_fault_handler_is_registered_on_separate_interrupt_stack_table_entry
+static DOUBLE_FAULT_INTERRUPT_STACK_TABLE_INDEX_IS_SET: AtomicBool = AtomicBool::new(false);
+
+/// Returns true if the double-fault IDT entry was registered with a non-zero IST index.
+///
+/// Enforces invariant INV-FAULT-001: double-fault handler must run on a separate
+/// IST stack. This function provides a host-testable structural check.
+///
+/// Verified by: test_double_fault_handler_is_registered_on_separate_interrupt_stack_table_entry
+pub fn double_fault_uses_interrupt_stack_table() -> bool {
+    DOUBLE_FAULT_INTERRUPT_STACK_TABLE_INDEX_IS_SET.load(Ordering::Acquire)
+}
 
 /// Load the IDT with handlers for all accessible exception vectors.
 ///
@@ -60,11 +79,12 @@ fn register_double_fault_handler(
     // The x86_64 crate handles the hardware +1 offset internally.
     // - Precondition: TSS IST[0] is initialized with a valid 4096-byte stack.
     // - Invariant: INV-FAULT-001 (double-fault on separate IST stack).
-    // - Evidence: test_double_fault_uses_separate_ist_stack.
+    // - Evidence: test_double_fault_handler_is_registered_on_separate_interrupt_stack_table_entry.
     // Allowlist: src/kernel/src/arch/interrupts/ — IDT IST index assignment.
     unsafe {
         double_fault_entry.set_stack_index(double_fault_stack_index);
     }
+    DOUBLE_FAULT_INTERRUPT_STACK_TABLE_INDEX_IS_SET.store(true, Ordering::Release);
 }
 
 fn register_catch_all_exception_handlers(

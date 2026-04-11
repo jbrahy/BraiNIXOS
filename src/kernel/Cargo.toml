@@ -7,8 +7,16 @@ license.workspace = true
 [[bin]]
 name = "brainix"
 path = "src/main.rs"
+required-features = ["kernel-binary"]
+
+[features]
+# Enables the kernel binary target. Required for bare-metal builds.
+# Not enabled during host-target `cargo test` runs (security_boot_tests).
+kernel-binary = []
 
 [dependencies]
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "abi_x86_interrupt"] }
 
 [lints]

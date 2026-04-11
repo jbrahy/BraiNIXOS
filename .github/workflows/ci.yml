@@ -26,13 +26,13 @@ jobs:
           components: rustfmt, clippy, rust-src
 
       - name: cargo check
-        run: cargo check --workspace --exclude brainix-capability-verify --target x86_64-unknown-none
+        run: cargo check --workspace --exclude brainix-capability-verify --features brainix-kernel/kernel-binary --target x86_64-unknown-none
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        run: cargo clippy --workspace --exclude brainix-capability-verify -- -D warnings
+        run: cargo clippy --workspace --exclude brainix-capability-verify --features brainix-kernel/kernel-binary -- -D warnings
 
   # ---------------------------------------------------------------------------
   # 1. Supply chain audit — runs after style gate
@@ -104,6 +104,9 @@ jobs:
       - name: Run capability-verify unit tests (hosted Kani shim)
         run: cargo test -p capability-verify --verbose
 
+      - name: Run kernel security boot tests (host target)
+        run: cargo test -p brainix-kernel --verbose
+
   # ---------------------------------------------------------------------------
   # 3. Kernel cross-compile — verifies no_std bare-metal build
   # ---------------------------------------------------------------------------
@@ -132,7 +135,7 @@ jobs:
 
       - name: Build kernel (bare metal)
         working-directory: src/kernel
-        run: cargo build --target x86_64-unknown-none --release
+        run: cargo build --target x86_64-unknown-none --release --features kernel-binary
 
       - name: Build bootloader
         working-directory: src/bootloader
@@ -199,7 +202,7 @@ jobs:
 
       - name: Build kernel
         working-directory: src/kernel
-        run: cargo build --target x86_64-unknown-none --release
+        run: cargo build --target x86_64-unknown-none --release --features kernel-binary
 
       - name: Build bootloader
         working-directory: src/bootloader
