@@ -13,4 +13,5 @@ pub mod kernel_page_table;
 pub mod mapping_error;
 pub mod page_table_flags_validator;
 pub mod page_table_walk_helpers;
+pub mod stack_guard;
 pub mod user_page_table;
