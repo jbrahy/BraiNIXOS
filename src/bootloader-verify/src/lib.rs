@@ -25,16 +25,24 @@ pub fn parse_multiboot2_information(raw_bytes: &[u8]) -> Result<(), &'static str
 fn copy_bytes_into_aligned_buffer(raw_bytes: &[u8]) -> Vec<u64> {
     let word_count = raw_bytes.len().div_ceil(core::mem::size_of::<u64>());
     let mut aligned_buffer = vec![0u64; word_count];
-    let byte_slice = bytemuck_aligned_buffer_as_bytes(&mut aligned_buffer);
+    let byte_slice = cast_aligned_buffer_to_byte_slice(&mut aligned_buffer);
     byte_slice[..raw_bytes.len()].copy_from_slice(raw_bytes);
     aligned_buffer
 }
 
-fn bytemuck_aligned_buffer_as_bytes(aligned_buffer: &mut Vec<u64>) -> &mut [u8] {
+fn cast_aligned_buffer_to_byte_slice(aligned_buffer: &mut Vec<u64>) -> &mut [u8] {
     let byte_count = core::mem::size_of_val(aligned_buffer.as_slice());
     let raw_pointer = aligned_buffer.as_mut_ptr() as *mut u8;
-    // SAFETY: u64 is valid for any byte pattern; the pointer and length are
-    // derived from a valid Vec<u64> allocation with known size.
+    // SAFETY:
+    // - Precondition: `aligned_buffer` is a valid, live Vec<u64> with known length;
+    //   `raw_pointer` is derived from its allocation and `byte_count` equals the
+    //   allocation's byte size.
+    // - Invariant: INV-UNSAFE-001 (every unsafe block has a local soundness contract).
+    //   u64 is valid for any bit pattern, so reinterpreting as &mut [u8] cannot
+    //   produce invalid u64 values on write-back; the lifetime is tied to the borrow
+    //   of `aligned_buffer`, preventing aliasing.
+    // - Evidence: fuzz_bootloader_multiboot2_info_struct_parsing exercises this path
+    //   under libfuzzer with arbitrary byte inputs.
     unsafe { core::slice::from_raw_parts_mut(raw_pointer, byte_count) }
 }
 
