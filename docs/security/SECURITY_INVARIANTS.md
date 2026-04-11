@@ -487,6 +487,48 @@ Mapping changes must become visible in a defined, correct way across cores and e
 
 ---
 
+## INV-FAULT-001 — Double-fault handler runs on a dedicated IST stack
+The double-fault IDT entry must be registered with a non-zero IST index pointing to a stack distinct from the interrupted thread's stack. This ensures that a stack-overflow-induced double fault can be caught rather than silently producing a triple fault.
+
+**Why it matters:** Without a dedicated stack, a stack overrun that triggers a double fault will triple-fault immediately, giving the kernel no chance to log or recover. The IST mechanism provides a known-good stack at fault entry.
+
+**Enforcement directions:**
+- TSS IST[0] initialized with a valid dedicated 4096-byte stack before GDT load
+- double-fault IDT entry configured with `set_stack_index` pointing to IST[0]
+- observable via `DOUBLE_FAULT_INTERRUPT_STACK_TABLE_INDEX_IS_SET` atomic flag
+
+**Evidence:** test_double_fault_handler_is_registered_on_separate_interrupt_stack_table_entry
+
+---
+
+## INV-FAULT-002 — All accessible CPU exception vectors have registered handlers
+Every CPU exception vector that the x86_64 crate exposes (vectors 0–8, 10–14, 16–21, 28–30) must have an explicit handler registered in the IDT. No accessible vector may be left as an implicit triple-fault path.
+
+**Why it matters:** Unhandled exception vectors produce triple faults with no diagnostic output, making debugging impossible and creating unpredictable system behavior under fault conditions.
+
+**Enforcement directions:**
+- all named IDT fields in `InterruptDescriptorTable` registered before `IDT.load()`
+- vectors 9, 15, 22–27, 31 are reserved/private in the x86_64 crate and cannot be registered; this is documented
+- `load_interrupt_descriptor_table` registers all accessible vectors before enabling interrupts
+
+**Evidence:** test_all_accessible_exception_vectors_have_handlers
+
+---
+
+## INV-FAULT-003 — Fault handlers halt the processor with interrupts disabled
+All CPU exception handlers must terminate by disabling interrupts (`cli`) before issuing `hlt`, looping indefinitely. This prevents an interrupt from firing during fault handling and causing a recursive fault or undefined re-entry.
+
+**Why it matters:** If an interrupt fires after a fatal fault but before `hlt`, the interrupt handler may encounter corrupted state. Disabling interrupts first ensures a clean halt with no re-entry risk.
+
+**Enforcement directions:**
+- `halt_processor_loop` in `interrupt_descriptor_table.rs` issues `cli` then `hlt` in a loop
+- panic handler in `main.rs` issues `cli` then `hlt` in a loop
+- no fault handler may return to caller; all must call a diverging halt path
+
+**Evidence:** test_panic_handler_disables_interrupts_before_halt; QEMU integration test observes halt after fault injection
+
+---
+
 # 7. Boot and Attestation Invariants
 
 ## INV-BOOT-001 — Production security claims require a trusted production boot path
