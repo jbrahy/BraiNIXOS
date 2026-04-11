@@ -9,3 +9,9 @@ target = "x86_64-unknown-none"
 # on nightlies after 2025-02-04 (rust-lang/rust#136544).
 # The intent of D-07 (no red zone, no SSE in kernel code) is fully satisfied.
 runner = "qemu-system-x86_64 -nographic -serial stdio"
+
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
