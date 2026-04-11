@@ -1,0 +1,256 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "dev"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Supply chain audit — fastest gate, runs first
+  # ---------------------------------------------------------------------------
+  supply-chain:
+    name: Supply Chain Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (nightly, pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rust-src
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Install cargo-vet
+        uses: taiki-e/install-action@cargo-vet
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: cargo deny (license + advisories)
+        run: cargo deny check
+
+      - name: cargo vet (trusted audits)
+        run: cargo vet
+
+      - name: cargo audit (CVE check)
+        run: cargo audit
+
+  # ---------------------------------------------------------------------------
+  # 2. Unit tests — runs on host (std), covers capability/IPC logic
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: supply-chain
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (nightly)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rust-src
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-unit-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run capability-verify unit tests (hosted Kani shim)
+        run: cargo test -p capability-verify --verbose
+
+  # ---------------------------------------------------------------------------
+  # 3. Kernel cross-compile — verifies no_std bare-metal build
+  # ---------------------------------------------------------------------------
+  kernel-build:
+    name: Kernel Cross-Compile
+    runs-on: ubuntu-latest
+    needs: supply-chain
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (nightly + x86_64-unknown-none)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          targets: x86_64-unknown-none
+          components: rust-src, llvm-tools-preview
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-kernel-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build kernel (bare metal)
+        working-directory: src/kernel
+        run: cargo build --target x86_64-unknown-none --release
+
+      - name: Build bootloader
+        working-directory: src/bootloader
+        run: cargo build --target x86_64-unknown-none --release
+
+  # ---------------------------------------------------------------------------
+  # 4. Formal verification — Kani on capability-verify shim crate
+  # ---------------------------------------------------------------------------
+  formal-verification:
+    name: Kani Formal Verification
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Kani
+        uses: model-checking/kani-github-action@v1
+
+      - name: Run Kani harnesses on capability-verify
+        working-directory: src/capability-verify
+        run: |
+          cargo kani --harness verify_capability_rights
+          cargo kani --harness verify_revocation_tree
+          cargo kani --harness verify_ipc_transfer
+          cargo kani --harness verify_temporal_expiry
+
+  # ---------------------------------------------------------------------------
+  # 5. QEMU integration test — boots kernel, asserts serial output
+  # ---------------------------------------------------------------------------
+  integration-test:
+    name: QEMU Integration Test
+    runs-on: ubuntu-latest
+    needs: [kernel-build, formal-verification]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU + swtpm
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            qemu-system-x86 \
+            swtpm \
+            swtpm-tools \
+            ovmf
+
+      - name: Install Rust (nightly + x86_64-unknown-none)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          targets: x86_64-unknown-none
+          components: rust-src
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build kernel
+        working-directory: src/kernel
+        run: cargo build --target x86_64-unknown-none --release
+
+      - name: Initialize swtpm (clean state)
+        run: |
+          rm -rf /tmp/swtpm-test
+          mkdir -p /tmp/swtpm-test
+          swtpm_setup \
+            --tpm2 \
+            --tpmstate /tmp/swtpm-test \
+            --createek \
+            --decryption \
+            --create-ek-cert \
+            --create-platform-cert \
+            --lock-nvram \
+            --overwrite
+          swtpm socket \
+            --tpm2 \
+            --tpmstate dir=/tmp/swtpm-test \
+            --ctrl type=unixio,path=/tmp/swtpm-test.ctrl \
+            --server type=unixio,path=/tmp/swtpm-test.sock \
+            --flags not-need-init,startup-clear \
+            --daemon
+
+      - name: Boot kernel in QEMU (headless, 30s timeout)
+        timeout-minutes: 2
+        run: |
+          timeout 30 qemu-system-x86_64 \
+            -machine q35,accel=tcg \
+            -cpu qemu64,+smep,+smap \
+            -m 512M \
+            -nographic \
+            -serial stdio \
+            -device virtio-net-pci,netdev=net0 \
+            -netdev user,id=net0 \
+            -chardev socket,id=chrtpm,path=/tmp/swtpm-test.sock \
+            -tpmdev emulator,id=tpm0,chardev=chrtpm \
+            -device tpm-tis,tpmdev=tpm0 \
+            -kernel target/x86_64-unknown-none/release/brainix \
+            -append "smt=off" \
+            2>&1 | tee /tmp/boot.log || true
+
+      - name: Assert boot success
+        run: |
+          grep -q "Brainix: boot complete" /tmp/boot.log || \
+            (echo "FAIL: boot complete message not found" && cat /tmp/boot.log && exit 1)
+          echo "PASS: kernel booted successfully"
+
+      - name: Upload boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-log
+          path: /tmp/boot.log
+
+  # ---------------------------------------------------------------------------
+  # 6. Security scan — CVE results to GitHub Security tab
+  # ---------------------------------------------------------------------------
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Run cargo audit
+        run: cargo audit --json > audit-results.json || true
+
+      - name: Upload audit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cargo-audit-results
+          path: audit-results.json
