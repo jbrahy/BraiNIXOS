@@ -1,6 +1,8 @@
 //! Boot phase sequence. Each function logs one cohesive boot step.
 
 use crate::arch::interrupts::initialize_interrupt_handling;
+use crate::arch::paging::kernel_page_table::build_kernel_page_table;
+use crate::arch::paging::user_page_table::build_user_page_table;
 use crate::boot::logger::BootStepLogger;
 use crate::boot::multiboot2_info::initialize_memory_subsystem;
 
@@ -18,7 +20,17 @@ pub fn execute_boot_sequence(
         multiboot2_info_address,
         boot_step_logger,
     );
+    initialize_page_tables(boot_step_logger);
     log_boot_complete(boot_step_logger);
+}
+
+/// Constructs the kernel and user page table hierarchies (KPTI structure).
+///
+/// Does NOT load either table into CR3 -- CR3 switching is deferred to Phase 4 (D-08).
+fn initialize_page_tables(boot_step_logger: &mut BootStepLogger) {
+    build_kernel_page_table(boot_step_logger);
+    build_user_page_table(boot_step_logger);
+    boot_step_logger.ok("Page tables constructed (KPTI structure ready)");
 }
 
 fn log_kernel_banner(boot_step_logger: &mut BootStepLogger) {

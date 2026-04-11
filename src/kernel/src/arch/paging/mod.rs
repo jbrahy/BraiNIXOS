@@ -12,4 +12,5 @@ pub mod direct_map;
 pub mod kernel_page_table;
 pub mod mapping_error;
 pub mod page_table_flags_validator;
+pub mod page_table_walk_helpers;
 pub mod user_page_table;
