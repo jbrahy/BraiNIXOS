@@ -16,6 +16,8 @@ pub mod derivation_record;
 pub mod derivation_tree;
 pub mod derive_capability;
 pub mod revocation;
+pub mod temporal_validation;
+pub mod tick_source;
 
 pub use capability_error::CapabilityError;
 pub use capability_rights::CapabilityRights;
