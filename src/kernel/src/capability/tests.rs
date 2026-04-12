@@ -1,16 +1,32 @@
-//! Security unit test stubs for the capability manager.
+//! Security unit tests for the capability manager.
 //!
-//! All test bodies are empty stubs. Implementations are added in later plans.
-//! Empty test bodies pass by default in Rust.
+//! Tests 1–2 are fully implemented (Plan 01, Task 2).
+//! Tests 3–6 are stubs pending later plans.
+
+use crate::capability::capability_error::CapabilityError;
+use crate::capability::capability_space::CapabilitySpace;
 
 #[test]
 fn test_new_capability_space_all_slots_read_as_null() {
-    // Implementation: Plan 01, Task 2
+    let capability_space = CapabilitySpace::new();
+    let all_slots = capability_space.all_slots();
+    for slot in all_slots.iter() {
+        assert!(
+            slot.is_null(),
+            "expected every slot in a new CapabilitySpace to be null"
+        );
+    }
 }
 
 #[test]
 fn test_ungranted_slot_returns_error() {
-    // Implementation: Plan 01, Task 2
+    let capability_space = CapabilitySpace::new();
+    let lookup_result = capability_space.lookup_slot(0);
+    assert_eq!(
+        lookup_result.unwrap_err(),
+        CapabilityError::NullCapability,
+        "expected NullCapability error when looking up an ungranted slot"
+    );
 }
 
 #[test]
