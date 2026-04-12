@@ -4,6 +4,9 @@
 //! typed capabilities, rights bitmasks, capability slots, the CSpace flat array,
 //! and all error types.
 
+pub mod audit_event_type;
+pub mod audit_log;
+pub mod audit_log_protection;
 pub mod capability_error;
 pub mod capability_rights;
 pub mod capability_slot;
