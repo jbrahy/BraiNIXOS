@@ -63,6 +63,14 @@ impl CapabilitySpace {
         &self.slots[index]
     }
 
+    /// Returns a shared reference to the raw slot at `slot_index` without state checks.
+    ///
+    /// Unlike `lookup_slot`, this does not return an error for null slots.
+    /// Used internally by derive_capability and revoke_capability to inspect slot state.
+    pub fn lookup_slot_ref(&self, slot_index: u8) -> &CapabilitySlot {
+        self.read_slot_at_index(slot_index)
+    }
+
     /// Returns an iterator over all slots for inspection (used in tests and audit).
     pub fn all_slots(&self) -> &[CapabilitySlot; MAXIMUM_CAPABILITY_SLOTS_PER_PROCESS] {
         &self.slots

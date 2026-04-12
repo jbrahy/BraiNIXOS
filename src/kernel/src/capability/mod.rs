@@ -12,6 +12,9 @@ pub mod capability_rights;
 pub mod capability_slot;
 pub mod capability_space;
 pub mod capability_type;
+pub mod derivation_record;
+pub mod derivation_tree;
+pub mod derive_capability;
 
 pub use capability_error::CapabilityError;
 pub use capability_rights::CapabilityRights;
@@ -20,6 +23,8 @@ pub use capability_slot::CapabilitySlotState;
 pub use capability_space::CapabilitySpace;
 pub use capability_space::MAXIMUM_CAPABILITY_SLOTS_PER_PROCESS;
 pub use capability_type::CapabilityType;
+pub use derivation_tree::CapabilityDerivationTree;
+pub use derive_capability::derive_capability;
 
 #[cfg(test)]
 mod tests;
