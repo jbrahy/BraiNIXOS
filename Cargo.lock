@@ -26,8 +26,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-bootloader-verify"
+version = "0.1.0"
+dependencies = [
+ "multiboot2",
+]
+
+[[package]]
 name = "brainix-capability-verify"
 version = "0.1.0"
+dependencies = [
+ "brainix-kernel",
+]
 
 [[package]]
 name = "brainix-devd-disk"
@@ -49,6 +59,7 @@ version = "0.1.0"
 name = "brainix-kernel"
 version = "0.1.0"
 dependencies = [
+ "multiboot2",
  "x86_64",
 ]
 

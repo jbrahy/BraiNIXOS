@@ -147,23 +147,15 @@ jobs:
   # ---------------------------------------------------------------------------
   # 4. Formal verification — Kani on capability-verify shim crate
   # ---------------------------------------------------------------------------
-  formal-verification:
-    name: Kani Formal Verification
+  kani:
+    name: Kani Verification
     runs-on: ubuntu-latest
-    needs: unit-tests
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Kani
-        uses: model-checking/kani-github-action@v1
-
-      - name: Run Kani harnesses on capability-verify
-        working-directory: src/capability-verify
-        run: |
-          cargo kani --harness verify_capability_rights
-          cargo kani --harness verify_revocation_tree
-          cargo kani --harness verify_ipc_transfer
-          cargo kani --harness verify_temporal_expiry
+      - uses: model-checking/kani-github-action@v1
+        with:
+          working-directory: .
+          args: --package brainix-capability-verify
 
   # ---------------------------------------------------------------------------
   # 5. QEMU integration test — boots kernel, asserts serial output
@@ -171,7 +163,7 @@ jobs:
   integration-test:
     name: QEMU Integration Test
     runs-on: ubuntu-latest
-    needs: [kernel-build, formal-verification]
+    needs: [kernel-build, kani]
     steps:
       - uses: actions/checkout@v4
 
