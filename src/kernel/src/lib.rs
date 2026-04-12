@@ -13,4 +13,6 @@ pub mod arch;
 #[cfg(target_arch = "x86_64")]
 pub mod boot;
 
+pub mod capability;
+
 pub mod memory;
