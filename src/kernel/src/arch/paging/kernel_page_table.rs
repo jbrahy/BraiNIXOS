@@ -31,12 +31,9 @@ use crate::arch::paging::page_table_walk_helpers::{
 };
 use crate::boot::logger::BootStepLogger;
 use crate::memory::virtual_address_layout::{
-    INITIAL_KERNEL_STACK_BOTTOM, INITIAL_KERNEL_STACK_TOP, KERNEL_STACK_REGION_START,
-    PAGE_SIZE_IN_BYTES, POOL_REGION_START,
+    INITIAL_KERNEL_STACK_BOTTOM, INITIAL_KERNEL_STACK_TOP, KERNEL_BINARY_VIRTUAL_ADDRESS,
+    KERNEL_STACK_REGION_START, PAGE_SIZE_IN_BYTES, POOL_REGION_START,
 };
-
-/// Virtual base address of the kernel binary (must match linker.ld and VA layout constants).
-const KERNEL_BINARY_VIRTUAL_ADDRESS: u64 = 0xFFFF_FFFF_8010_0000;
 
 /// Number of bootstrap page table pages available in BSS.
 const BOOTSTRAP_PAGE_TABLE_PAGE_COUNT: usize = 32;

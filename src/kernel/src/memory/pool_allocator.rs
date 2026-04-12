@@ -218,4 +218,15 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_deallocation_zeroes_all_bytes_of_multi_byte_type() {
+        let mut pool: PoolAllocator<[u8; 8], 4> = PoolAllocator::new();
+        let (slot_index, slot_reference) = pool.allocate().unwrap();
+        *slot_reference = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22];
+        pool.deallocate(slot_index).unwrap();
+        let (reused_slot_index, reused_reference) = pool.allocate().unwrap();
+        assert_eq!(reused_slot_index, 0); // same slot returned after deallocation
+        assert_eq!(*reused_reference, [0u8; 8]);
+    }
 }

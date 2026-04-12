@@ -55,7 +55,8 @@ impl PhysicalAllocator {
         let frame_number = compute_page_frame_number(physical_address);
         self.page_type_table[frame_number] = page_type;
         self.total_pages_discovered = self.total_pages_discovered.wrapping_add(1);
-        push_if_free_page(&mut self.free_page_stack, physical_address, page_type);
+        // Boot registration: stack capacity equals MAXIMUM_PHYSICAL_PAGES; overflow is structurally impossible.
+        let _ = push_if_free_page(&mut self.free_page_stack, physical_address, page_type);
     }
 
     /// Allocates a user-owned page from the free pool.
@@ -87,6 +88,7 @@ impl PhysicalAllocator {
     /// Deallocates a page, returning it to the free pool after zeroing.
     ///
     /// Enforces INV-MEM-006 (freed memory sanitized). Kernel pages cannot be freed.
+    /// Returns PoolExhausted if the free stack is full (page is permanently lost otherwise).
     /// Verified by: test_double_free_is_detected_and_refused.
     pub fn deallocate_page(&mut self, physical_address: u64) -> Result<(), AllocationError> {
         let frame_number = compute_page_frame_number(physical_address);
@@ -94,8 +96,9 @@ impl PhysicalAllocator {
         zero_page_at_address(physical_address);
         self.page_type_table[frame_number] = PageType::Free;
         self.page_owner_table[frame_number] = PROCESS_IDENTIFIER_NONE;
-        let _push_result = self.free_page_stack.push(physical_address);
-        Ok(())
+        self.free_page_stack
+            .push(physical_address)
+            .map_err(|_| AllocationError::PoolExhausted)
     }
 
     /// Returns the total number of pages discovered during boot.
@@ -137,14 +140,19 @@ fn reject_invalid_deallocation(page_type: PageType) -> Result<(), AllocationErro
 }
 
 /// Pushes the address onto the free stack if the page type is Free.
+///
+/// Returns PoolExhausted if the free stack is full and the page type is Free.
 fn push_if_free_page(
     free_page_stack: &mut BoundedStack<MAXIMUM_PHYSICAL_PAGES>,
     physical_address: u64,
     page_type: PageType,
-) {
+) -> Result<(), AllocationError> {
     if page_type.is_free() {
-        let _push_result = free_page_stack.push(physical_address);
+        free_page_stack
+            .push(physical_address)
+            .map_err(|_| AllocationError::PoolExhausted)?;
     }
+    Ok(())
 }
 
 /// Zeroes a page at the given physical address (bare-metal implementation).
@@ -278,5 +286,15 @@ mod tests {
         allocator.register_physical_page(0x200000, PageType::Kernel);
         let result = allocator.deallocate_page(0x200000);
         assert_eq!(result, Err(AllocationError::ForbiddenFree));
+    }
+
+    #[test]
+    fn test_kernel_page_is_not_returned_after_kernel_allocation() {
+        let mut allocator = allocate_physical_allocator_on_heap();
+        allocator.register_physical_page(0x200000, PageType::Free);
+        let allocated_address = allocator.allocate_kernel_page().unwrap();
+        assert_eq!(allocated_address, 0x200000);
+        let second_result = allocator.allocate_user_page();
+        assert_eq!(second_result, Err(AllocationError::OutOfMemory));
     }
 }

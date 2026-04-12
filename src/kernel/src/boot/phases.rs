@@ -38,14 +38,14 @@ fn initialize_page_tables(boot_step_logger: &mut BootStepLogger) {
 fn log_kernel_banner(boot_step_logger: &mut BootStepLogger) {
     boot_step_logger.separator();
     boot_step_logger.line(" BRAINIX MICROKERNEL  v0.1.0");
-    boot_step_logger.line(" x86_64-unknown-none | Rust nightly-2025-12-01 | Phase 1");
+    boot_step_logger.line(" x86_64-unknown-none | Rust nightly-2025-12-01 | Phase 2");
     boot_step_logger.separator();
 }
 
 fn log_boot_infrastructure_status(boot_step_logger: &mut BootStepLogger) {
     boot_step_logger.ok("Serial console initialized (COM1 | 115200 8N1)");
     boot_step_logger.ok("Kernel entry point reached");
-    boot_step_logger.info("Build: Phase 1 -- GDT/TSS/IDT initialized");
+    boot_step_logger.info("Build: Phase 2 -- GDT/TSS/IDT initialized");
 }
 
 fn log_boot_complete(boot_step_logger: &mut BootStepLogger) {

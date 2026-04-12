@@ -8,11 +8,10 @@
 use x86_64::structures::paging::{PageTable, PageTableFlags};
 use x86_64::PhysAddr;
 
+use crate::memory::virtual_address_layout::KERNEL_BINARY_VIRTUAL_ADDRESS;
+
 /// Physical address where the kernel binary is loaded by the bootloader (1 MiB).
 pub const KERNEL_PHYSICAL_LOAD_ADDRESS: u64 = 0x0010_0000;
-
-/// Virtual base address of the kernel binary (must match linker.ld KERNEL_VIRTUAL_BASE).
-pub const KERNEL_BINARY_VIRTUAL_ADDRESS_CONSTANT: u64 = 0xFFFF_FFFF_8010_0000;
 
 /// Intermediate page table entry flags (PRESENT | WRITABLE).
 ///
@@ -47,11 +46,11 @@ pub fn extract_page_table_index(virtual_address: u64) -> usize {
 
 /// Computes the physical address of a BSS-backed virtual address.
 ///
-/// Uses the known identity: physical = virtual - KERNEL_BINARY_VIRTUAL_ADDRESS_CONSTANT
+/// Uses the known identity: physical = virtual - KERNEL_BINARY_VIRTUAL_ADDRESS
 ///                                              + KERNEL_PHYSICAL_LOAD_ADDRESS
 #[allow(clippy::arithmetic_side_effects)]
 pub fn compute_physical_address_of_bss_page(virtual_address: u64) -> PhysAddr {
-    let physical_offset = virtual_address - KERNEL_BINARY_VIRTUAL_ADDRESS_CONSTANT;
+    let physical_offset = virtual_address - KERNEL_BINARY_VIRTUAL_ADDRESS;
     PhysAddr::new(KERNEL_PHYSICAL_LOAD_ADDRESS + physical_offset)
 }
 
@@ -71,8 +70,8 @@ pub fn compute_page_table_physical_address(page_table: &PageTable) -> PhysAddr {
 pub unsafe fn retrieve_page_table_by_physical_address(
     physical_address: PhysAddr,
 ) -> &'static mut PageTable {
-    let virtual_address = physical_address.as_u64() - KERNEL_PHYSICAL_LOAD_ADDRESS
-        + KERNEL_BINARY_VIRTUAL_ADDRESS_CONSTANT;
+    let virtual_address =
+        physical_address.as_u64() - KERNEL_PHYSICAL_LOAD_ADDRESS + KERNEL_BINARY_VIRTUAL_ADDRESS;
     // SAFETY: virtual_address points into a BSS-backed bootstrap page table block.
     // - Precondition: physical_address was stored by a bootstrap allocator (caller contract).
     // - Invariant: INV-MEM-003 (structure only written with validated entries).
