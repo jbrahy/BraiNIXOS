@@ -2,8 +2,8 @@
 //!
 //! Tests 1–2 are fully implemented (Plan 01, Task 2).
 //! Tests 3–5 are fully implemented (Plan 02, Task 2).
-//! Test 6 is a stub pending Plan 03.
-//! Tests 7–11 are audit log tests (Plan 05, Task 2).
+//! Tests 6–8 are fully implemented (Plan 03, Task 2).
+//! Tests 9–13 are audit log tests (Plan 05, Task 2).
 
 use crate::capability::audit_event_type::AuditEventType;
 use crate::capability::audit_log::{AuditRingBuffer, AUDIT_LOG_CAPACITY};
@@ -15,6 +15,7 @@ use crate::capability::capability_type::CapabilityType;
 use crate::capability::derivation_tree::CapabilityDerivationTree;
 use crate::capability::derive_capability::derive_capability;
 use crate::capability::revocation::revoke_capability;
+use crate::capability::temporal_validation::validate_capability;
 
 #[test]
 fn test_new_capability_space_all_slots_read_as_null() {
@@ -133,7 +134,105 @@ fn test_revoked_slot_reads_as_null_not_stale_data() {
 
 #[test]
 fn test_temporal_capability_expires_after_use_count_is_reached() {
-    // Implementation: Plan 03, Task 1
+    let mut capability_space = CapabilitySpace::new();
+    let mut derivation_tree = CapabilityDerivationTree::new();
+    let slot = capability_space.lookup_slot_mut(0);
+    slot.state = CapabilitySlotState::Valid;
+    slot.capability_type = CapabilityType::Memory;
+    slot.rights_bitmask = READ | WRITE;
+    slot.object_pointer = 0x1000;
+    slot.generation_counter = 1;
+    slot.use_count_remaining = Some(3);
+    let first_result = validate_capability(&mut capability_space, &mut derivation_tree, 0, 0);
+    assert!(first_result.is_ok(), "first invocation must succeed");
+    assert_eq!(
+        capability_space.lookup_slot_ref(0).use_count_remaining,
+        Some(2),
+        "use_count_remaining must be Some(2) after first invocation"
+    );
+    let second_result = validate_capability(&mut capability_space, &mut derivation_tree, 0, 0);
+    assert!(second_result.is_ok(), "second invocation must succeed");
+    assert_eq!(
+        capability_space.lookup_slot_ref(0).use_count_remaining,
+        Some(1),
+        "use_count_remaining must be Some(1) after second invocation"
+    );
+    let third_result = validate_capability(&mut capability_space, &mut derivation_tree, 0, 0);
+    assert!(third_result.is_ok(), "third invocation must succeed");
+    assert_eq!(
+        capability_space.lookup_slot_ref(0).use_count_remaining,
+        Some(0),
+        "use_count_remaining must be Some(0) after third invocation"
+    );
+    let fourth_result = validate_capability(&mut capability_space, &mut derivation_tree, 0, 0);
+    assert_eq!(
+        fourth_result.unwrap_err(),
+        CapabilityError::CapabilityExpired,
+        "fourth invocation must return CapabilityExpired"
+    );
+    assert!(
+        capability_space.lookup_slot_ref(0).is_null(),
+        "slot must be null after use count exhaustion"
+    );
+}
+
+#[test]
+fn test_temporal_capability_expires_after_time_window() {
+    let mut capability_space = CapabilitySpace::new();
+    let mut derivation_tree = CapabilityDerivationTree::new();
+    let slot = capability_space.lookup_slot_mut(0);
+    slot.state = CapabilitySlotState::Valid;
+    slot.capability_type = CapabilityType::Memory;
+    slot.rights_bitmask = READ | WRITE;
+    slot.object_pointer = 0x2000;
+    slot.generation_counter = 1;
+    slot.expiry_tick = Some(100);
+    let before_expiry_result =
+        validate_capability(&mut capability_space, &mut derivation_tree, 0, 50);
+    assert!(
+        before_expiry_result.is_ok(),
+        "invocation before expiry_tick must succeed"
+    );
+    let at_expiry_result = validate_capability(&mut capability_space, &mut derivation_tree, 0, 100);
+    assert_eq!(
+        at_expiry_result.unwrap_err(),
+        CapabilityError::CapabilityExpired,
+        "invocation at expiry_tick must return CapabilityExpired"
+    );
+    assert!(
+        capability_space.lookup_slot_ref(0).is_null(),
+        "slot must be null after time window expiry"
+    );
+}
+
+#[test]
+fn test_temporal_capability_whichever_bound_reached_first_expires() {
+    let mut capability_space = CapabilitySpace::new();
+    let mut derivation_tree = CapabilityDerivationTree::new();
+    let slot = capability_space.lookup_slot_mut(0);
+    slot.state = CapabilitySlotState::Valid;
+    slot.capability_type = CapabilityType::Memory;
+    slot.rights_bitmask = READ | WRITE;
+    slot.object_pointer = 0x3000;
+    slot.generation_counter = 1;
+    slot.use_count_remaining = Some(5);
+    slot.expiry_tick = Some(100);
+    let first_result = validate_capability(&mut capability_space, &mut derivation_tree, 0, 99);
+    assert!(
+        first_result.is_ok(),
+        "invocation at tick 99 with 5 uses remaining must succeed"
+    );
+    let time_expired_result =
+        validate_capability(&mut capability_space, &mut derivation_tree, 0, 100);
+    assert_eq!(
+        time_expired_result.unwrap_err(),
+        CapabilityError::CapabilityExpired,
+        "time window must expire at tick 100 even though 4 uses remain"
+    );
+    assert!(
+        capability_space.lookup_slot_ref(0).is_null(),
+        "slot must be null after time-window bound fires first"
+    );
 }
 
 #[test]
