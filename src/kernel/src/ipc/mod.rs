@@ -11,6 +11,7 @@ pub mod call;
 pub mod cap_reply;
 pub mod endpoint;
 pub mod notification;
+pub mod notify_operations;
 pub mod receive;
 pub mod rendezvous;
 pub mod send;
