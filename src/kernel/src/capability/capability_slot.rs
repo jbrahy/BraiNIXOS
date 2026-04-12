@@ -101,4 +101,40 @@ impl CapabilitySlot {
         }
         Ok(self)
     }
+
+    /// Returns the rights bitmask for this capability slot.
+    ///
+    /// Used by capability transfer validation to enforce rights monotonicity.
+    /// Enforces INV-AUTH-003: transferred rights are a subset of sender rights.
+    pub fn rights(&self) -> CapabilityRights {
+        self.rights_bitmask
+    }
+
+    /// Returns the capability type discriminant for this slot.
+    ///
+    /// Used by CapReply validation to confirm the slot holds a Reply capability.
+    /// Enforces INV-AUTH-002: authority is explicit and typed.
+    pub fn capability_type(&self) -> CapabilityType {
+        self.capability_type
+    }
+
+    /// Returns a kernel-created CapReply slot for the given caller thread.
+    ///
+    /// The slot is Valid state with Reply type and no additional rights.
+    /// The caller thread identifier is stored in `object_pointer` for reply routing.
+    ///
+    /// Enforces INV-AUTH-005: CapReply is kernel-created, not userspace-forgeable.
+    /// Verified by: test_reply_capability_is_single_use (SC-04)
+    pub fn new_cap_reply(caller_thread_identifier: u32) -> Self {
+        CapabilitySlot {
+            state: CapabilitySlotState::Valid,
+            capability_type: CapabilityType::Reply,
+            rights_bitmask: CapabilityRights::empty(),
+            object_pointer: u64::from(caller_thread_identifier),
+            generation_counter: 0,
+            derivation_parent_index: u32::MAX,
+            use_count_remaining: Some(1),
+            expiry_tick: None,
+        }
+    }
 }
