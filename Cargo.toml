@@ -5,6 +5,7 @@ members = [
     "src/bootloader-verify",
     "src/servers/*",
     "src/capability-verify",
+    "src/brainix-ipc-core",
 ]
 resolver = "2"
 

@@ -35,7 +35,7 @@ jobs:
         run: cargo clippy -p brainix-kernel -p brainix-bootloader --features brainix-kernel/kernel-binary --target x86_64-unknown-none -- -D warnings
 
       - name: cargo clippy (host target)
-        run: cargo clippy --workspace --exclude brainix-capability-verify --exclude brainix-kernel --exclude brainix-bootloader -- -D warnings
+        run: cargo clippy --workspace --exclude brainix-capability-verify --exclude brainix-kernel --exclude brainix-bootloader --exclude brainix-ipc-core -- -D warnings
 
   # ---------------------------------------------------------------------------
   # 1. Supply chain audit — runs after style gate
@@ -156,6 +156,19 @@ jobs:
         with:
           working-directory: .
           args: --package brainix-capability-verify
+
+  # ---------------------------------------------------------------------------
+  # 5a. Formal verification — Prusti on brainix-ipc-core shim crate (D-07, D-08)
+  # ---------------------------------------------------------------------------
+  prusti:
+    name: Prusti Verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Prusti verification on brainix-ipc-core
+        uses: viperproject/prusti-action@v1
+        with:
+          path: src/brainix-ipc-core
 
   # ---------------------------------------------------------------------------
   # 5. QEMU integration test — boots kernel, asserts serial output
