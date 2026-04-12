@@ -20,3 +20,6 @@ pub mod ipc;
 pub mod memory;
 
 pub mod thread;
+
+#[cfg(target_arch = "x86_64")]
+pub mod syscall;
