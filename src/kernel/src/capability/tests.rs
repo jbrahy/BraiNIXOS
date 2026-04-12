@@ -1,13 +1,20 @@
 //! Security unit tests for the capability manager.
 //!
 //! Tests 1–2 are fully implemented (Plan 01, Task 2).
-//! Tests 3–6 are stubs pending later plans.
+//! Tests 3–5 are fully implemented (Plan 02, Task 2).
+//! Test 6 is a stub pending Plan 03.
 //! Tests 7–11 are audit log tests (Plan 05, Task 2).
 
 use crate::capability::audit_event_type::AuditEventType;
 use crate::capability::audit_log::{AuditRingBuffer, AUDIT_LOG_CAPACITY};
 use crate::capability::capability_error::CapabilityError;
+use crate::capability::capability_rights::{GRANT, READ, WRITE};
+use crate::capability::capability_slot::{CapabilitySlot, CapabilitySlotState};
 use crate::capability::capability_space::CapabilitySpace;
+use crate::capability::capability_type::CapabilityType;
+use crate::capability::derivation_tree::CapabilityDerivationTree;
+use crate::capability::derive_capability::derive_capability;
+use crate::capability::revocation::revoke_capability;
 
 #[test]
 fn test_new_capability_space_all_slots_read_as_null() {
@@ -32,19 +39,96 @@ fn test_ungranted_slot_returns_error() {
     );
 }
 
+/// Inserts a valid capability slot directly into a CapabilitySpace for test setup.
+///
+/// Bypasses derive_capability to install root capabilities with arbitrary rights.
+fn insert_valid_slot(
+    capability_space: &mut CapabilitySpace,
+    slot_index: u8,
+    capability_type: CapabilityType,
+    rights: crate::capability::capability_rights::CapabilityRights,
+    object_pointer: u64,
+) {
+    let slot = capability_space.lookup_slot_mut(slot_index);
+    slot.state = CapabilitySlotState::Valid;
+    slot.capability_type = capability_type;
+    slot.rights_bitmask = rights;
+    slot.object_pointer = object_pointer;
+    slot.generation_counter = 1;
+}
+
 #[test]
 fn test_derived_capability_cannot_have_rights_not_in_parent() {
-    // Implementation: Plan 02, Task 1
+    let mut capability_space = CapabilitySpace::new();
+    let mut derivation_tree = CapabilityDerivationTree::new();
+    insert_valid_slot(
+        &mut capability_space,
+        0,
+        CapabilityType::Memory,
+        READ | WRITE,
+        0x1000,
+    );
+    let amplified_result = derive_capability(
+        &mut capability_space,
+        &mut derivation_tree,
+        0,
+        1,
+        READ | WRITE | GRANT,
+    );
+    assert_eq!(
+        amplified_result.unwrap_err(),
+        CapabilityError::RightsExceedParent,
+        "deriving with rights not in parent must return RightsExceedParent"
+    );
+    let subset_result = derive_capability(&mut capability_space, &mut derivation_tree, 0, 1, READ);
+    assert!(
+        subset_result.is_ok(),
+        "deriving with subset rights must succeed"
+    );
 }
 
 #[test]
 fn test_revoked_parent_makes_all_children_unusable() {
-    // Implementation: Plan 02, Task 2
+    let mut capability_space = CapabilitySpace::new();
+    let mut derivation_tree = CapabilityDerivationTree::new();
+    insert_valid_slot(
+        &mut capability_space,
+        0,
+        CapabilityType::Memory,
+        READ | WRITE,
+        0x2000,
+    );
+    derive_capability(&mut capability_space, &mut derivation_tree, 0, 1, READ).unwrap();
+    derive_capability(&mut capability_space, &mut derivation_tree, 1, 2, READ).unwrap();
+    revoke_capability(&mut capability_space, &mut derivation_tree, 0).unwrap();
+    assert!(
+        capability_space.lookup_slot_ref(1).is_null(),
+        "child slot 1 must be null after parent revocation"
+    );
+    assert!(
+        capability_space.lookup_slot_ref(2).is_null(),
+        "grandchild slot 2 must be null after parent revocation"
+    );
 }
 
 #[test]
 fn test_revoked_slot_reads_as_null_not_stale_data() {
-    // Implementation: Plan 02, Task 2
+    let mut capability_space = CapabilitySpace::new();
+    let mut derivation_tree = CapabilityDerivationTree::new();
+    insert_valid_slot(
+        &mut capability_space,
+        5,
+        CapabilityType::Endpoint,
+        READ | WRITE,
+        0xDEAD_BEEF,
+    );
+    revoke_capability(&mut capability_space, &mut derivation_tree, 5).unwrap();
+    let revoked_slot = *capability_space.lookup_slot_ref(5);
+    assert_eq!(
+        revoked_slot,
+        CapabilitySlot::null(),
+        "revoked slot must equal the null sentinel exactly — no stale data"
+    );
 }
 
 #[test]

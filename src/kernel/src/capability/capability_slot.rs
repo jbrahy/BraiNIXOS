@@ -31,7 +31,7 @@ pub enum CapabilitySlotState {
 /// (generation_counter field).
 ///
 /// Total size: approximately 40 bytes (padded for alignment).
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct CapabilitySlot {
     /// Current lifecycle state of this slot.
     pub state: CapabilitySlotState,
