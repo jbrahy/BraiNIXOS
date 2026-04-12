@@ -7,6 +7,9 @@
 //! No cfg(target_arch) gate — pure Rust, host-testable (D-12).
 
 pub mod bounded_queue;
+pub mod endpoint;
+pub mod notification;
+pub mod wait_for_graph;
 
 #[cfg(test)]
 mod tests;
