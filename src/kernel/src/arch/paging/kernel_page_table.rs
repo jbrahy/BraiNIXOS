@@ -311,6 +311,21 @@ fn acquire_kernel_page_map_level_4_reference() -> &'static mut PageTable {
     unsafe { &mut *core::ptr::addr_of_mut!(KERNEL_PAGE_MAP_LEVEL_4) }
 }
 
+/// Returns the physical address of the kernel PML4 for loading into CR3.
+///
+/// The PML4 lives in BSS (`KERNEL_PAGE_MAP_LEVEL_4`). Its physical address is
+/// computed from the known VA-to-PA offset established by the linker script.
+///
+/// Call this after `build_kernel_page_table` and before `initialize_ipc_subsystem`
+/// to obtain the address to pass to the CR3 load (D-09).
+///
+/// Enforces INV-MEM-001 and INV-MEM-002 indirectly: the page tables at this
+/// address have KPTI-compliant structure by construction (Phase 2 invariant).
+pub fn kernel_page_map_level_4_physical_address() -> u64 {
+    let page_map_level_4 = acquire_kernel_page_map_level_4_reference();
+    compute_page_table_physical_address(page_map_level_4).as_u64()
+}
+
 /// Constructs the kernel page table hierarchy.
 ///
 /// Maps: kernel binary, kernel stack (skipping guard page), pool region, direct map.
