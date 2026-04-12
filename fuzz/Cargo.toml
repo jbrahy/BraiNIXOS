@@ -18,3 +18,8 @@ brainix-bootloader-verify = { path = "../src/bootloader-verify" }
 name = "fuzz_bootloader_multiboot2_info_struct_parsing"
 path = "fuzz_targets/fuzz_bootloader_multiboot2_info_struct_parsing.rs"
 doc = false
+
+[[bin]]
+name = "fuzz_capability_slot_index_out_of_bounds"
+path = "fuzz_targets/fuzz_capability_slot_index_out_of_bounds.rs"
+doc = false
