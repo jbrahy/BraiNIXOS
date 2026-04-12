@@ -15,4 +15,8 @@ pub mod boot;
 
 pub mod capability;
 
+pub mod ipc;
+
 pub mod memory;
+
+pub mod thread;
