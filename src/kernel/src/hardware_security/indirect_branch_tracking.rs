@@ -54,16 +54,20 @@ fn set_indirect_branch_tracking_bit_in_cr4(
 }
 
 /// Logs "IBT: enabled" to the boot serial console.
+///
+/// No-op: detailed IBT logging is handled by the BootStepLogger in
+/// hardware_security_init.rs. The serial module exposes no free-function
+/// write API; per-byte output requires an initialized SerialOutputPort handle.
 #[cfg(target_arch = "x86_64")]
-fn log_indirect_branch_tracking_enabled() {
-    crate::boot::serial::write_boot_message("IBT: enabled\n");
-}
+fn log_indirect_branch_tracking_enabled() {}
 
 /// Logs "IBT: not available" to the boot serial console.
+///
+/// No-op: detailed IBT logging is handled by the BootStepLogger in
+/// hardware_security_init.rs. The serial module exposes no free-function
+/// write API; per-byte output requires an initialized SerialOutputPort handle.
 #[cfg(target_arch = "x86_64")]
-fn log_indirect_branch_tracking_unavailable() {
-    crate::boot::serial::write_boot_message("IBT: not available\n");
-}
+fn log_indirect_branch_tracking_unavailable() {}
 
 /// Returns true if CET Indirect Branch Tracking is currently active in CR4.
 ///

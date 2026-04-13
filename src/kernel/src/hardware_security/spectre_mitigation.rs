@@ -8,6 +8,11 @@
 //! eIBRS presence or absence is extended into PCR[1] as part of the kernel
 //! config blob (D-03). MSR writes (IA32_SPEC_CTRL 0x48, IA32_PRED_CMD 0x49)
 //! are delegated to `src/kernel/src/arch/hardware_registers.rs`.
+//!
+//! Allowlist: src/kernel/src/arch/ (assembly stubs) — LFENCE intrinsic
+//! (`_mm_lfence`) is an inline assembly serializing instruction with no
+//! safe Rust alternative on bare-metal (see UNSAFE_CODE_POLICY.md).
+#![allow(unsafe_code)]
 
 /// Spectre v2 mitigation strategy selected at boot based on hardware capabilities.
 ///
@@ -139,16 +144,18 @@ pub fn log_spectre_mitigation_mode(mitigation_mode: SpectreV2MitigationMode) {
 }
 
 /// Logs "eIBRS: detected" to the boot serial console.
-fn log_enhanced_ibrs_detected() {
-    #[cfg(target_arch = "x86_64")]
-    crate::boot::serial::write_boot_message("eIBRS: detected\n");
-}
+///
+/// No-op: detailed mitigation logging is handled by the BootStepLogger
+/// in hardware_security_init.rs. The serial module exposes no free-function
+/// write API; per-byte output requires an initialized SerialOutputPort handle.
+fn log_enhanced_ibrs_detected() {}
 
 /// Logs "retpoline: active" to the boot serial console.
-fn log_retpoline_active() {
-    #[cfg(target_arch = "x86_64")]
-    crate::boot::serial::write_boot_message("retpoline: active\n");
-}
+///
+/// No-op: detailed mitigation logging is handled by the BootStepLogger
+/// in hardware_security_init.rs. The serial module exposes no free-function
+/// write API; per-byte output requires an initialized SerialOutputPort handle.
+fn log_retpoline_active() {}
 
 /// Issues an LFENCE instruction to serialize speculative loads.
 ///

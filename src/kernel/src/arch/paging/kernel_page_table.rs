@@ -14,6 +14,7 @@
 //! Allowlist: src/kernel/src/arch/paging/ (UNSAFE_CODE_POLICY.md)
 #![allow(unsafe_code)]
 
+use x86_64::structures::paging::page_table::PageTableEntry;
 use x86_64::structures::paging::{PageTable, PageTableFlags};
 use x86_64::PhysAddr;
 
@@ -85,7 +86,7 @@ fn allocate_bootstrap_page_table() -> &'static mut PageTable {
 
 /// Allocates a bootstrap page table and sets a parent entry to point at it.
 fn allocate_and_link_bootstrap_table(
-    parent_entry: &mut x86_64::structures::paging::PageTableEntry,
+    parent_entry: &mut PageTableEntry,
 ) -> &'static mut PageTable {
     let new_table = allocate_bootstrap_page_table();
     let physical_address = compute_page_table_physical_address(new_table);

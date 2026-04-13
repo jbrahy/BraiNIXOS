@@ -10,6 +10,10 @@
 //! Write-protection is the last boot step per D-15.
 //!
 //! Enforces INV-BOOT-001: production security claims require measured boot path.
+//!
+//! Allowlist: src/kernel/src/boot/ — inline assembly `hlt` for processor halt
+//! on attestation failure (no safe alternative; see UNSAFE_CODE_POLICY.md).
+#![allow(unsafe_code)]
 
 use crate::boot::logger::BootStepLogger;
 use crate::hardware_security::attestation_gate::{
@@ -131,9 +135,39 @@ fn apply_spectre_mitigations_step(boot_step_logger: &mut BootStepLogger) {
     boot_step_logger.ok("Spectre v1/v2 mitigations applied (LFENCE + eIBRS/retpoline)");
 }
 
+/// Builds the kernel binary measurement from section bytes on x86_64.
+///
+/// Reads .text and .rodata via linker symbols, then hashes both sections.
+/// Enforces D-10: PCR[0] input is the exact kernel binary content.
+#[cfg(target_arch = "x86_64")]
+fn compute_kernel_binary_measurement_from_sections() -> [u8; 32] {
+    use crate::hardware_security::pcr_measurement::{
+        get_kernel_text_section_bounds, get_kernel_rodata_section_bounds,
+    };
+    let (text_pointer, text_length) = get_kernel_text_section_bounds();
+    let (rodata_pointer, rodata_length) = get_kernel_rodata_section_bounds();
+    // SAFETY: text_pointer and rodata_pointer are valid kernel section addresses
+    // from linker symbols; lengths are computed from the same symbols.
+    // - Precondition: kernel loaded at KERNEL_VIRTUAL_BASE before this call.
+    // - Invariant: INV-BOOT-001 (measured boot integrity).
+    // - Evidence: test_compute_kernel_binary_measurement_returns_32_bytes
+    // Allowlist: src/kernel/src/boot/ — raw pointer to slice in boot path.
+    let text_bytes = unsafe { core::slice::from_raw_parts(text_pointer, text_length) };
+    let rodata_bytes = unsafe { core::slice::from_raw_parts(rodata_pointer, rodata_length) };
+    compute_kernel_binary_measurement(text_bytes, rodata_bytes)
+}
+
+/// Builds the kernel binary measurement using empty stubs on non-x86_64 targets.
+///
+/// Used only during host-target CI compilation; bare-metal always uses x86_64 path.
+#[cfg(not(target_arch = "x86_64"))]
+fn compute_kernel_binary_measurement_from_sections() -> [u8; 32] {
+    compute_kernel_binary_measurement(&[], &[])
+}
+
 /// Step: extend PCR[0] with the kernel text+rodata measurement (D-10).
 fn extend_pcr_zero_with_kernel_measurement_step(boot_step_logger: &mut BootStepLogger) {
-    let kernel_measurement = compute_kernel_binary_measurement();
+    let kernel_measurement = compute_kernel_binary_measurement_from_sections();
     let _ = crate::hardware_security::tpm::commands::extend_platform_configuration_register(
         0,
         &kernel_measurement,

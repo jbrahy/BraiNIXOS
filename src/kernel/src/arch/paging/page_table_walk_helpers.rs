@@ -4,6 +4,11 @@
 //! to avoid duplicating VA-to-PA conversion and page table index extraction.
 //!
 //! Per CODE_STANDARDS.md Rule 3: any pattern appearing twice must be extracted.
+//!
+//! Allowlist: src/kernel/src/arch/paging/ — raw pointer dereference for
+//! BSS-backed page table retrieval has no safe alternative on bare-metal
+//! (see UNSAFE_CODE_POLICY.md).
+#![allow(unsafe_code)]
 
 use x86_64::structures::paging::{PageTable, PageTableFlags};
 use x86_64::PhysAddr;

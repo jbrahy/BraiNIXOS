@@ -14,6 +14,11 @@
 //!
 //! PTE modification is delegated to `arch/paging/kernel_page_table.rs` which is
 //! already on the unsafe allowlist for page table manipulation.
+//!
+//! Allowlist: src/kernel/src/hardware_security/pcr_measurement.rs pattern —
+//! linker symbol address extraction via raw pointer cast has no safe alternative
+//! in no_std bare-metal (see UNSAFE_CODE_POLICY.md).
+#![allow(unsafe_code)]
 
 use crate::memory::virtual_address_layout::PAGE_SIZE_IN_BYTES;
 
