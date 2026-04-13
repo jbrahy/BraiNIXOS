@@ -5,8 +5,41 @@
 //! domain_slot matches the currently active slot are eligible to run.
 //! This eliminates covert timing channels between security domains (SCHED-04).
 
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use super::partition_table::{PARTITION_TABLE};
 use super::SchedulerAction;
+
+/// Global monotonic tick counter incremented by the APIC timer interrupt handler.
+///
+/// Used by the attestation gate timeout enforcement (D-22) to measure elapsed time
+/// from boot without requiring a separate hardware counter.
+/// Incremented once per APIC timer interrupt (each call to advance_partition_slot_if_expired).
+static GLOBAL_MONOTONIC_TICK_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Number of APIC timer ticks per second (APIC initial count / divide factor).
+///
+/// APIC initial count = 10_000, divide factor = 16.
+/// Ticks per APIC cycle is hardware-dependent; this constant is the scheduler's
+/// logical tick rate as configured in arch/timer.rs.
+pub const SCHEDULER_TICKS_PER_SECOND: u64 = 1_000;
+
+/// Read the current value of the global monotonic tick counter.
+///
+/// Used by the attestation gate timeout enforcement to measure elapsed time (D-22).
+/// The counter is incremented once per APIC timer interrupt.
+pub fn read_current_apic_timer_tick_count() -> u64 {
+    GLOBAL_MONOTONIC_TICK_COUNT.load(Ordering::Relaxed)
+}
+
+/// Increment the global monotonic tick counter by one.
+///
+/// Called once per APIC timer interrupt from advance_partition_slot_if_expired.
+/// Uses Relaxed ordering: the counter is monotonically increasing and only
+/// read for timeout comparison (no synchronization with other operations required).
+pub fn increment_global_monotonic_tick_count() {
+    GLOBAL_MONOTONIC_TICK_COUNT.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Tracks the scheduler's position within the current major frame.
 ///
@@ -68,9 +101,12 @@ fn advance_to_next_slot(state: &mut MajorFrameState) {
 /// Returns `SwitchToPartitionSlot` when the slot boundary is crossed;
 /// `ContinueCurrentThread` otherwise.
 ///
+/// Also increments the global monotonic tick counter (used by attestation gate D-22).
+///
 /// Enforces INV-SCHED-001: domains cannot execute outside their assigned slot.
 /// Verified by: test_domain_does_not_run_outside_its_assigned_slot
 pub fn advance_partition_slot_if_expired(state: &mut MajorFrameState) -> SchedulerAction {
+    increment_global_monotonic_tick_count();
     state.ticks_elapsed_in_current_slot += 1;
     state.total_ticks_in_major_frame += 1;
     if state.ticks_elapsed_in_current_slot >= current_slot_duration(state) {

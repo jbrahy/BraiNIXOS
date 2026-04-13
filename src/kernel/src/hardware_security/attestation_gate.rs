@@ -245,4 +245,49 @@ mod tests {
     fn test_attestation_gate_default_timeout_is_sixty_seconds() {
         assert_eq!(ATTESTATION_GATE_DEFAULT_TIMEOUT_SECONDS, 60u16);
     }
+
+    /// Full attestation gate transition sequence with mock TPM responses.
+    ///
+    /// Exercises the complete Closed -> MeasuringPlatform ->
+    /// AwaitingQuoteVerification -> Open path using mock data (no swtpm required).
+    #[test]
+    fn test_attestation_gate_completes_with_mock_tpm_responses() {
+        let mut gate = create_attestation_gate();
+
+        assert_eq!(get_attestation_gate_state(&gate), AttestationGateState::Closed);
+        assert!(!is_network_traffic_allowed(&gate));
+
+        let measurement_result =
+            advance_attestation_gate(&mut gate, AttestationEvent::MeasurementComplete);
+        assert!(measurement_result.is_ok());
+        assert_eq!(get_attestation_gate_state(&gate), AttestationGateState::MeasuringPlatform);
+
+        let quote_result =
+            advance_attestation_gate(&mut gate, AttestationEvent::QuoteGenerated);
+        assert!(quote_result.is_ok());
+        assert_eq!(
+            get_attestation_gate_state(&gate),
+            AttestationGateState::AwaitingQuoteVerification
+        );
+
+        let verification_result =
+            advance_attestation_gate(&mut gate, AttestationEvent::VerificationPassed);
+        assert!(verification_result.is_ok());
+        assert_eq!(get_attestation_gate_state(&gate), AttestationGateState::Open);
+        assert!(is_network_traffic_allowed(&gate));
+    }
+
+    /// Timeout event during AwaitingQuoteVerification transitions gate to Failed.
+    #[test]
+    fn test_attestation_gate_timeout_transitions_to_failed() {
+        let mut gate = create_attestation_gate();
+        advance_attestation_gate(&mut gate, AttestationEvent::MeasurementComplete).unwrap();
+        advance_attestation_gate(&mut gate, AttestationEvent::QuoteGenerated).unwrap();
+
+        let timeout_result =
+            advance_attestation_gate(&mut gate, AttestationEvent::Timeout);
+        assert!(timeout_result.is_ok());
+        assert_eq!(get_attestation_gate_state(&gate), AttestationGateState::Failed);
+        assert!(!is_network_traffic_allowed(&gate));
+    }
 }

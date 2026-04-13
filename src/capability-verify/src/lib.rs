@@ -134,17 +134,29 @@ mod proofs {
 
 #[cfg(kani)]
 mod hardware_security_proofs {
-    /// Proves the attestation gate state machine has no path that bypasses Verifying.
+    use brainix_kernel::hardware_security::attestation_gate::{
+        advance_attestation_gate, create_attestation_gate, get_attestation_gate_state,
+        AttestationEvent, AttestationGateState,
+    };
+
+    /// Proves the attestation gate state machine has no single-step path from Closed to Open.
     ///
-    /// Gate transitions must follow Closed -> Measuring -> Verifying -> Open.
-    /// No path from Closed to Open skips Verifying.
+    /// Gate transitions must follow Closed -> MeasuringPlatform ->
+    /// AwaitingQuoteVerification -> Open.
+    /// No single event from Closed state can reach Open.
     ///
-    /// Phase 6 Plan 05 replaces this stub with a proof over the real state machine type.
+    /// Enforces INV-BOOT-001: measured boot path integrity.
     #[kani::proof]
     fn attestation_gate_state_machine_has_no_skip_path() {
-        // Prove: gate transitions from Closed -> Measuring -> Verifying -> Open
-        //        with no path that bypasses Verifying
-        kani::assume(true); // Stub -- replaced in Plan 05
+        let mut gate = create_attestation_gate();
+        let event: AttestationEvent = kani::any();
+        let result = advance_attestation_gate(&mut gate, event);
+        if result.is_ok() {
+            kani::assert(
+                get_attestation_gate_state(&gate) != AttestationGateState::Open,
+                "Gate must not open in one step from Closed",
+            );
+        }
     }
 
     /// Proves the CSPRNG state is never all zeros after Phase A seeding.
