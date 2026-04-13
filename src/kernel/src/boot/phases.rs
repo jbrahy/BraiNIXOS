@@ -9,6 +9,7 @@ use crate::arch::paging::user_page_table::build_user_page_table;
 use crate::boot::ipc_init::initialize_ipc_subsystem;
 use crate::boot::logger::BootStepLogger;
 use crate::boot::multiboot2_info::initialize_memory_subsystem;
+use crate::boot::scheduler_init::initialize_scheduler_subsystem;
 
 /// Run the full boot sequence. Called from `_start` after serial is ready.
 pub fn execute_boot_sequence(
@@ -26,6 +27,7 @@ pub fn execute_boot_sequence(
     );
     initialize_page_tables(boot_step_logger);
     activate_ipc_subsystem(boot_step_logger);
+    initialize_scheduler_subsystem(boot_step_logger);
     log_boot_complete(boot_step_logger);
 }
 
@@ -51,14 +53,14 @@ fn activate_ipc_subsystem(boot_step_logger: &mut BootStepLogger) {
 fn log_kernel_banner(boot_step_logger: &mut BootStepLogger) {
     boot_step_logger.separator();
     boot_step_logger.line(" BRAINIX MICROKERNEL  v0.1.0");
-    boot_step_logger.line(" x86_64-unknown-none | Rust nightly-2025-12-01 | Phase 4");
+    boot_step_logger.line(" x86_64-unknown-none | Rust nightly-2025-12-01 | Phase 5");
     boot_step_logger.separator();
 }
 
 fn log_boot_infrastructure_status(boot_step_logger: &mut BootStepLogger) {
     boot_step_logger.ok("Serial console initialized (COM1 | 115200 8N1)");
     boot_step_logger.ok("Kernel entry point reached");
-    boot_step_logger.info("Build: Phase 4 -- GDT/TSS/IDT initialized, IPC subsystem active");
+    boot_step_logger.info("Build: Phase 5 -- GDT/TSS/IDT initialized, IPC subsystem active, scheduler running");
 }
 
 fn log_boot_complete(boot_step_logger: &mut BootStepLogger) {
