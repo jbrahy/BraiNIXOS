@@ -26,6 +26,9 @@ dependencies = [
 [[package]]
 name = "brainix-auditd"
 version = "0.1.0"
+dependencies = [
+ "brainix-libsyscall",
+]
 
 [[package]]
 name = "brainix-bootloader"
@@ -59,6 +62,9 @@ version = "0.1.0"
 [[package]]
 name = "brainix-init"
 version = "0.1.0"
+dependencies = [
+ "brainix-libsyscall",
+]
 
 [[package]]
 name = "brainix-ipc-core"
@@ -91,6 +97,9 @@ version = "0.1.0"
 [[package]]
 name = "brainix-spawnd"
 version = "0.1.0"
+dependencies = [
+ "brainix-libsyscall",
+]
 
 [[package]]
 name = "brainix-transportd"

@@ -73,6 +73,21 @@ docker-compose.override.yml
 # To keep planning local-only, uncomment:
 # .planning/
 
+# Stray rlib artifacts (produced by cargo test on some toolchain/host combinations)
+*.rlib
+
+# Compiled bootloader binary (built artifact, not source)
+iso/boot/brainix-bootloader
+
+# the build toolchain session data
+.assistant/
+
+# GSD internal state
+.planning/.next-call-count
+
+# Prompt scratch files
+prompts/
+
 # OS-specific
 .AppleDouble
 .LSOverride
