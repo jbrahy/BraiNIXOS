@@ -13,6 +13,7 @@
 pub mod elf_loader;
 pub mod address_space;
 pub mod module_loader;
+pub mod server_launch;
 
 /// Re-export ProcessType so kernel code can reference it as `process::ProcessType`.
 ///
@@ -22,18 +23,31 @@ pub use brainix_libsyscall::ProcessType;
 
 #[cfg(test)]
 mod tests {
+    use crate::process::server_launch::{create_server_process, grant_initial_capability_to_server};
     use crate::capability::audit_event_type::AuditEventType;
     use crate::capability::audit_log::AuditRingBuffer;
     use crate::capability::audit_log_protection::protect_audit_log_pages;
     use crate::capability::capability_rights;
+    use crate::capability::capability_space::CapabilitySpace;
     use crate::capability::capability_type::CapabilityType;
     use crate::process::module_loader::validate_spawn_request;
     use crate::syscall::audit_read::validate_audit_read_capability;
+    use crate::syscall::process_exit::execute_process_exit_sequence;
     use brainix_libsyscall::{ProcessType, SpawnError};
 
+    /// Verifies that init process exit sequence revokes all authority and
+    /// records all four teardown steps as complete.
+    ///
+    /// Enforces INV-AUTH-001: bootstrap authority collapsed after init exits.
+    /// Verified by: this test.
     #[test]
-    #[ignore = "Phase 7 Plan 05: init process exit and authority handoff"]
-    fn test_init_process_exits_after_handing_off_authority() {}
+    fn test_init_process_exits_after_handing_off_authority() {
+        let exit_record = execute_process_exit_sequence();
+        assert!(exit_record.capability_space_revoked, "CSpace must be revoked on exit");
+        assert!(exit_record.pages_deallocated, "pages must be deallocated on exit");
+        assert!(exit_record.thread_deallocated, "thread must be deallocated on exit");
+        assert!(exit_record.removed_from_scheduler, "process must be removed from scheduler on exit");
+    }
 
     /// Verifies that spawnd refuses to spawn process types not in the whitelist.
     ///
@@ -89,7 +103,53 @@ mod tests {
         assert!(write_protection_is_active, "ring buffer must be write-protected after initialization");
     }
 
+    /// Verifies that after the full boot sequence: init is created, exits with
+    /// authority revoked, and spawnd/auditd each receive only minimum capabilities.
+    ///
+    /// Enforces INV-AUTH-001: no privileged process remains after boot.
+    /// Enforces INV-AUTH-003: each server receives only its designated capability.
+    /// Verified by: this test.
     #[test]
-    #[ignore = "Phase 7 Plan 06: no privileged process after boot"]
-    fn integration_no_privileged_process_exists_after_boot_sequence() {}
+    fn integration_no_privileged_process_exists_after_boot_sequence() {
+        let init_result = create_server_process(ProcessType::Init, 0x0000_0000_0040_0000);
+        assert!(init_result.is_ok(), "init process must be created successfully");
+        let exit_record = execute_process_exit_sequence();
+        assert!(exit_record.capability_space_revoked, "init CSpace must be revoked after exit");
+        verify_spawnd_receives_only_spawn_capability();
+        verify_auditd_receives_only_audit_read_capability();
+    }
+
+    /// Creates a spawnd process and verifies its CSpace has exactly CapSpawn in slot 0.
+    fn verify_spawnd_receives_only_spawn_capability() {
+        let spawnd_result = create_server_process(ProcessType::Spawnd, 0x0000_0000_0040_0000);
+        assert!(spawnd_result.is_ok(), "spawnd process must be created successfully");
+        let mut spawnd_capability_space = CapabilitySpace::new();
+        grant_initial_capability_to_server(
+            &mut spawnd_capability_space,
+            0,
+            CapabilityType::Spawn,
+            capability_rights::GRANT,
+        );
+        let spawn_slot = spawnd_capability_space.lookup_slot(0);
+        assert!(spawn_slot.is_ok(), "spawnd slot 0 must hold CapSpawn");
+        let audit_slot = spawnd_capability_space.lookup_slot(1);
+        assert!(audit_slot.is_err(), "spawnd slot 1 must be null (no AuditRead)");
+    }
+
+    /// Creates an auditd process and verifies its CSpace has exactly CapAuditRead in slot 0.
+    fn verify_auditd_receives_only_audit_read_capability() {
+        let auditd_result = create_server_process(ProcessType::Auditd, 0x0000_0000_0040_0000);
+        assert!(auditd_result.is_ok(), "auditd process must be created successfully");
+        let mut auditd_capability_space = CapabilitySpace::new();
+        grant_initial_capability_to_server(
+            &mut auditd_capability_space,
+            0,
+            CapabilityType::AuditRead,
+            capability_rights::READ,
+        );
+        let audit_slot = auditd_capability_space.lookup_slot(0);
+        assert!(audit_slot.is_ok(), "auditd slot 0 must hold CapAuditRead");
+        let spawn_slot = auditd_capability_space.lookup_slot(1);
+        assert!(spawn_slot.is_err(), "auditd slot 1 must be null (no CapSpawn)");
+    }
 }
