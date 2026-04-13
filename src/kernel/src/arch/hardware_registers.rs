@@ -234,5 +234,89 @@ pub fn write_control_register_four(value: u64) {
     }
 }
 
+/// Read a 32-bit value from a TPM TIS MMIO register at base 0xFED40000 + offset.
+///
+/// Enforces invariant INV-BOOT-001 (measured boot path integrity).
+/// Verified by: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
+///
+/// # Safety contract
+/// MMIO read via read_volatile from the TPM TIS base address range.
+/// - Precondition: TPM TIS interface is present at base 0xFED40000 (verified during boot)
+/// - Invariant: INV-BOOT-001 (measured boot path)
+/// - Evidence: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
+#[cfg(target_arch = "x86_64")]
+pub fn read_tpm_register(offset: u32) -> u32 {
+    let register_address = (0xFED4_0000u64 + offset as u64) as *const u32;
+    // SAFETY: MMIO read from TPM TIS register at base 0xFED40000 + offset.
+    // - Precondition: TPM TIS present at this address (verified during boot init)
+    // - Invariant: INV-BOOT-001 (measured boot path integrity)
+    // - Evidence: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
+    // Allowlist: src/kernel/src/arch/hardware_registers.rs -- read_volatile to TPM TIS registers
+    unsafe { core::ptr::read_volatile(register_address) }
+}
+
+/// Write a 32-bit value to a TPM TIS MMIO register at base 0xFED40000 + offset.
+///
+/// Enforces invariant INV-BOOT-001 (measured boot path integrity).
+/// Verified by: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
+///
+/// # Safety contract
+/// MMIO write via write_volatile to the TPM TIS base address range.
+/// - Precondition: TPM TIS interface is present at base 0xFED40000 (verified during boot)
+/// - Invariant: INV-BOOT-001 (measured boot path)
+/// - Evidence: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
+#[cfg(target_arch = "x86_64")]
+pub fn write_tpm_register(offset: u32, value: u32) {
+    let register_address = (0xFED4_0000u64 + offset as u64) as *mut u32;
+    // SAFETY: MMIO write to TPM TIS register at base 0xFED40000 + offset.
+    // - Precondition: TPM TIS present at this address (verified during boot init)
+    // - Invariant: INV-BOOT-001 (measured boot path integrity)
+    // - Evidence: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
+    // Allowlist: src/kernel/src/arch/hardware_registers.rs -- write_volatile to TPM TIS registers
+    unsafe { core::ptr::write_volatile(register_address, value) }
+}
+
+/// Read a single byte from the TPM TIS data FIFO register at base 0xFED40000 + offset.
+///
+/// Enforces invariant INV-BOOT-001 (measured boot path integrity).
+/// Verified by: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
+///
+/// # Safety contract
+/// MMIO byte read via read_volatile from the TPM TIS FIFO address.
+/// - Precondition: TPM TIS interface is present at base 0xFED40000 (verified during boot)
+/// - Invariant: INV-BOOT-001 (measured boot path)
+/// - Evidence: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
+#[cfg(target_arch = "x86_64")]
+pub fn read_tpm_data_fifo_byte(offset: u32) -> u8 {
+    let fifo_address = (0xFED4_0000u64 + offset as u64) as *const u8;
+    // SAFETY: MMIO byte read from TPM TIS data FIFO at base 0xFED40000 + offset.
+    // - Precondition: TPM TIS present at this address (verified during boot init)
+    // - Invariant: INV-BOOT-001 (measured boot path integrity)
+    // - Evidence: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
+    // Allowlist: src/kernel/src/arch/hardware_registers.rs -- read_volatile to TPM TIS registers
+    unsafe { core::ptr::read_volatile(fifo_address) }
+}
+
+/// Write a single byte to the TPM TIS data FIFO register at base 0xFED40000 + offset.
+///
+/// Enforces invariant INV-BOOT-001 (measured boot path integrity).
+/// Verified by: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
+///
+/// # Safety contract
+/// MMIO byte write via write_volatile to the TPM TIS FIFO address.
+/// - Precondition: TPM TIS interface is present at base 0xFED40000 (verified during boot)
+/// - Invariant: INV-BOOT-001 (measured boot path)
+/// - Evidence: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
+#[cfg(target_arch = "x86_64")]
+pub fn write_tpm_data_fifo_byte(offset: u32, value: u8) {
+    let fifo_address = (0xFED4_0000u64 + offset as u64) as *mut u8;
+    // SAFETY: MMIO byte write to TPM TIS data FIFO at base 0xFED40000 + offset.
+    // - Precondition: TPM TIS present at this address (verified during boot init)
+    // - Invariant: INV-BOOT-001 (measured boot path integrity)
+    // - Evidence: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
+    // Allowlist: src/kernel/src/arch/hardware_registers.rs -- write_volatile to TPM TIS registers
+    unsafe { core::ptr::write_volatile(fifo_address, value) }
+}
+
 #[cfg(test)]
 mod tests {}
