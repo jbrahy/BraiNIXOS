@@ -25,18 +25,42 @@ mod tests {
     use crate::capability::audit_event_type::AuditEventType;
     use crate::capability::audit_log::AuditRingBuffer;
     use crate::capability::audit_log_protection::protect_audit_log_pages;
+    use crate::capability::capability_rights;
+    use crate::capability::capability_type::CapabilityType;
+    use crate::process::module_loader::validate_spawn_request;
+    use crate::syscall::audit_read::validate_audit_read_capability;
+    use brainix_libsyscall::{ProcessType, SpawnError};
 
     #[test]
     #[ignore = "Phase 7 Plan 05: init process exit and authority handoff"]
     fn test_init_process_exits_after_handing_off_authority() {}
 
+    /// Verifies that spawnd refuses to spawn process types not in the whitelist.
+    ///
+    /// Enforces INV-SPAWN-001: only whitelisted process types may be spawned.
     #[test]
-    #[ignore = "Phase 7 Plan 03: spawnd whitelist enforcement"]
-    fn test_spawnd_refuses_process_type_not_in_whitelist() {}
+    fn test_spawnd_refuses_process_type_not_in_whitelist() {
+        let device_server_result = validate_spawn_request(ProcessType::DeviceServer);
+        assert_eq!(device_server_result, Err(SpawnError::ProcessTypeNotPermitted));
+        let network_server_result = validate_spawn_request(ProcessType::NetworkServer);
+        assert_eq!(network_server_result, Err(SpawnError::ProcessTypeNotPermitted));
+        let spawnd_result = validate_spawn_request(ProcessType::Spawnd);
+        assert_eq!(spawnd_result, Ok(()));
+    }
 
+    /// Verifies that auditd cannot write to the audit log (Write right is forbidden).
+    ///
+    /// Enforces INV-AUD-002: auditd holds only Read right on its AuditRead capability.
     #[test]
-    #[ignore = "Phase 7 Plan 03: auditd read-only enforcement"]
-    fn test_auditd_cannot_write_to_audit_log() {}
+    fn test_auditd_cannot_write_to_audit_log() {
+        use crate::syscall::audit_read::AuditReadError;
+        let write_rights = capability_rights::WRITE;
+        let write_result = validate_audit_read_capability(CapabilityType::AuditRead, write_rights);
+        assert_eq!(write_result, Err(AuditReadError::WriteRightNotGranted));
+        let read_rights = capability_rights::READ;
+        let read_result = validate_audit_read_capability(CapabilityType::AuditRead, read_rights);
+        assert_eq!(read_result, Ok(()));
+    }
 
     /// Verifies that an entry appended before write-protection is still readable
     /// after protect_audit_log_pages is called.
