@@ -16,13 +16,18 @@ use crate::hardware_security::attestation_gate::{
     create_attestation_gate, advance_attestation_gate, AttestationEvent,
 };
 use crate::hardware_security::csprng::{initialize_csprng_phase_a, initialize_csprng_phase_b};
-use crate::hardware_security::indirect_branch_tracking::enable_indirect_branch_tracking;
+use crate::hardware_security::indirect_branch_tracking::{
+    enable_indirect_branch_tracking, is_indirect_branch_tracking_active,
+};
 use crate::hardware_security::kernel_config_blob::create_kernel_security_config_blob;
 use crate::hardware_security::kernel_write_protection::write_protect_kernel_sections;
-use crate::hardware_security::memory_encryption::detect_and_enable_memory_encryption;
+use crate::hardware_security::memory_encryption::{
+    detect_and_enable_memory_encryption, MemoryEncryptionEnforcementResult,
+};
 use crate::hardware_security::pcr_measurement::{
     compute_kernel_binary_measurement, compute_config_blob_measurement,
 };
+use crate::hardware_security::binary_signing::IS_DEVELOPMENT_BUILD;
 use crate::hardware_security::spectre_mitigation::{
     select_spectre_v2_mitigation_mode, enable_spectre_v2_mitigation,
 };
@@ -61,9 +66,49 @@ pub fn finalize_hardware_security(boot_step_logger: &mut BootStepLogger) {
     perform_tpm_attestation_gate_check(boot_step_logger);
 }
 
+/// Query CPUID leaf 7 subleaf 0 for structured extended feature flags.
+#[cfg(target_arch = "x86_64")]
+fn query_cpuid_leaf_seven() -> crate::hardware_security::cpu_feature_detection::CpuidResult {
+    crate::arch::hardware_registers::execute_cpuid_query(7, 0)
+}
+
+/// Query CPUID leaf 0x8000001F for AMD extended memory encryption flags.
+#[cfg(target_arch = "x86_64")]
+fn query_cpuid_extended_memory_encryption_leaf(
+) -> crate::hardware_security::cpu_feature_detection::CpuidResult {
+    crate::arch::hardware_registers::execute_cpuid_query(0x8000_001F, 0)
+}
+
+/// Query CPUID leaf 7 subleaf 0 (stub for non-x86_64 host compilation).
+#[cfg(not(target_arch = "x86_64"))]
+fn query_cpuid_leaf_seven() -> crate::hardware_security::cpu_feature_detection::CpuidResult {
+    crate::hardware_security::cpu_feature_detection::CpuidResult { eax: 0, ebx: 0, ecx: 0, edx: 0 }
+}
+
+/// Query CPUID extended memory encryption leaf (stub for non-x86_64 host compilation).
+#[cfg(not(target_arch = "x86_64"))]
+fn query_cpuid_extended_memory_encryption_leaf(
+) -> crate::hardware_security::cpu_feature_detection::CpuidResult {
+    crate::hardware_security::cpu_feature_detection::CpuidResult { eax: 0, ebx: 0, ecx: 0, edx: 0 }
+}
+
+/// Convert a MemoryEncryptionEnforcementResult to the u8 config blob encoding.
+///
+/// Enabled => 1 (enforcement active), DevelopmentWarning or ProductionFatalHalt => 0.
+fn memory_encryption_enforcement_result_to_config_blob_byte(
+    result: MemoryEncryptionEnforcementResult,
+) -> u8 {
+    match result {
+        MemoryEncryptionEnforcementResult::Enabled(_) => 1,
+        _ => 0,
+    }
+}
+
 /// Step: detect and enable TME/SME (D-05: must run before CSPRNG Phase A).
 fn detect_and_enable_memory_encryption_step(boot_step_logger: &mut BootStepLogger) {
-    detect_and_enable_memory_encryption();
+    let leaf_seven = query_cpuid_leaf_seven();
+    let extended_leaf = query_cpuid_extended_memory_encryption_leaf();
+    detect_and_enable_memory_encryption(&leaf_seven, &extended_leaf, IS_DEVELOPMENT_BUILD);
     boot_step_logger.ok("TME/SME detection complete (D-05: memory encryption before CSPRNG)");
 }
 
@@ -96,10 +141,36 @@ fn extend_pcr_zero_with_kernel_measurement_step(boot_step_logger: &mut BootStepL
     boot_step_logger.ok("PCR[0] extended with kernel binary measurement (D-10)");
 }
 
+/// Detect the current memory encryption enforcement byte for the config blob.
+fn detect_memory_encryption_config_blob_byte() -> u8 {
+    let leaf_seven = query_cpuid_leaf_seven();
+    let extended_leaf = query_cpuid_extended_memory_encryption_leaf();
+    let result =
+        detect_and_enable_memory_encryption(&leaf_seven, &extended_leaf, IS_DEVELOPMENT_BUILD);
+    memory_encryption_enforcement_result_to_config_blob_byte(result)
+}
+
+/// Collect the four runtime-detected values needed to build the config blob.
+fn collect_config_blob_runtime_parameters() -> (u8, u8, u8, u8) {
+    let spectre_mode = select_spectre_v2_mitigation_mode() as u8;
+    let memory_encryption_mode = detect_memory_encryption_config_blob_byte();
+    let ibt_enabled = u8::from(is_indirect_branch_tracking_active());
+    let is_dev_build = u8::from(IS_DEVELOPMENT_BUILD);
+    (spectre_mode, memory_encryption_mode, ibt_enabled, is_dev_build)
+}
+
+/// Build the config blob and compute its PCR measurement.
+fn build_and_measure_config_blob() -> [u8; 32] {
+    let (spectre_mode, memory_encryption_mode, ibt_enabled, is_dev_build) =
+        collect_config_blob_runtime_parameters();
+    let config_blob =
+        create_kernel_security_config_blob(spectre_mode, memory_encryption_mode, ibt_enabled, is_dev_build);
+    compute_config_blob_measurement(&config_blob)
+}
+
 /// Step: extend PCR[1] with the kernel config blob measurement (D-11).
 fn extend_pcr_one_with_config_blob_measurement_step(boot_step_logger: &mut BootStepLogger) {
-    let config_blob = create_kernel_security_config_blob();
-    let config_measurement = compute_config_blob_measurement(&config_blob);
+    let config_measurement = build_and_measure_config_blob();
     let _ = crate::hardware_security::tpm::commands::extend_platform_configuration_register(
         1,
         &config_measurement,
