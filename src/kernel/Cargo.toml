@@ -13,6 +13,11 @@ required-features = ["kernel-binary"]
 # Enables the kernel binary target. Required for bare-metal builds.
 # Not enabled during host-target `cargo test` runs (security_boot_tests).
 kernel-binary = []
+# Marks the binary as a development build. Dev binaries are rejected by the
+# production verifier even if the Ed25519 signature is valid (D-19, INV-BOOT-003).
+# Build: cargo build --features dev-build (development)
+# Default (no flag): production build
+dev-build = []
 
 [dependencies]
 # force-soft disables SIMD/cpufeatures runtime detection -- required for x86_64-unknown-none
