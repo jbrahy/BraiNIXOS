@@ -62,14 +62,32 @@ pub fn process_pending_rendezvous_completions(_state: &mut SchedulerState) {
     // MUST be called before budget evaluation and timeout processing in process_scheduler_tick.
 }
 
-/// Processes one scheduler tick: increments the tick counter, processes pending
-/// rendezvous completions, decrements the current thread's budget, advances the
-/// partition slot if expired, and combines the results into a single scheduler action.
+/// Issues the Indirect Branch Prediction Barrier before context switch.
+///
+/// Clears branch predictor state from the old thread before new thread executes.
+/// Called at the start of each scheduler tick to prevent cross-process Spectre v2
+/// attacks (T-HW-SPEC-03). Placed BEFORE register save/restore per D-01.
+///
+/// Enforces INV-X86-002 (Spectre v2 mitigation: IBPB on every context switch).
+/// Verified by: test_ibpb_is_issued_on_context_switch_path
+fn issue_indirect_branch_prediction_barrier_before_switch() {
+    #[cfg(target_arch = "x86_64")]
+    crate::hardware_security::spectre_mitigation::issue_indirect_branch_prediction_barrier();
+}
+
+/// Processes one scheduler tick: increments the tick counter, issues IBPB,
+/// processes pending rendezvous completions, decrements the current thread's
+/// budget, advances the partition slot if expired, and combines the results.
+///
+/// IBPB is issued at the top of every tick to clear the branch predictor state
+/// before any thread code executes. This enforces INV-X86-002.
 ///
 /// Enforces INV-SCHED-001: per-domain CPU budget accounting.
+/// Enforces INV-X86-002: IBPB on every context switch path.
 /// Verified by: context_switch inline tests
 pub fn process_scheduler_tick(state: &mut SchedulerState) -> SchedulerAction {
     state.current_tick += 1;
+    issue_indirect_branch_prediction_barrier_before_switch();
     process_pending_rendezvous_completions(state);
     decrement_current_thread_budget(state);
     let partition_action = advance_partition_slot_if_expired(&mut state.major_frame_state);

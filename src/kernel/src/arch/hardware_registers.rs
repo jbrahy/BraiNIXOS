@@ -114,5 +114,125 @@ fn extract_optional_value_from_carry(value: u64, carry_flag: u8) -> Option<u64> 
     if carry_flag != 0 { Some(value) } else { None }
 }
 
+/// Reads a Model Specific Register (MSR) by address.
+///
+/// Returns the 64-bit value from `rdmsr` (EDX:EAX combined).
+/// Caller must verify MSR exists via CPUID before calling.
+///
+/// Enforces INV-X86-001 (platform feature detection via MSR).
+/// Verified by: test_ibrs_detection_via_arch_capabilities_msr
+///
+/// # Safety contract
+/// RDMSR is a non-destructive privileged instruction.
+/// - Precondition: `msr_address` is a valid MSR for the current CPU
+/// - Invariant: INV-X86-001 (platform feature detection)
+/// - Evidence: test_ibrs_detection_via_arch_capabilities_msr
+pub fn read_model_specific_register(msr_address: u32) -> u64 {
+    let low_bits: u32;
+    let high_bits: u32;
+    // SAFETY: RDMSR reads an MSR register. Non-destructive. Ring 0 required.
+    // - Precondition: msr_address is a valid MSR for the current CPU
+    // - Invariant: INV-X86-001 (platform feature detection)
+    // - Evidence: test_ibrs_detection_via_arch_capabilities_msr
+    // Allowlist: src/kernel/src/arch/hardware_registers.rs -- rdmsr instruction
+    unsafe {
+        core::arch::asm!(
+            "rdmsr",
+            in("ecx") msr_address,
+            out("eax") low_bits,
+            out("edx") high_bits,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    combine_msr_halves(high_bits, low_bits)
+}
+
+/// Combines the EDX:EAX halves of an RDMSR result into a single u64.
+fn combine_msr_halves(high_bits: u32, low_bits: u32) -> u64 {
+    ((high_bits as u64) << 32) | (low_bits as u64)
+}
+
+/// Writes a value to a Model Specific Register (MSR) by address.
+///
+/// Splits the 64-bit value into EDX:EAX and executes `wrmsr`.
+/// Caller must verify MSR exists and value is architecturally correct.
+///
+/// Enforces INV-X86-002 (Spectre v2 mitigation, IBRS/IBPB writes).
+/// Verified by: test_ibrs_is_enabled_when_eibrs_is_absent
+///
+/// # Safety contract
+/// WRMSR writes CPU configuration registers. Ring 0 required.
+/// - Precondition: msr_address is a valid writable MSR; value is architecturally correct
+/// - Invariant: Spectre v2 mitigation (INV-X86-002) or memory encryption enable
+/// - Evidence: test_ibrs_is_enabled_when_eibrs_is_absent
+pub fn write_model_specific_register(msr_address: u32, value: u64) {
+    let low_bits = value as u32;
+    let high_bits = (value >> 32) as u32;
+    // SAFETY: WRMSR modifies CPU configuration. Ring 0 required.
+    // - Precondition: msr_address is a valid writable MSR, value is architecturally correct
+    // - Invariant: INV-X86-002 (Spectre v2 mitigation)
+    // - Evidence: test_ibrs_is_enabled_when_eibrs_is_absent
+    // Allowlist: src/kernel/src/arch/hardware_registers.rs -- wrmsr instruction
+    unsafe {
+        core::arch::asm!(
+            "wrmsr",
+            in("ecx") msr_address,
+            in("eax") low_bits,
+            in("edx") high_bits,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+}
+
+/// Reads the current value of the CR4 control register.
+///
+/// CR4 controls CPU features such as PAE, SMEP, SMAP, CET/IBT.
+///
+/// Enforces INV-X86-002 (CET/IBT enable).
+/// Verified by: test_indirect_branch_tracking_enable
+pub fn read_control_register_four() -> u64 {
+    let register_value: u64;
+    // SAFETY: CR4 read. Non-destructive. Ring 0 required.
+    // - Precondition: CPU is in ring 0
+    // - Invariant: INV-X86-002 (CET/IBT enable via CR4 bit 23)
+    // - Evidence: test_indirect_branch_tracking_enable
+    // Allowlist: src/kernel/src/arch/hardware_registers.rs -- mov cr4 instruction
+    unsafe {
+        core::arch::asm!(
+            "mov {value}, cr4",
+            value = out(reg) register_value,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    register_value
+}
+
+/// Writes a new value to the CR4 control register.
+///
+/// The value must preserve all required bits (SMEP, SMAP, PAE, etc.).
+///
+/// Enforces INV-X86-002 (CET/IBT enable via CR4 bit 23).
+/// Verified by: test_indirect_branch_tracking_enable
+///
+/// # Safety contract
+/// CR4 write modifies the CPU execution environment. Ring 0 required.
+/// - Precondition: value preserves existing required bits (SMEP, SMAP, PAE)
+/// - Invariant: INV-X86-002 (CET/IBT enable)
+/// - Evidence: test_indirect_branch_tracking_enable
+pub fn write_control_register_four(value: u64) {
+    // SAFETY: CR4 write modifies CPU execution environment. Ring 0 required.
+    // - Precondition: value preserves existing required bits (SMEP, SMAP, PAE)
+    // - Invariant: INV-X86-002 (CET/IBT enable)
+    // - Evidence: test_indirect_branch_tracking_enable
+    // Allowlist: src/kernel/src/arch/hardware_registers.rs -- mov cr4 instruction
+    unsafe {
+        core::arch::asm!(
+            "mov cr4, {value}",
+            value = in(reg) value,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {}

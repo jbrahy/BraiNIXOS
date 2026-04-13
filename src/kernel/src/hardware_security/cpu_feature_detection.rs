@@ -68,6 +68,17 @@ pub fn is_indirect_branch_tracking_supported(cpuid_leaf_seven_result: &CpuidResu
     extract_bit(cpuid_leaf_seven_result.edx, indirect_branch_tracking_bit_position)
 }
 
+/// Returns true if IBRS and IBPB are supported.
+///
+/// Checks EDX bit 26 of CPUID leaf 7 subleaf 0 (IA32_ARCH_CAPABILITIES advertising).
+/// Used to confirm IBRS/IBPB MSR writes are valid before enabling Spectre v2 mitigation.
+///
+/// Verified by: test_ibrs_ibpb_detection_from_cpuid_when_bit_is_set
+pub fn is_ibrs_ibpb_supported(cpuid_leaf_seven_result: &CpuidResult) -> bool {
+    let ibrs_ibpb_bit_position = 26u8;
+    extract_bit(cpuid_leaf_seven_result.edx, ibrs_ibpb_bit_position)
+}
+
 /// Returns true if Intel TME (Total Memory Encryption) is supported.
 ///
 /// Checks ECX bit 13 of CPUID leaf 7.
@@ -171,6 +182,21 @@ mod tests {
         let indirect_branch_tracking_edx = 1u32 << 20;
         let cpuid_result = build_cpuid_result_with_edx(indirect_branch_tracking_edx);
         assert!(is_indirect_branch_tracking_supported(&cpuid_result));
+    }
+
+    /// CPUID leaf 7 EDX bit 26 set => IBRS/IBPB supported.
+    #[test]
+    fn test_ibrs_ibpb_detection_from_cpuid_when_bit_is_set() {
+        let ibrs_ibpb_edx = 1u32 << 26;
+        let cpuid_result = build_cpuid_result_with_edx(ibrs_ibpb_edx);
+        assert!(is_ibrs_ibpb_supported(&cpuid_result));
+    }
+
+    /// CPUID leaf 7 EDX bit 26 clear => IBRS/IBPB not supported.
+    #[test]
+    fn test_ibrs_ibpb_detection_from_cpuid_when_bit_is_clear() {
+        let cpuid_result = build_cpuid_result_with_edx(0u32);
+        assert!(!is_ibrs_ibpb_supported(&cpuid_result));
     }
 
     /// CPUID leaf 7 ECX bit 13 set => TME supported.
