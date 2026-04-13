@@ -27,6 +27,7 @@ use crate::hardware_security::spectre_mitigation::{
     select_spectre_v2_mitigation_mode, enable_spectre_v2_mitigation,
 };
 use crate::hardware_security::tpm::commands::generate_tpm_quote;
+use crate::hardware_security::kernel_config_blob::KERNEL_BINARY_MONOTONIC_COUNTER_VALUE;
 use crate::hardware_security::tpm::monotonic_counter::verify_and_update_monotonic_counter;
 use crate::scheduler::time_partitioning::{
     read_current_apic_timer_tick_count, SCHEDULER_TICKS_PER_SECOND,
@@ -120,7 +121,7 @@ fn initialize_csprng_phase_b_step(boot_step_logger: &mut BootStepLogger) {
 
 /// Step: verify the TPM monotonic counter for rollback protection (D-21).
 fn verify_monotonic_counter_step(boot_step_logger: &mut BootStepLogger) {
-    let _ = verify_and_update_monotonic_counter();
+    let _ = verify_and_update_monotonic_counter(KERNEL_BINARY_MONOTONIC_COUNTER_VALUE);
     boot_step_logger.ok("Monotonic counter verified (rollback protection, D-21)");
 }
 

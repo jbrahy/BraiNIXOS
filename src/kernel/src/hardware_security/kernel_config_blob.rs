@@ -60,6 +60,12 @@ const PARTITION_SLOT_COUNT_VALUE: u16 = 3;
 /// Compile-time constant for attestation gate timeout in seconds.
 const ATTESTATION_GATE_TIMEOUT_SECONDS_VALUE: u16 = 60;
 
+/// Monotonic counter value embedded in this binary for rollback protection (D-21).
+///
+/// Increment this value in Cargo.toml or at build time when cutting a release.
+/// The production TPM NV counter must never exceed this value or the boot halts.
+pub const KERNEL_BINARY_MONOTONIC_COUNTER_VALUE: u64 = 1;
+
 /// Creates a KernelSecurityConfigBlob with known compile-time constants.
 ///
 /// Runtime-detected values are passed as parameters: spectre_mode from CPU detection,
