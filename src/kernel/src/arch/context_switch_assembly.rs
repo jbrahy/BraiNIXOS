@@ -6,6 +6,11 @@
 //! Phase 5 note: single-core, no real userspace exists yet. These functions
 //! document the intended register save/restore sequence. Full assembly
 //! implementation with real userspace threads is wired in Phase 7.
+//!
+//! PHASE-7-DEFERRED [T-SCHED-08]: Timer interrupt save path (to RegisterSaveArea) and
+//! SYSCALL entry save path (to kernel stack) must be implemented as SEPARATE code paths
+//! in Phase 7 when real userspace threads exist. Double-save (both paths firing on the
+//! same thread) is prevented by the single-core constraint (INV-SCHED-001) until then.
 #![allow(unsafe_code)]
 
 use crate::thread::RegisterSaveArea;
