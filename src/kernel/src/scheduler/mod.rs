@@ -20,6 +20,9 @@ mod tests;
 /// Re-export of the system-wide maximum thread count from the IPC subsystem.
 pub use crate::ipc::MAXIMUM_THREADS;
 
+use priority_inheritance::EffectivePriorityRecord;
+use time_partitioning::MajorFrameState;
+
 /// Errors returned by scheduler operations.
 ///
 /// Each variant corresponds to a specific security invariant violation
@@ -70,8 +73,12 @@ pub struct SchedulerState {
     pub thread_domain_slots: [u8; MAXIMUM_THREADS],
     /// Base priority per thread (parallel array).
     pub thread_priorities: [u8; MAXIMUM_THREADS],
+    /// Effective priority records for priority inheritance (parallel array).
+    pub effective_priority_table: [EffectivePriorityRecord; MAXIMUM_THREADS],
     /// The priority-sorted run queue of eligible threads.
     pub run_queue: run_queue::RunQueue,
+    /// Major frame state tracking current partition slot and elapsed ticks.
+    pub major_frame_state: MajorFrameState,
     /// Current global tick counter.
     pub current_tick: u64,
 }
@@ -84,7 +91,10 @@ impl SchedulerState {
             thread_budgets: [0; MAXIMUM_THREADS],
             thread_domain_slots: [0; MAXIMUM_THREADS],
             thread_priorities: [0; MAXIMUM_THREADS],
+            effective_priority_table: [priority_inheritance::new_effective_priority_record(0);
+                MAXIMUM_THREADS],
             run_queue: run_queue::RunQueue::new(),
+            major_frame_state: time_partitioning::new_major_frame_state(),
             current_tick: 0,
         }
     }
