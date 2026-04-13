@@ -23,3 +23,4 @@ pub mod binary_signing;
 pub mod pcr_measurement;
 pub mod kernel_config_blob;
 pub mod tpm;
+pub mod server_measurement;
