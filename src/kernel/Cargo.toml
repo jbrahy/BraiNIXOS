@@ -20,6 +20,9 @@ kernel-binary = []
 dev-build = []
 
 [dependencies]
+# Shared syscall ABI types: ProcessType enum, syscall number constants, server VA layout.
+# Single definition per D-09 -- kernel and server crates share this crate at compile time.
+brainix-libsyscall = { path = "../servers/libsyscall" }
 # force-soft disables SIMD/cpufeatures runtime detection -- required for x86_64-unknown-none
 # (soft-float ABI; hardware SIMD instructions cannot be emitted).
 sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }

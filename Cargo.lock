@@ -72,12 +72,17 @@ version = "0.1.0"
 name = "brainix-kernel"
 version = "0.1.0"
 dependencies = [
+ "brainix-libsyscall",
  "chacha20",
  "ed25519-dalek",
  "multiboot2",
  "sha2",
  "x86_64",
 ]
+
+[[package]]
+name = "brainix-libsyscall"
+version = "0.1.0"
 
 [[package]]
 name = "brainix-linkd"
