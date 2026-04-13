@@ -1,7 +1,8 @@
 //! Fixed-size priority-sorted run queue for eligible threads.
 //!
 //! Holds thread indices sorted by effective priority (highest first).
-//! Only threads in the current domain slot and with remaining budget are eligible.
+//! Domain eligibility and budget checks are enforced by callers before insertion.
+//! This module is a pure priority-sorted container — it does not inspect domain slots.
 //! Bounded by MAXIMUM_THREADS to avoid dynamic allocation.
 
 use super::{SchedulerError, MAXIMUM_THREADS};
@@ -9,9 +10,11 @@ use super::{SchedulerError, MAXIMUM_THREADS};
 /// Fixed-size run queue bounded by MAXIMUM_THREADS.
 ///
 /// Entries are sorted by effective priority (highest first).
-/// Only threads in the current domain slot with remaining budget are eligible.
+/// Domain eligibility and budget checks are enforced by callers before insertion.
+/// The run queue is a pure priority-sorted container — it does not inspect domain slots.
 ///
-/// Enforces INV-SCHED-001: only eligible threads are scheduled.
+/// INV-SCHED-001 is enforced by `is_thread_eligible_to_run` in context_switch.rs
+/// before any insertion into this queue.
 /// Verified by: test_run_queue_insert_and_select_highest_priority
 pub struct RunQueue {
     /// Thread indices stored in priority-descending order.
@@ -36,7 +39,8 @@ impl RunQueue {
     ///
     /// Returns `SchedulerError::NoEligibleThread` if the queue is full.
     ///
-    /// Enforces INV-SCHED-001: only admitted threads can be scheduled.
+    /// Caller is responsible for domain eligibility validation
+    /// (see `is_thread_eligible_to_run` in context_switch.rs) before calling this function.
     /// Verified by: test_run_queue_insert_and_select_highest_priority
     pub fn insert_thread(
         &mut self,
