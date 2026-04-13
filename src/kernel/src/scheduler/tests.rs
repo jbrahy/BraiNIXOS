@@ -9,8 +9,13 @@ use super::budget_accounting::{
 use super::partition_table::{
     compute_major_frame_total_ticks, MAJOR_FRAME_TOTAL_TICKS, PARTITION_TABLE,
 };
+use super::priority_inheritance::{
+    apply_priority_inheritance_boost, compute_effective_priority,
+    new_effective_priority_record, restore_base_priority,
+    EffectivePriorityRecord,
+};
 use super::run_queue::RunQueue;
-use super::{SchedulerAction, SchedulerError};
+use super::{SchedulerAction, SchedulerError, MAXIMUM_THREADS};
 
 // --- Partition table tests ---
 
@@ -161,10 +166,31 @@ fn test_process_is_preempted_when_budget_is_exhausted() {
     assert_eq!(budget, 0);
 }
 
+/// SC-02: Priority inheritance raises holder effective priority to waiter level.
+///
+/// Enforces INV-SCHED-002: priority inversion is eliminated by boosting the
+/// holder to the waiter's priority level.
 #[test]
-#[ignore]
 fn test_priority_inheritance_boosts_low_priority_thread_while_holding_resource() {
     // SCHED-02 / INV-SCHED-002
+    let mut table: [EffectivePriorityRecord; MAXIMUM_THREADS] = {
+        let mut records = [new_effective_priority_record(0); MAXIMUM_THREADS];
+        records[0] = new_effective_priority_record(1);
+        records[1] = new_effective_priority_record(5);
+        records[2] = new_effective_priority_record(10);
+        records
+    };
+    apply_priority_inheritance_boost(0, 10, &mut table);
+    let boosted_priority = compute_effective_priority(&table[0]);
+    assert_eq!(boosted_priority, 10, "holder must be boosted to waiter priority");
+    let medium_priority = table[1].base_priority;
+    assert!(
+        medium_priority < boosted_priority,
+        "medium thread cannot preempt boosted holder"
+    );
+    restore_base_priority(0, &mut table);
+    let restored_priority = compute_effective_priority(&table[0]);
+    assert_eq!(restored_priority, 1, "holder returns to base priority after restore");
 }
 
 #[test]
