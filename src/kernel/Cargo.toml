@@ -16,6 +16,8 @@ kernel-binary = []
 
 [dependencies]
 sha2 = { version = "0.10", default-features = false }
+chacha20 = { version = "0.9", default-features = false }
+ed25519-dalek = { version = "2", default-features = false }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "abi_x86_interrupt"] }

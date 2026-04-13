@@ -8,6 +8,12 @@ target = "x86_64-unknown-none"
 # Setting redundant -C target-feature flags risks ABI validation conflicts
 # on nightlies after 2025-02-04 (rust-lang/rust#136544).
 # The intent of D-07 (no red zone, no SSE in kernel code) is fully satisfied.
+#
+# -Z cf-protection=branch: enables CET Indirect Branch Tracking (IBT) for the kernel binary.
+# Verified supported on nightly-2025-12-01 via `rustc -Z cf-protection=branch` direct test.
+# Phase 6 Plan 02 (indirect_branch_tracking.rs) enables IBT at runtime; this flag ensures
+# ENDBR64 landing pad instructions are emitted by the compiler (D-17).
+rustflags = ["-Z", "cf-protection=branch"]
 runner = "qemu-system-x86_64 -nographic -serial stdio"
 
 [source.crates-io]

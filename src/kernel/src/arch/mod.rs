@@ -1,6 +1,7 @@
 //! Architecture-specific hardware abstraction modules.
 
 pub mod context_switch_assembly;
+pub mod hardware_registers;
 pub mod interrupts;
 pub mod paging;
 pub mod timer;

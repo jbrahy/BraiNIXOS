@@ -23,5 +23,7 @@ pub mod thread;
 
 pub mod scheduler;
 
+pub mod hardware_security;
+
 #[cfg(target_arch = "x86_64")]
 pub mod syscall;

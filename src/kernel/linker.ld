@@ -17,14 +17,18 @@ SECTIONS
 {
     . = KERNEL_VIRTUAL_BASE;
 
+    _text_start = .;
     .text : AT(0x100000)
     {
         *(.text .text.*)
     }
+    _text_end = .;
 
     .rodata : ALIGN(4096)
     {
+        _rodata_start = .;
         *(.rodata .rodata.*)
+        _rodata_end = .;
     }
 
     .data : ALIGN(4096)
