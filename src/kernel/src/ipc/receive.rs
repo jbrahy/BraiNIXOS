@@ -8,6 +8,7 @@
 //! Enforces INV-AUTH-005: CapReply is kernel-created on SYS_IPC_RECEIVE rendezvous.
 
 use crate::capability::capability_space::CapabilitySpace;
+use crate::hardware_security::spectre_mitigation::issue_speculative_load_barrier;
 use crate::ipc::cap_reply::install_cap_reply_in_server_cspace;
 use crate::ipc::endpoint::{EndpointPool, ThreadIdentifier};
 use crate::ipc::rendezvous::perform_rendezvous;
@@ -96,7 +97,14 @@ fn execute_receive_rendezvous(
 }
 
 /// Returns the badge of the endpoint at `endpoint_index`.
+///
+/// Issues LFENCE before the endpoint array access to prevent Spectre v1
+/// speculative overread of IPC buffer contents via user-controlled index.
+/// Per D-02 (compile-time barrier on all identified speculative paths).
 fn read_endpoint_badge(endpoint_index: usize, endpoint_pool: &mut EndpointPool) -> u64 {
+    // Spectre v1 mitigation: LFENCE after IPC receive buffer length check.
+    // Prevents speculative overread of IPC buffer contents. Per D-02.
+    issue_speculative_load_barrier();
     endpoint_pool
         .endpoint_at_mut(endpoint_index)
         .map(|endpoint| endpoint.badge)

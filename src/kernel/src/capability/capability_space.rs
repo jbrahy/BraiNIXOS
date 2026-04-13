@@ -12,6 +12,7 @@
 
 use crate::capability::capability_error::CapabilityError;
 use crate::capability::capability_slot::CapabilitySlot;
+use crate::hardware_security::spectre_mitigation::issue_speculative_load_barrier;
 
 /// Maximum number of capability slots per process.
 ///
@@ -60,6 +61,10 @@ impl CapabilitySpace {
 
     fn read_slot_at_index(&self, slot_index: u8) -> &CapabilitySlot {
         let index = usize::from(slot_index);
+        // Spectre v1 mitigation: LFENCE after capability slot index bounds check.
+        // Prevents speculative read of adjacent capability data using an
+        // attacker-controlled out-of-bounds index. Per D-02.
+        issue_speculative_load_barrier();
         &self.slots[index]
     }
 

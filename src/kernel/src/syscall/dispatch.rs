@@ -14,15 +14,23 @@
 //! of the SYSCALL entry stub and is inseparable from it.
 #![allow(unsafe_code)]
 
+use crate::hardware_security::spectre_mitigation::issue_speculative_load_barrier;
 use crate::ipc::{
     SYSCALL_NUMBER_IPC_CALL, SYSCALL_NUMBER_IPC_RECEIVE, SYSCALL_NUMBER_IPC_SEND,
     SYSCALL_NUMBER_NOTIFY_POLL, SYSCALL_NUMBER_NOTIFY_SIGNAL, SYSCALL_NUMBER_NOTIFY_WAIT,
 };
 
-/// Routes IPC syscall numbers (1-3) to their handlers.
+/// Issues LFENCE then routes IPC syscall numbers (1-3) to their handlers.
+///
+/// The LFENCE after the user-supplied syscall_number match prevents speculative
+/// execution of the dispatch arm using an attacker-controlled out-of-bounds index.
+/// Mitigates T-HW-SPEC-01 (bounds-check bypass). Per D-02.
 ///
 /// Returns `Some(result)` for a recognized IPC number, `None` otherwise.
 fn handle_ipc_range_syscall(syscall_number: u64) -> Option<i64> {
+    // Spectre v1 mitigation: LFENCE after dispatch table indexing on user-supplied syscall number.
+    // Prevents speculative load of dispatch table entry with attacker-controlled value. Per D-02.
+    issue_speculative_load_barrier();
     match syscall_number {
         SYSCALL_NUMBER_IPC_SEND => Some(handle_ipc_send_syscall()),
         SYSCALL_NUMBER_IPC_RECEIVE => Some(handle_ipc_receive_syscall()),
