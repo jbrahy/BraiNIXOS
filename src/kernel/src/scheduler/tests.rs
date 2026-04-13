@@ -15,6 +15,10 @@ use super::priority_inheritance::{
     EffectivePriorityRecord,
 };
 use super::run_queue::RunQueue;
+use super::time_partitioning::{
+    advance_partition_slot_if_expired, is_thread_eligible_for_current_slot,
+    new_major_frame_state,
+};
 use super::{SchedulerAction, SchedulerError, MAXIMUM_THREADS};
 
 // --- Partition table tests ---
@@ -193,10 +197,36 @@ fn test_priority_inheritance_boosts_low_priority_thread_while_holding_resource()
     assert_eq!(restored_priority, 1, "holder returns to base priority after restore");
 }
 
+/// SC-03: A domain does not execute outside its assigned time slot.
+///
+/// Enforces INV-SCHED-001: domains cannot execute outside their assigned slot.
+/// Enforces T-SCHED-05: covert timing channel between domains is eliminated.
 #[test]
-#[ignore]
 fn test_domain_does_not_run_outside_its_assigned_slot() {
     // SCHED-04 / INV-SCHED-001
+    let mut major_frame_state = new_major_frame_state();
+    // Slot 0 is domain 0 with 100 ticks. Confirm domain 0 eligible, domain 1 not.
+    assert!(
+        is_thread_eligible_for_current_slot(0, &major_frame_state),
+        "domain 0 must be eligible in slot 0"
+    );
+    assert!(
+        !is_thread_eligible_for_current_slot(1, &major_frame_state),
+        "domain 1 must not be eligible in slot 0"
+    );
+    // Advance 100 ticks to exhaust slot 0 and move to slot 1 (domain 1).
+    for _ in 0..100 {
+        advance_partition_slot_if_expired(&mut major_frame_state);
+    }
+    // Now in slot 1 (domain 1): domain 1 eligible, domain 0 not.
+    assert!(
+        is_thread_eligible_for_current_slot(1, &major_frame_state),
+        "domain 1 must be eligible in slot 1"
+    );
+    assert!(
+        !is_thread_eligible_for_current_slot(0, &major_frame_state),
+        "domain 0 must not be eligible in slot 1"
+    );
 }
 
 #[test]
