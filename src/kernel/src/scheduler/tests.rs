@@ -3,11 +3,14 @@
 //! All tests are #[ignore] in Wave 0. Wave 1+ implements the test bodies
 //! alongside the corresponding scheduler logic.
 
+use super::budget_accounting::{
+    check_budget_exhaustion, decrement_budget, is_budget_exhausted, reset_budget,
+};
 use super::partition_table::{
-    compute_major_frame_total_ticks, PartitionSlot, MAJOR_FRAME_TOTAL_TICKS, PARTITION_TABLE,
+    compute_major_frame_total_ticks, MAJOR_FRAME_TOTAL_TICKS, PARTITION_TABLE,
 };
 use super::run_queue::RunQueue;
-use super::SchedulerError;
+use super::{SchedulerAction, SchedulerError};
 
 // --- Partition table tests ---
 
@@ -88,12 +91,74 @@ fn test_run_queue_is_empty_initially() {
     assert_eq!(run_queue.entry_count(), 0);
 }
 
-// --- Budget accounting tests (Task 2 will enable these) ---
+// --- Budget accounting tests ---
 
 #[test]
-#[ignore]
+fn test_decrement_budget_reduces_by_one() {
+    let mut budget: u64 = 5;
+    let remaining = decrement_budget(&mut budget);
+    assert_eq!(remaining, 4);
+    assert_eq!(budget, 4);
+}
+
+#[test]
+fn test_decrement_budget_to_zero_returns_zero() {
+    let mut budget: u64 = 1;
+    let remaining = decrement_budget(&mut budget);
+    assert_eq!(remaining, 0);
+    assert_eq!(budget, 0);
+}
+
+#[test]
+fn test_decrement_budget_saturates_at_zero() {
+    let mut budget: u64 = 0;
+    let remaining = decrement_budget(&mut budget);
+    assert_eq!(remaining, 0);
+}
+
+#[test]
+fn test_check_budget_exhaustion_returns_preempt_when_zero() {
+    let action = check_budget_exhaustion(0);
+    assert_eq!(action, SchedulerAction::PreemptCurrentThread);
+}
+
+#[test]
+fn test_check_budget_exhaustion_returns_continue_when_nonzero() {
+    let action = check_budget_exhaustion(5);
+    assert_eq!(action, SchedulerAction::ContinueCurrentThread);
+}
+
+#[test]
+fn test_is_budget_exhausted_returns_true_when_zero() {
+    assert!(is_budget_exhausted(0));
+}
+
+#[test]
+fn test_is_budget_exhausted_returns_false_when_nonzero() {
+    assert!(!is_budget_exhausted(1));
+}
+
+#[test]
+fn test_reset_budget_sets_new_value() {
+    let mut budget: u64 = 0;
+    reset_budget(&mut budget, 100);
+    assert_eq!(budget, 100);
+}
+
+/// SC-01: A thread with a finite CPU budget is preempted when the budget is exhausted.
+///
+/// Enforces INV-SCHED-001: per-domain CPU budget accounting, rejection on exhaustion.
+/// Enforces INV-SCHED-004: exhaustion is explicit, never silent.
+#[test]
 fn test_process_is_preempted_when_budget_is_exhausted() {
     // SCHED-01 / INV-SCHED-001 / INV-SCHED-004
+    let mut budget: u64 = 3;
+    decrement_budget(&mut budget);
+    decrement_budget(&mut budget);
+    decrement_budget(&mut budget);
+    let action = check_budget_exhaustion(budget);
+    assert_eq!(action, SchedulerAction::PreemptCurrentThread);
+    assert_eq!(budget, 0);
 }
 
 #[test]

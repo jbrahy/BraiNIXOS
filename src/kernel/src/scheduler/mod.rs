@@ -53,3 +53,39 @@ pub enum SchedulerAction {
     /// Both preemption and a slot transition are required.
     PreemptAndSwitchSlot,
 }
+
+/// Core scheduler state tracking all thread scheduling metadata.
+///
+/// This struct owns the scheduler's view of thread budgets, domain slots,
+/// priorities, and the run queue. The Thread struct (Phase 4) is NOT modified;
+/// this is the scheduler's own parallel tracking.
+///
+/// Enforces INV-SCHED-001: per-domain CPU budget accounting.
+pub struct SchedulerState {
+    /// Index of the currently running thread, or None if idle.
+    pub current_thread_index: Option<u32>,
+    /// CPU budget remaining per thread (parallel array).
+    pub thread_budgets: [u64; MAXIMUM_THREADS],
+    /// Domain slot assignment per thread (parallel array).
+    pub thread_domain_slots: [u8; MAXIMUM_THREADS],
+    /// Base priority per thread (parallel array).
+    pub thread_priorities: [u8; MAXIMUM_THREADS],
+    /// The priority-sorted run queue of eligible threads.
+    pub run_queue: run_queue::RunQueue,
+    /// Current global tick counter.
+    pub current_tick: u64,
+}
+
+impl SchedulerState {
+    /// Creates a new scheduler state with all fields zeroed.
+    pub const fn new() -> Self {
+        SchedulerState {
+            current_thread_index: None,
+            thread_budgets: [0; MAXIMUM_THREADS],
+            thread_domain_slots: [0; MAXIMUM_THREADS],
+            thread_priorities: [0; MAXIMUM_THREADS],
+            run_queue: run_queue::RunQueue::new(),
+            current_tick: 0,
+        }
+    }
+}
