@@ -229,8 +229,58 @@ fn test_domain_does_not_run_outside_its_assigned_slot() {
     );
 }
 
+/// SC-05: A hostile CPU consumer in domain 0 cannot starve domain 1 threads.
+///
+/// Sets up two threads: Thread 0 in domain 0 with maximum budget (hostile consumer),
+/// Thread 1 in domain 1 with budget 100. Simulates one full major frame (250 ticks).
+/// Verifies that Thread 1 receives its full 100-tick slot regardless of Thread 0's
+/// behavior, because domain isolation is structural (enforced by the partition table).
+///
+/// Enforces INV-SCHED-001: domains cannot execute outside their assigned slot.
+/// Enforces T-SCHED-09: hostile consumer in one domain cannot starve another domain.
 #[test]
-#[ignore]
 fn integration_hostile_cpu_consumer_does_not_starve_other_domains() {
     // SCHED-01 / SCHED-04 / INV-SCHED-001 / INV-SCHED-002
+    use super::context_switch::process_scheduler_tick;
+    use super::time_partitioning::is_thread_eligible_for_current_slot;
+
+    let mut state = super::SchedulerState::new();
+
+    // Thread 0: domain 0, hostile consumer with effectively infinite budget.
+    state.thread_domain_slots[0] = 0;
+    state.thread_budgets[0] = 1000;
+    state.current_thread_index = Some(0);
+
+    // Thread 1: domain 1, legitimate thread with budget matching its slot duration.
+    state.thread_domain_slots[1] = 1;
+    state.thread_budgets[1] = 100;
+
+    let mut domain_one_ticks_while_thread_zero_active: u64 = 0;
+    let mut domain_one_eligible_tick_count: u64 = 0;
+
+    for _ in 0..250 {
+        let domain_one_eligible =
+            is_thread_eligible_for_current_slot(1, &state.major_frame_state);
+        if domain_one_eligible {
+            domain_one_eligible_tick_count += 1;
+        }
+        let thread_zero_domain_eligible =
+            is_thread_eligible_for_current_slot(0, &state.major_frame_state);
+        if domain_one_eligible && thread_zero_domain_eligible {
+            domain_one_ticks_while_thread_zero_active += 1;
+        }
+        process_scheduler_tick(&mut state);
+    }
+
+    // Domain 1 must receive exactly its assigned 100 ticks per major frame.
+    assert_eq!(
+        domain_one_eligible_tick_count, 100,
+        "domain 1 must receive exactly 100 ticks in its partition slot"
+    );
+
+    // Domain 0 and domain 1 never overlap — structural isolation guarantees this.
+    assert_eq!(
+        domain_one_ticks_while_thread_zero_active, 0,
+        "domain 1 and domain 0 must never be simultaneously eligible"
+    );
 }
