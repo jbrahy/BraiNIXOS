@@ -336,3 +336,70 @@ pub fn build_kernel_page_table(boot_step_logger: &mut BootStepLogger) {
     map_all_kernel_regions(page_map_level_4, boot_step_logger);
     boot_step_logger.ok("Kernel page table constructed (CR3 switch deferred to Phase 4)");
 }
+
+/// Clears the writable flag (bit 1) in the level-one page table entry for a virtual page.
+///
+/// After this call, any write to the page generates a page fault. Called by
+/// `kernel_write_protection::write_protect_page_range` to flip kernel `.text` and
+/// `.rodata` pages to read-only after init (D-15).
+///
+/// # Safety
+/// - `entry` must point to a valid, mapped level-1 page table entry.
+/// - Caller must flush the TLB for this address after modification.
+/// - Precondition: entry is a valid PTE reference obtained from a mapped page table walk.
+/// - Invariant: INV-MEM-004 (kernel executable regions become immutable after init).
+/// - Evidence: test_clear_writable_flag_removes_writable_bit
+pub fn clear_writable_flag_in_level_one_page_table_entry(entry: &mut u64) {
+    const PAGE_TABLE_ENTRY_WRITABLE_BIT: u64 = 1 << 1;
+    let current_value = *entry;
+    let updated_value = current_value & !PAGE_TABLE_ENTRY_WRITABLE_BIT;
+    // SAFETY: Modifying a PTE to remove the writable bit. Non-destructive: makes page
+    // read-only without unmapping it. Entry is a valid mapped PTE from a page table walk.
+    // - Precondition: entry points to a valid mapped level-1 PTE.
+    // - Invariant: INV-MEM-004 (kernel executable regions become immutable after init).
+    // - Evidence: test_clear_writable_flag_removes_writable_bit
+    unsafe { core::ptr::write_volatile(entry as *mut u64, updated_value) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies clearing the writable bit removes bit 1 from the entry value.
+    ///
+    /// Enforces INV-MEM-004: kernel executable regions become immutable after init.
+    /// Verified by: test_clear_writable_flag_removes_writable_bit
+    #[test]
+    fn test_clear_writable_flag_removes_writable_bit() {
+        const PRESENT_BIT: u64 = 1;
+        const WRITABLE_BIT: u64 = 1 << 1;
+        let mut entry_value: u64 = PRESENT_BIT | WRITABLE_BIT | 0x1000;
+        clear_writable_flag_in_level_one_page_table_entry(&mut entry_value);
+        let writable_bit_is_clear = (entry_value & WRITABLE_BIT) == 0;
+        assert!(writable_bit_is_clear, "writable bit must be cleared after protection");
+    }
+
+    /// Verifies clearing the writable bit preserves all other bits.
+    #[test]
+    fn test_clear_writable_flag_preserves_other_bits() {
+        const WRITABLE_BIT: u64 = 1 << 1;
+        let original_value: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        let mut entry_value = original_value;
+        clear_writable_flag_in_level_one_page_table_entry(&mut entry_value);
+        let expected_value = original_value & !WRITABLE_BIT;
+        assert_eq!(entry_value, expected_value, "only writable bit must be cleared");
+    }
+
+    /// Verifies clearing writable bit on an already read-only entry is idempotent.
+    #[test]
+    fn test_clear_writable_flag_is_idempotent() {
+        const PRESENT_BIT: u64 = 1;
+        let mut entry_value: u64 = PRESENT_BIT | 0x1000;
+        let value_after_first_call = {
+            clear_writable_flag_in_level_one_page_table_entry(&mut entry_value);
+            entry_value
+        };
+        clear_writable_flag_in_level_one_page_table_entry(&mut entry_value);
+        assert_eq!(entry_value, value_after_first_call, "second call must not change value");
+    }
+}
