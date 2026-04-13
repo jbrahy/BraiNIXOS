@@ -14,6 +14,7 @@
 //! of the SYSCALL entry stub and is inseparable from it.
 #![allow(unsafe_code)]
 
+use brainix_libsyscall::{SYSCALL_NUMBER_AUDIT_READ, SYSCALL_NUMBER_PROCESS_EXIT};
 use crate::hardware_security::spectre_mitigation::issue_speculative_load_barrier;
 use crate::ipc::{
     SYSCALL_NUMBER_IPC_CALL, SYSCALL_NUMBER_IPC_RECEIVE, SYSCALL_NUMBER_IPC_SEND,
@@ -51,6 +52,27 @@ fn handle_notify_range_syscall(syscall_number: u64) -> Option<i64> {
     }
 }
 
+/// Issues LFENCE then routes process lifecycle syscall numbers (7-8) to their handlers.
+///
+/// The Spectre barrier prevents speculative dispatch on attacker-controlled numbers.
+/// Returns `Some(result)` for a recognized process lifecycle number, `None` otherwise.
+fn handle_process_lifecycle_syscall(syscall_number: u64) -> Option<i64> {
+    issue_speculative_load_barrier();
+    match syscall_number {
+        SYSCALL_NUMBER_PROCESS_EXIT => handle_process_exit_dispatch(),
+        SYSCALL_NUMBER_AUDIT_READ => Some(super::audit_read::handle_audit_read_syscall()),
+        _ => None,
+    }
+}
+
+/// Calls the diverging process exit handler and satisfies the Option<i64> return type.
+///
+/// handle_process_exit_syscall() never returns (-> !). This wrapper exists so the
+/// match arm in handle_process_lifecycle_syscall can return Option<i64>.
+fn handle_process_exit_dispatch() -> Option<i64> {
+    super::process_exit::handle_process_exit_syscall();
+}
+
 /// Routes a syscall to its handler based on `syscall_number` (passed from rax).
 ///
 /// Returns 0 for success, a negative discriminant for IpcError, or -1 for an
@@ -74,6 +96,7 @@ fn handle_notify_range_syscall(syscall_number: u64) -> Option<i64> {
 pub unsafe extern "C" fn dispatch_syscall(syscall_number: u64) -> i64 {
     handle_ipc_range_syscall(syscall_number)
         .or_else(|| handle_notify_range_syscall(syscall_number))
+        .or_else(|| handle_process_lifecycle_syscall(syscall_number))
         .unwrap_or(-1)
 }
 

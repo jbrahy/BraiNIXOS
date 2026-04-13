@@ -7,7 +7,6 @@
 //! Enforces INV-AUD-001 and INV-AUD-003 (ring wrap never panics or allocates).
 
 use super::audit_event_type::AuditEventType;
-use super::audit_log_protection::{reprotect_audit_log_page, unprotect_audit_log_page};
 
 /// A single audit log entry. Fixed-size for constant-time append.
 ///
@@ -95,6 +94,41 @@ impl AuditRingBuffer {
         }
     }
 
+    /// Returns the entry at the given sequence number if it still exists in the ring buffer.
+    ///
+    /// Computes the slot index from `target_sequence % AUDIT_LOG_CAPACITY`. Returns
+    /// `None` if the stored entry's sequence number does not match `target_sequence`
+    /// (meaning the slot has been overwritten since that sequence was written).
+    pub fn read_entry_at_sequence(&self, target_sequence: u64) -> Option<&AuditLogEntry> {
+        let slot_index = (target_sequence as usize) % AUDIT_LOG_CAPACITY;
+        let stored_entry = &self.entries[slot_index];
+        let sequence_matches = stored_entry.sequence_number == target_sequence;
+        if sequence_matches { Some(stored_entry) } else { None }
+    }
+
+    /// Returns the current value of the monotonic sequence counter.
+    ///
+    /// Equal to the total number of entries appended since construction.
+    pub fn current_sequence_counter(&self) -> u64 {
+        self.sequence_counter
+    }
+
+    /// Returns true if the ring buffer pages are currently hardware write-protected.
+    ///
+    /// Enforces INV-AUD-001: audit log entries cannot be modified after write.
+    /// Verified by: process::tests::test_audit_log_pages_are_write_protected_after_initialization
+    pub fn is_write_protected(&self) -> bool {
+        self.is_write_protected
+    }
+
+    /// Sets the hardware write-protection flag to the given value.
+    ///
+    /// Called by `audit_log_protection` functions to update the flag in sync
+    /// with any x86_64 PTE manipulation performed externally.
+    pub fn set_write_protected(&mut self, protected: bool) {
+        self.is_write_protected = protected;
+    }
+
     /// Returns the next sequence number to be assigned (total entries written).
     pub fn current_sequence_number(&self) -> u64 {
         self.sequence_counter
@@ -123,15 +157,14 @@ impl AuditRingBuffer {
 
     /// Writes the given entry at the current write head position.
     ///
-    /// Calls protection stubs when the buffer is hardware write-protected.
+    /// When write-protected, temporarily clears the protection flag, writes the
+    /// entry, then restores the flag. The x86_64 PTE manipulation is handled
+    /// externally by `audit_log_protection` when called from the boot sequence.
     fn write_entry_at_head(&mut self, entry: AuditLogEntry) {
-        if self.is_write_protected {
-            unprotect_audit_log_page();
-        }
+        let was_protected = self.is_write_protected;
+        self.is_write_protected = false;
         self.entries[self.write_head] = entry;
-        if self.is_write_protected {
-            reprotect_audit_log_page();
-        }
+        self.is_write_protected = was_protected;
     }
 
     /// Advances write_head by one, wrapping at AUDIT_LOG_CAPACITY.
