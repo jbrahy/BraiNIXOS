@@ -51,15 +51,26 @@ fn evaluate_current_thread_budget(state: &SchedulerState) -> SchedulerAction {
     }
 }
 
-/// Processes one scheduler tick: increments the tick counter, decrements the
-/// current thread's budget, advances the partition slot if expired, and
-/// combines the results into a single scheduler action.
+/// Processes pending IPC rendezvous completions before budget/timeout evaluation.
+///
+/// Enforces INV-SCHED-003: rendezvous completions are always processed before
+/// timeout preemption on the same tick.
+/// Phase 5: no-op stub — wired in Phase 7.
+pub fn process_pending_rendezvous_completions(_state: &mut SchedulerState) {
+    // Phase 5: no real userspace threads; no pending rendezvous completions.
+    // Phase 7: wire real IPC timeout-to-ready transitions here (INV-SCHED-003).
+    // MUST be called before budget evaluation and timeout processing in process_scheduler_tick.
+}
+
+/// Processes one scheduler tick: increments the tick counter, processes pending
+/// rendezvous completions, decrements the current thread's budget, advances the
+/// partition slot if expired, and combines the results into a single scheduler action.
 ///
 /// Enforces INV-SCHED-001: per-domain CPU budget accounting.
-/// Enforces INV-SCHED-003: rendezvous completions processed before timeouts.
 /// Verified by: context_switch inline tests
 pub fn process_scheduler_tick(state: &mut SchedulerState) -> SchedulerAction {
     state.current_tick += 1;
+    process_pending_rendezvous_completions(state);
     decrement_current_thread_budget(state);
     let partition_action = advance_partition_slot_if_expired(&mut state.major_frame_state);
     let budget_action = evaluate_current_thread_budget(state);
