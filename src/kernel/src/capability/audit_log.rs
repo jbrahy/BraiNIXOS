@@ -103,7 +103,11 @@ impl AuditRingBuffer {
         let slot_index = (target_sequence as usize) % AUDIT_LOG_CAPACITY;
         let stored_entry = &self.entries[slot_index];
         let sequence_matches = stored_entry.sequence_number == target_sequence;
-        if sequence_matches { Some(stored_entry) } else { None }
+        if sequence_matches {
+            Some(stored_entry)
+        } else {
+            None
+        }
     }
 
     /// Returns the current value of the monotonic sequence counter.

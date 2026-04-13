@@ -76,10 +76,7 @@ fn set_thread_to_blocked_with_deadline(thread: &mut Thread, deadline_tick: u64) 
 ///
 /// In Phase 4 with no scheduler, always returns Timeout when no signals are pending
 /// at call time — no other thread can run to deliver a signal.
-fn check_if_immediately_timed_out(
-    thread: &mut Thread,
-    current_tick: u64,
-) -> Result<u64, IpcError> {
+fn check_if_immediately_timed_out(thread: &mut Thread, current_tick: u64) -> Result<u64, IpcError> {
     if has_thread_timed_out(thread.timeout_deadline_tick, current_tick) {
         thread.thread_state = ThreadState::Ready;
         return Err(IpcError::Timeout);

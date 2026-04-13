@@ -72,9 +72,7 @@ fn allocate_direct_map_page_table() -> &'static mut PageTable {
 }
 
 /// Allocates a direct-map bootstrap page table and links a parent entry to it.
-fn allocate_and_link_direct_map_table(
-    parent_entry: &mut PageTableEntry,
-) -> &'static mut PageTable {
+fn allocate_and_link_direct_map_table(parent_entry: &mut PageTableEntry) -> &'static mut PageTable {
     let new_table = allocate_direct_map_page_table();
     let physical_address = compute_page_table_physical_address(new_table);
     parent_entry.set_addr(physical_address, compute_intermediate_page_table_flags());
@@ -146,6 +144,7 @@ fn resolve_direct_map_page_directory(
 
 /// Maps one 2MB huge page into the direct-map region.
 #[allow(clippy::arithmetic_side_effects)]
+#[allow(clippy::expect_used)]
 fn map_one_direct_map_huge_page(
     page_map_level_4: &mut PageTable,
     huge_page_index: u64,
@@ -178,7 +177,7 @@ fn map_all_huge_pages(
 /// Computes the number of 2MB huge pages needed to cover the given memory size.
 #[allow(clippy::arithmetic_side_effects)]
 fn compute_huge_page_count(total_physical_memory_in_bytes: u64) -> u64 {
-    (total_physical_memory_in_bytes + HUGE_PAGE_SIZE_IN_BYTES - 1) / HUGE_PAGE_SIZE_IN_BYTES
+    total_physical_memory_in_bytes.div_ceil(HUGE_PAGE_SIZE_IN_BYTES)
 }
 
 /// Maps the full physical RAM range at DIRECT_MAP_REGION_START using 2MB huge pages.

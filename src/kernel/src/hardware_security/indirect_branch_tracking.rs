@@ -28,12 +28,17 @@ const CONTROL_FLOW_ENFORCEMENT_TECHNOLOGY_ENABLE_BIT: u64 = 1 << 23;
 /// Verified by: test_indirect_branch_tracking_enable
 #[cfg(target_arch = "x86_64")]
 pub fn enable_indirect_branch_tracking() {
-    use crate::arch::hardware_registers::{read_control_register_four, write_control_register_four};
-    use crate::hardware_security::cpu_feature_detection::is_indirect_branch_tracking_supported;
     use crate::arch::hardware_registers::execute_cpuid_query;
+    use crate::arch::hardware_registers::{
+        read_control_register_four, write_control_register_four,
+    };
+    use crate::hardware_security::cpu_feature_detection::is_indirect_branch_tracking_supported;
     let cpuid_leaf_seven_result = execute_cpuid_query(7, 0);
     if is_indirect_branch_tracking_supported(&cpuid_leaf_seven_result) {
-        set_indirect_branch_tracking_bit_in_cr4(read_control_register_four, write_control_register_four);
+        set_indirect_branch_tracking_bit_in_cr4(
+            read_control_register_four,
+            write_control_register_four,
+        );
         log_indirect_branch_tracking_enabled();
     } else {
         log_indirect_branch_tracking_unavailable();
@@ -44,10 +49,7 @@ pub fn enable_indirect_branch_tracking() {
 ///
 /// Extracted as a named helper to make the CR4 bit-set operation explicit.
 #[cfg(target_arch = "x86_64")]
-fn set_indirect_branch_tracking_bit_in_cr4(
-    read_cr4: fn() -> u64,
-    write_cr4: fn(u64),
-) {
+fn set_indirect_branch_tracking_bit_in_cr4(read_cr4: fn() -> u64, write_cr4: fn(u64)) {
     let current_cr4_value = read_cr4();
     let updated_cr4_value = current_cr4_value | CONTROL_FLOW_ENFORCEMENT_TECHNOLOGY_ENABLE_BIT;
     write_cr4(updated_cr4_value);

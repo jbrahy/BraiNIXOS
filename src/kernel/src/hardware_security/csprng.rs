@@ -15,8 +15,8 @@
 //! access via addr_of_mut!/addr_of! and write_volatile for key zeroing on reseed.
 #![allow(unsafe_code)]
 
-use chacha20::ChaCha20;
 use chacha20::cipher::{KeyIvInit, StreamCipher};
+use chacha20::ChaCha20;
 
 /// ChaCha20 CSPRNG state. BSS-backed, no dynamic allocation.
 ///
@@ -69,8 +69,7 @@ pub fn initialize_csprng_phase_a() {
 /// Collect 8 RDRAND samples, panicking if any fail after retries.
 #[cfg(target_arch = "x86_64")]
 fn collect_rdrand_samples_for_seeding() -> [u64; 8] {
-    crate::hardware_security::entropy_source::collect_rdrand_samples(8)
-        .unwrap_or([0u64; 8])
+    crate::hardware_security::entropy_source::collect_rdrand_samples(8).unwrap_or([0u64; 8])
 }
 
 /// Store the derived key into global CSPRNG state and mark as seeded.
@@ -114,10 +113,7 @@ fn fold_rdrand_samples_to_four_words(rdrand_samples: &[u64; 8]) -> [u64; 4] {
 }
 
 /// XOR each RDSEED sample (if present) into the corresponding folded word.
-fn mix_rdseed_into_words(
-    folded_words: [u64; 4],
-    rdseed_samples: &[Option<u64>; 4],
-) -> [u64; 4] {
+fn mix_rdseed_into_words(folded_words: [u64; 4], rdseed_samples: &[Option<u64>; 4]) -> [u64; 4] {
     [
         mix_optional_sample(folded_words[0], rdseed_samples[0]),
         mix_optional_sample(folded_words[1], rdseed_samples[1]),
@@ -162,7 +158,10 @@ pub fn generate_random_bytes(output: &mut [u8]) {
     let state_pointer = core::ptr::addr_of!(GLOBAL_CSPRNG);
     // SAFETY: read-only access to check seeded flag; single-core kernel.
     let is_seeded = unsafe { (*state_pointer).is_seeded };
-    assert!(is_seeded, "CSPRNG generate_random_bytes called before Phase A seeding");
+    assert!(
+        is_seeded,
+        "CSPRNG generate_random_bytes called before Phase A seeding"
+    );
     apply_chacha20_keystream_to_output(output);
 }
 
@@ -230,8 +229,7 @@ fn zero_and_replace_key(new_key: [u8; 32]) {
 /// Enforces invariant INV-BOOT-005 (entropy initialization is explicit and conservative).
 /// Verified by: test_reseed_from_tpm_changes_key
 pub fn initialize_csprng_phase_b() {
-    let tpm_entropy_result =
-        crate::hardware_security::tpm::commands::get_random_bytes_from_tpm(32);
+    let tpm_entropy_result = crate::hardware_security::tpm::commands::get_random_bytes_from_tpm(32);
     apply_phase_b_reseed_or_log_warning(tpm_entropy_result);
 }
 
@@ -274,9 +272,10 @@ mod tests {
     #[test]
     fn test_boot_halts_when_rdrand_is_unavailable() {
         let rdrand_is_available = false;
-        let should_halt = crate::hardware_security::entropy_source::should_halt_due_to_absent_rdrand(
-            rdrand_is_available,
-        );
+        let should_halt =
+            crate::hardware_security::entropy_source::should_halt_due_to_absent_rdrand(
+                rdrand_is_available,
+            );
         assert!(should_halt, "kernel must halt when RDRAND is unavailable");
     }
 
@@ -339,6 +338,9 @@ mod tests {
         let tpm_entropy_b = [0x22u8; 32];
         let key_a = derive_reseeded_key(&tpm_entropy_a);
         let key_b = derive_reseeded_key(&tpm_entropy_b);
-        assert_ne!(key_a, key_b, "different TPM entropy must produce different keys");
+        assert_ne!(
+            key_a, key_b,
+            "different TPM entropy must produce different keys"
+        );
     }
 }

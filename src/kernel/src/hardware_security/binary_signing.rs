@@ -13,8 +13,8 @@
 //! Enforces INV-BOOT-003: dev and prod cryptographic material remain separate.
 //! Verified by: test_dev_build_marker_is_refused_by_production_signature_check
 
-use ed25519_dalek::{Signature, VerifyingKey};
 use ed25519_dalek::ed25519::signature::Verifier;
+use ed25519_dalek::{Signature, VerifyingKey};
 
 /// Compile-time marker distinguishing development and production builds.
 ///
@@ -47,10 +47,8 @@ pub enum SignatureVerificationError {
 /// This is a valid Ed25519 public key for the test signing key pair embedded below.
 /// Key pair generated deterministically for testing: seed = [1u8; 32].
 const TEST_DEVELOPMENT_PUBLIC_KEY: [u8; 32] = [
-    0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7,
-    0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
-    0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
-    0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a,
+    0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
+    0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a,
 ];
 
 /// Production public key for unit testing (32 bytes). NOT a real key -- test use only.
@@ -58,10 +56,8 @@ const TEST_DEVELOPMENT_PUBLIC_KEY: [u8; 32] = [
 /// Distinct from the development key to verify structural separation.
 /// Key pair generated deterministically for testing: seed = [2u8; 32].
 const TEST_PRODUCTION_PUBLIC_KEY: [u8; 32] = [
-    0x3b, 0x6a, 0x27, 0xbc, 0xce, 0xb6, 0xa4, 0x2d,
-    0x62, 0xa3, 0xa8, 0xd0, 0x2a, 0x6f, 0x0d, 0x73,
-    0x65, 0x32, 0x15, 0x77, 0x1d, 0xe2, 0x43, 0xa6,
-    0x3a, 0xc0, 0x48, 0xa1, 0x8b, 0x59, 0xda, 0x29,
+    0x3b, 0x6a, 0x27, 0xbc, 0xce, 0xb6, 0xa4, 0x2d, 0x62, 0xa3, 0xa8, 0xd0, 0x2a, 0x6f, 0x0d, 0x73,
+    0x65, 0x32, 0x15, 0x77, 0x1d, 0xe2, 0x43, 0xa6, 0x3a, 0xc0, 0x48, 0xa1, 0x8b, 0x59, 0xda, 0x29,
 ];
 
 /// Select the verification key set for the given build environment.
@@ -105,9 +101,7 @@ fn build_verifying_key(
 }
 
 /// Build a Signature from raw signature bytes.
-fn build_signature(
-    signature_bytes: &[u8; 64],
-) -> Result<Signature, SignatureVerificationError> {
+fn build_signature(signature_bytes: &[u8; 64]) -> Result<Signature, SignatureVerificationError> {
     Ok(Signature::from_bytes(signature_bytes))
 }
 
@@ -117,7 +111,8 @@ fn verify_signature_against_key(
     binary_hash: &[u8; 32],
     signature: &Signature,
 ) -> Result<(), SignatureVerificationError> {
-    verifying_key.verify(binary_hash, signature)
+    verifying_key
+        .verify(binary_hash, signature)
         .map_err(|_| SignatureVerificationError::InvalidSignature)
 }
 
@@ -165,8 +160,7 @@ mod tests {
         );
 
         // Production build + no marker = accept
-        let production_accepts_clean_binary =
-            reject_binary_with_development_marker(false, false);
+        let production_accepts_clean_binary = reject_binary_with_development_marker(false, false);
         assert!(
             production_accepts_clean_binary.is_ok(),
             "production verifier must accept binary without dev marker"
@@ -178,8 +172,7 @@ mod tests {
     fn test_select_verification_key_set_returns_development_key_for_dev_build() {
         let selected_key = select_verification_key_set(true);
         assert_eq!(
-            selected_key,
-            &TEST_DEVELOPMENT_PUBLIC_KEY,
+            selected_key, &TEST_DEVELOPMENT_PUBLIC_KEY,
             "dev build must use development key"
         );
     }
@@ -189,8 +182,7 @@ mod tests {
     fn test_select_verification_key_set_returns_production_key_for_production_build() {
         let selected_key = select_verification_key_set(false);
         assert_eq!(
-            selected_key,
-            &TEST_PRODUCTION_PUBLIC_KEY,
+            selected_key, &TEST_PRODUCTION_PUBLIC_KEY,
             "production build must use production key"
         );
     }
@@ -199,8 +191,7 @@ mod tests {
     #[test]
     fn test_development_and_production_key_sets_are_distinct() {
         assert_ne!(
-            TEST_DEVELOPMENT_PUBLIC_KEY,
-            TEST_PRODUCTION_PUBLIC_KEY,
+            TEST_DEVELOPMENT_PUBLIC_KEY, TEST_PRODUCTION_PUBLIC_KEY,
             "development and production keys must be different"
         );
     }
@@ -223,9 +214,6 @@ mod tests {
     #[test]
     fn test_reject_binary_with_development_marker_accepts_dev_build_without_marker() {
         let result = reject_binary_with_development_marker(true, false);
-        assert!(
-            result.is_ok(),
-            "dev build without marker must be accepted"
-        );
+        assert!(result.is_ok(), "dev build without marker must be accepted");
     }
 }

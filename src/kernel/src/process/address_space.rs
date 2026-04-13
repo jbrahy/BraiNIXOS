@@ -11,10 +11,8 @@
 //! user-mode mappings. No kernel entry is ever copied into it.
 
 use brainix_libsyscall::{
-    SERVER_CODE_BASE_VIRTUAL_ADDRESS,
-    SERVER_STACK_GUARD_PAGE_VIRTUAL_ADDRESS,
-    SERVER_STACK_SIZE_IN_PAGES,
-    SERVER_STACK_TOP_VIRTUAL_ADDRESS,
+    SERVER_CODE_BASE_VIRTUAL_ADDRESS, SERVER_STACK_GUARD_PAGE_VIRTUAL_ADDRESS,
+    SERVER_STACK_SIZE_IN_PAGES, SERVER_STACK_TOP_VIRTUAL_ADDRESS,
 };
 
 const CANONICAL_USER_SPACE_UPPER_BOUND: u64 = 0x0000_7FFF_FFFF_FFFF;
@@ -74,6 +72,7 @@ pub fn validate_entry_point_is_canonical(entry_point: u64) -> Result<(), Address
 ///
 /// The stack is allocated as SERVER_STACK_SIZE_IN_PAGES pages downward from
 /// SERVER_STACK_TOP_VIRTUAL_ADDRESS. The bottom is the lowest mapped stack address.
+#[allow(clippy::arithmetic_side_effects)]
 pub fn compute_stack_bottom_address() -> u64 {
     let stack_size_in_bytes = SERVER_STACK_SIZE_IN_PAGES as u64 * PAGE_SIZE_IN_BYTES;
     SERVER_STACK_TOP_VIRTUAL_ADDRESS - stack_size_in_bytes
@@ -84,6 +83,7 @@ pub fn compute_stack_bottom_address() -> u64 {
 /// The guard page is one page below the stack bottom. It is mapped non-present
 /// so that stack overflow generates a page fault rather than silently corrupting
 /// adjacent memory (per INV-MEM-007).
+#[allow(clippy::arithmetic_side_effects)]
 pub fn compute_stack_guard_page_address() -> u64 {
     compute_stack_bottom_address() - PAGE_SIZE_IN_BYTES
 }
@@ -163,10 +163,7 @@ mod tests {
     fn test_guard_page_address_matches_libsyscall_constant() {
         // The computed guard page must match the constant in libsyscall (D-09 contract)
         let computed_guard_page = compute_stack_guard_page_address();
-        assert_eq!(
-            computed_guard_page,
-            SERVER_STACK_GUARD_PAGE_VIRTUAL_ADDRESS
-        );
+        assert_eq!(computed_guard_page, SERVER_STACK_GUARD_PAGE_VIRTUAL_ADDRESS);
     }
 
     #[test]

@@ -12,7 +12,7 @@
 //! All MMIO access to TPM TIS registers (base 0xFED40000) is delegated to
 //! `src/kernel/src/arch/hardware_registers.rs` per the UNSAFE_CODE_POLICY.md allowlist.
 
-pub mod registers;
 pub mod commands;
-pub mod quote;
 pub mod monotonic_counter;
+pub mod quote;
+pub mod registers;

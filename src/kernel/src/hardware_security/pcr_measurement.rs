@@ -17,10 +17,9 @@ use sha2::{Digest, Sha256};
 
 use crate::hardware_security::kernel_config_blob::KernelSecurityConfigBlob;
 
-/// Linker script symbols marking the .text section boundaries.
-///
-/// Exported by src/kernel/linker.ld. Used to locate kernel code pages for
-/// PCR[0] measurement and write-protection.
+// Linker script symbols marking the .text section boundaries.
+// Exported by src/kernel/linker.ld. Used to locate kernel code pages for
+// PCR[0] measurement and write-protection.
 #[cfg(target_arch = "x86_64")]
 extern "C" {
     static _text_start: u8;
@@ -134,7 +133,10 @@ mod tests {
         let rodata_bytes = b"rodata section";
         let first_measurement = compute_kernel_binary_measurement(text_bytes, rodata_bytes);
         let second_measurement = compute_kernel_binary_measurement(text_bytes, rodata_bytes);
-        assert_eq!(first_measurement, second_measurement, "PCR[0] measurement must be deterministic");
+        assert_eq!(
+            first_measurement, second_measurement,
+            "PCR[0] measurement must be deterministic"
+        );
     }
 
     /// Verifies compute_kernel_binary_measurement is non-zero.
@@ -144,25 +146,38 @@ mod tests {
         let rodata_bytes = b"rodata section content";
         let measurement = compute_kernel_binary_measurement(text_bytes, rodata_bytes);
         let all_zeros = [0u8; 32];
-        assert_ne!(measurement, all_zeros, "PCR[0] measurement must not be all zeros");
+        assert_ne!(
+            measurement, all_zeros,
+            "PCR[0] measurement must not be all zeros"
+        );
     }
 
     /// Verifies changing text bytes changes the measurement.
     #[test]
     fn test_different_text_bytes_produce_different_pcr0() {
         let rodata_bytes = b"same rodata";
-        let first_measurement = compute_kernel_binary_measurement(b"text version one", rodata_bytes);
-        let second_measurement = compute_kernel_binary_measurement(b"text version two", rodata_bytes);
-        assert_ne!(first_measurement, second_measurement, "different text must produce different PCR[0]");
+        let first_measurement =
+            compute_kernel_binary_measurement(b"text version one", rodata_bytes);
+        let second_measurement =
+            compute_kernel_binary_measurement(b"text version two", rodata_bytes);
+        assert_ne!(
+            first_measurement, second_measurement,
+            "different text must produce different PCR[0]"
+        );
     }
 
     /// Verifies changing rodata bytes changes the measurement.
     #[test]
     fn test_different_rodata_bytes_produce_different_pcr0() {
         let text_bytes = b"same text";
-        let first_measurement = compute_kernel_binary_measurement(text_bytes, b"rodata version one");
-        let second_measurement = compute_kernel_binary_measurement(text_bytes, b"rodata version two");
-        assert_ne!(first_measurement, second_measurement, "different rodata must produce different PCR[0]");
+        let first_measurement =
+            compute_kernel_binary_measurement(text_bytes, b"rodata version one");
+        let second_measurement =
+            compute_kernel_binary_measurement(text_bytes, b"rodata version two");
+        assert_ne!(
+            first_measurement, second_measurement,
+            "different rodata must produce different PCR[0]"
+        );
     }
 
     /// Verifies compute_config_blob_measurement returns a 32-byte SHA-256 digest.
@@ -179,7 +194,10 @@ mod tests {
         let config_blob = create_kernel_security_config_blob(0, 1, 1, 0);
         let first_measurement = compute_config_blob_measurement(&config_blob);
         let second_measurement = compute_config_blob_measurement(&config_blob);
-        assert_eq!(first_measurement, second_measurement, "PCR[1] measurement must be deterministic");
+        assert_eq!(
+            first_measurement, second_measurement,
+            "PCR[1] measurement must be deterministic"
+        );
     }
 
     /// Verifies compute_config_blob_measurement is non-zero.
@@ -188,7 +206,10 @@ mod tests {
         let config_blob = create_kernel_security_config_blob(0, 1, 1, 0);
         let measurement = compute_config_blob_measurement(&config_blob);
         let all_zeros = [0u8; 32];
-        assert_ne!(measurement, all_zeros, "PCR[1] measurement must not be all zeros");
+        assert_ne!(
+            measurement, all_zeros,
+            "PCR[1] measurement must not be all zeros"
+        );
     }
 
     /// Verifies changing the config blob changes the PCR[1] measurement.
@@ -198,6 +219,9 @@ mod tests {
         let modified_blob = create_kernel_security_config_blob(1, 1, 1, 0);
         let original_measurement = compute_config_blob_measurement(&original_blob);
         let modified_measurement = compute_config_blob_measurement(&modified_blob);
-        assert_ne!(original_measurement, modified_measurement, "changed blob must produce different PCR[1]");
+        assert_ne!(
+            original_measurement, modified_measurement,
+            "changed blob must produce different PCR[1]"
+        );
     }
 }

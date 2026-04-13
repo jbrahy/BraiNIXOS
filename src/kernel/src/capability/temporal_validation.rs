@@ -34,11 +34,19 @@ pub fn validate_capability(
     check_slot_is_not_revoking(slot)?;
     let use_count_result = check_use_count_not_exhausted(slot);
     if use_count_result.is_err() {
-        return Err(expire_and_zero_slot(capability_space, derivation_tree, slot_index));
+        return Err(expire_and_zero_slot(
+            capability_space,
+            derivation_tree,
+            slot_index,
+        ));
     }
     let time_window_result = check_time_window_not_expired(slot, current_tick);
     if time_window_result.is_err() {
-        return Err(expire_and_zero_slot(capability_space, derivation_tree, slot_index));
+        return Err(expire_and_zero_slot(
+            capability_space,
+            derivation_tree,
+            slot_index,
+        ));
     }
     decrement_use_count_if_limited(capability_space.lookup_slot_mut(slot_index));
     Ok(())

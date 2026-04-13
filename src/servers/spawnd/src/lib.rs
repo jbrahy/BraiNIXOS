@@ -15,11 +15,8 @@ use brainix_libsyscall::{ProcessType, SpawnError};
 ///
 /// Adding a new ProcessType variant to libsyscall forces a compile
 /// error here until the whitelist is explicitly updated. Per D-08.
-const PERMITTED_PROCESS_TYPES: [ProcessType; 3] = [
-    ProcessType::Init,
-    ProcessType::Spawnd,
-    ProcessType::Auditd,
-];
+const PERMITTED_PROCESS_TYPES: [ProcessType; 3] =
+    [ProcessType::Init, ProcessType::Spawnd, ProcessType::Auditd];
 
 /// Validates a spawn request against the compile-time whitelist.
 ///
@@ -56,5 +53,6 @@ pub fn spawnd_main() -> ! {
     loop {
         // Phase 7 stub: receive IPC, validate, spawn or reject.
         // Actual IPC receive loop wired when boot integration is complete.
+        core::hint::spin_loop();
     }
 }

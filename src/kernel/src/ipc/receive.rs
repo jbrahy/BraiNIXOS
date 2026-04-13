@@ -24,6 +24,7 @@ use crate::thread::{Thread, ThreadState};
 /// Enforces INV-IPC-001: receiver blocks until rendezvous or timeout.
 /// Enforces INV-AUTH-005: CapReply is kernel-created on IPC_CALL rendezvous.
 /// Verified by: test_send_blocks_until_receiver_calls_receive (SC-01)
+#[allow(clippy::too_many_arguments)]
 pub fn ipc_receive(
     receiver_thread_index: u32,
     receiver_capability_destination_slot: u8,
@@ -37,7 +38,9 @@ pub fn ipc_receive(
     is_call_sender: bool,
     caller_thread_identifier: u32,
 ) -> Result<IpcMessage, IpcError> {
-    let endpoint = endpoint_pool.endpoint_at_mut(endpoint_index).ok_or(IpcError::EndpointRevoked)?;
+    let endpoint = endpoint_pool
+        .endpoint_at_mut(endpoint_index)
+        .ok_or(IpcError::EndpointRevoked)?;
     if endpoint.has_no_waiting_sender() {
         return handle_no_sender_present(receiver_thread_index, receiver_thread, endpoint);
     }
@@ -70,6 +73,7 @@ fn handle_no_sender_present(
 /// Executes the full rendezvous when a sender is available.
 ///
 /// Retrieves the endpoint badge, performs rendezvous, and installs CapReply if needed.
+#[allow(clippy::too_many_arguments)]
 fn execute_receive_rendezvous(
     receiver_capability_destination_slot: u8,
     endpoint_index: usize,

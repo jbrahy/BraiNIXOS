@@ -78,10 +78,7 @@ pub fn request_tpm_locality() -> Result<(), TpmError> {
 #[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 fn write_tpm_access_byte(value: u8) {
     #[cfg(target_arch = "x86_64")]
-    crate::arch::hardware_registers::write_tpm_data_fifo_byte(
-        TPM_ACCESS_REGISTER_OFFSET,
-        value,
-    );
+    crate::arch::hardware_registers::write_tpm_data_fifo_byte(TPM_ACCESS_REGISTER_OFFSET, value);
     #[cfg(not(target_arch = "x86_64"))]
     let _ = value;
 }
@@ -100,9 +97,7 @@ fn wait_for_active_locality() -> Result<(), TpmError> {
 /// Read a byte from the TPM_ACCESS register.
 fn read_tpm_access_byte() -> u8 {
     #[cfg(target_arch = "x86_64")]
-    return crate::arch::hardware_registers::read_tpm_data_fifo_byte(
-        TPM_ACCESS_REGISTER_OFFSET,
-    );
+    return crate::arch::hardware_registers::read_tpm_data_fifo_byte(TPM_ACCESS_REGISTER_OFFSET);
     #[cfg(not(target_arch = "x86_64"))]
     return TPM_ACCESS_ACTIVE_LOCALITY_BIT;
 }
@@ -180,9 +175,7 @@ pub fn write_byte_to_tpm_data_fifo(byte_value: u8) {
 /// Read a single byte from the TPM_DATA_FIFO register.
 pub fn read_byte_from_tpm_data_fifo() -> u8 {
     #[cfg(target_arch = "x86_64")]
-    return crate::arch::hardware_registers::read_tpm_data_fifo_byte(
-        TPM_DATA_FIFO_REGISTER_OFFSET,
-    );
+    return crate::arch::hardware_registers::read_tpm_data_fifo_byte(TPM_DATA_FIFO_REGISTER_OFFSET);
     #[cfg(not(target_arch = "x86_64"))]
     return 0;
 }
@@ -227,20 +220,29 @@ mod tests {
     #[test]
     fn test_wait_for_command_ready_returns_ok_on_host_target() {
         let result = wait_for_command_ready();
-        assert!(result.is_ok(), "wait_for_command_ready must return Ok on host");
+        assert!(
+            result.is_ok(),
+            "wait_for_command_ready must return Ok on host"
+        );
     }
 
     /// On host target, wait_for_data_available returns Ok immediately.
     #[test]
     fn test_wait_for_data_available_returns_ok_on_host_target() {
         let result = wait_for_data_available();
-        assert!(result.is_ok(), "wait_for_data_available must return Ok on host");
+        assert!(
+            result.is_ok(),
+            "wait_for_data_available must return Ok on host"
+        );
     }
 
     /// On host target, request_tpm_locality returns Ok immediately.
     #[test]
     fn test_request_tpm_locality_returns_ok_on_host_target() {
         let result = request_tpm_locality();
-        assert!(result.is_ok(), "request_tpm_locality must return Ok on host");
+        assert!(
+            result.is_ok(),
+            "request_tpm_locality must return Ok on host"
+        );
     }
 }

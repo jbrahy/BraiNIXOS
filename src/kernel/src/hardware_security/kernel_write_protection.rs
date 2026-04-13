@@ -22,7 +22,7 @@
 
 use crate::memory::virtual_address_layout::PAGE_SIZE_IN_BYTES;
 
-/// Linker script symbols for kernel section boundaries (x86_64 bare-metal only).
+// Linker script symbols for kernel section boundaries (x86_64 bare-metal only).
 #[cfg(target_arch = "x86_64")]
 extern "C" {
     static _text_start: u8;
@@ -115,14 +115,14 @@ pub fn handle_kernel_write_protection_violation(faulting_address: usize) -> bool
 #[allow(clippy::arithmetic_side_effects)]
 #[allow(dead_code)]
 fn align_address_down_to_page_boundary(address: usize) -> usize {
-    address & !(PAGE_SIZE_IN_BYTES as usize - 1)
+    address & !(PAGE_SIZE_IN_BYTES - 1)
 }
 
 /// Aligns an address up to the nearest page boundary.
 #[allow(clippy::arithmetic_side_effects)]
 #[allow(dead_code)]
 fn align_address_up_to_page_boundary(address: usize) -> usize {
-    let page_size = PAGE_SIZE_IN_BYTES as usize;
+    let page_size = PAGE_SIZE_IN_BYTES;
     (address.wrapping_add(page_size - 1)) & !(page_size - 1)
 }
 
@@ -174,7 +174,7 @@ fn write_protect_page_range(start_address: usize, end_address: usize) {
     let mut current_address = aligned_start;
     while current_address < aligned_end {
         write_protect_single_page(current_address);
-        current_address = current_address.wrapping_add(PAGE_SIZE_IN_BYTES as usize);
+        current_address = current_address.wrapping_add(PAGE_SIZE_IN_BYTES);
     }
 }
 
@@ -211,7 +211,10 @@ mod tests {
     fn test_align_address_down_to_page_boundary() {
         let unaligned_address: usize = 0x1234;
         let aligned_address = align_address_down_to_page_boundary(unaligned_address);
-        assert_eq!(aligned_address, 0x1000, "must align down to 4096-byte boundary");
+        assert_eq!(
+            aligned_address, 0x1000,
+            "must align down to 4096-byte boundary"
+        );
     }
 
     /// Verifies address alignment rounds up to page boundary.
@@ -219,7 +222,10 @@ mod tests {
     fn test_align_address_up_to_page_boundary() {
         let unaligned_address: usize = 0x1001;
         let aligned_address = align_address_up_to_page_boundary(unaligned_address);
-        assert_eq!(aligned_address, 0x2000, "must align up to 4096-byte boundary");
+        assert_eq!(
+            aligned_address, 0x2000,
+            "must align up to 4096-byte boundary"
+        );
     }
 
     /// Verifies already-aligned address is unchanged by align-down.
@@ -227,7 +233,10 @@ mod tests {
     fn test_align_address_down_already_aligned_is_unchanged() {
         let aligned_address: usize = 0x3000;
         let result = align_address_down_to_page_boundary(aligned_address);
-        assert_eq!(result, aligned_address, "aligned address must be unchanged by align-down");
+        assert_eq!(
+            result, aligned_address,
+            "aligned address must be unchanged by align-down"
+        );
     }
 
     /// Verifies already-aligned address is unchanged by align-up.
@@ -235,7 +244,10 @@ mod tests {
     fn test_align_address_up_already_aligned_is_unchanged() {
         let aligned_address: usize = 0x3000;
         let result = align_address_up_to_page_boundary(aligned_address);
-        assert_eq!(result, aligned_address, "aligned address must be unchanged by align-up");
+        assert_eq!(
+            result, aligned_address,
+            "aligned address must be unchanged by align-up"
+        );
     }
 
     /// Verifies write_protect_page_range can iterate a range without panicking.
@@ -256,20 +268,26 @@ mod tests {
         // Verify the alignment helpers work correctly -- foundational to write-protection pass.
         let text_page_start = align_address_down_to_page_boundary(MOCK_TEXT_START);
         assert_eq!(
-            text_page_start % (PAGE_SIZE_IN_BYTES as usize),
+            text_page_start % (PAGE_SIZE_IN_BYTES),
             0,
             "text section start must align to page boundary"
         );
         let rodata_page_start = align_address_down_to_page_boundary(MOCK_RODATA_START);
         assert_eq!(
-            rodata_page_start % (PAGE_SIZE_IN_BYTES as usize),
+            rodata_page_start % (PAGE_SIZE_IN_BYTES),
             0,
             "rodata section start must align to page boundary"
         );
         // Verify the page range iteration covers the full section.
-        let text_page_count = (MOCK_TEXT_END - MOCK_TEXT_START) / (PAGE_SIZE_IN_BYTES as usize);
-        assert!(text_page_count > 0, "text section must span at least one page");
-        let rodata_page_count = (MOCK_RODATA_END - MOCK_RODATA_START) / (PAGE_SIZE_IN_BYTES as usize);
-        assert!(rodata_page_count > 0, "rodata section must span at least one page");
+        let text_page_count = (MOCK_TEXT_END - MOCK_TEXT_START) / (PAGE_SIZE_IN_BYTES);
+        assert!(
+            text_page_count > 0,
+            "text section must span at least one page"
+        );
+        let rodata_page_count = (MOCK_RODATA_END - MOCK_RODATA_START) / (PAGE_SIZE_IN_BYTES);
+        assert!(
+            rodata_page_count > 0,
+            "rodata section must span at least one page"
+        );
     }
 }

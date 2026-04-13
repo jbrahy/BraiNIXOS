@@ -111,18 +111,20 @@ fn compute_next_state(
     event: AttestationEvent,
 ) -> Result<AttestationGateState, AttestationError> {
     match (current_state, event) {
-        (AttestationGateState::Closed, AttestationEvent::MeasurementComplete) =>
-            Ok(AttestationGateState::MeasuringPlatform),
-        (AttestationGateState::MeasuringPlatform, AttestationEvent::QuoteGenerated) =>
-            Ok(AttestationGateState::AwaitingQuoteVerification),
-        (AttestationGateState::AwaitingQuoteVerification, AttestationEvent::VerificationPassed) =>
-            Ok(AttestationGateState::Open),
-        (AttestationGateState::AwaitingQuoteVerification, AttestationEvent::VerificationFailed) =>
-            Ok(AttestationGateState::Failed),
-        (_, AttestationEvent::Timeout) =>
-            Ok(AttestationGateState::Failed),
-        (from, _) =>
-            Err(AttestationError::InvalidTransition { from }),
+        (AttestationGateState::Closed, AttestationEvent::MeasurementComplete) => {
+            Ok(AttestationGateState::MeasuringPlatform)
+        }
+        (AttestationGateState::MeasuringPlatform, AttestationEvent::QuoteGenerated) => {
+            Ok(AttestationGateState::AwaitingQuoteVerification)
+        }
+        (AttestationGateState::AwaitingQuoteVerification, AttestationEvent::VerificationPassed) => {
+            Ok(AttestationGateState::Open)
+        }
+        (AttestationGateState::AwaitingQuoteVerification, AttestationEvent::VerificationFailed) => {
+            Ok(AttestationGateState::Failed)
+        }
+        (_, AttestationEvent::Timeout) => Ok(AttestationGateState::Failed),
+        (from, _) => Err(AttestationError::InvalidTransition { from }),
     }
 }
 
@@ -174,7 +176,10 @@ mod tests {
     #[test]
     fn test_attestation_gate_does_not_allow_traffic_in_closed_state() {
         let gate = create_attestation_gate();
-        assert!(!is_network_traffic_allowed(&gate), "closed gate must block traffic");
+        assert!(
+            !is_network_traffic_allowed(&gate),
+            "closed gate must block traffic"
+        );
     }
 
     /// Attestation gate follows the required Closed->Measuring->Verifying->Open sequence.
@@ -182,11 +187,20 @@ mod tests {
     fn test_attestation_gate_follows_required_transition_sequence() {
         let mut gate = create_attestation_gate();
         advance_attestation_gate(&mut gate, AttestationEvent::MeasurementComplete).unwrap();
-        assert_eq!(get_attestation_gate_state(&gate), AttestationGateState::MeasuringPlatform);
+        assert_eq!(
+            get_attestation_gate_state(&gate),
+            AttestationGateState::MeasuringPlatform
+        );
         advance_attestation_gate(&mut gate, AttestationEvent::QuoteGenerated).unwrap();
-        assert_eq!(get_attestation_gate_state(&gate), AttestationGateState::AwaitingQuoteVerification);
+        assert_eq!(
+            get_attestation_gate_state(&gate),
+            AttestationGateState::AwaitingQuoteVerification
+        );
         advance_attestation_gate(&mut gate, AttestationEvent::VerificationPassed).unwrap();
-        assert_eq!(get_attestation_gate_state(&gate), AttestationGateState::Open);
+        assert_eq!(
+            get_attestation_gate_state(&gate),
+            AttestationGateState::Open
+        );
     }
 
     /// Network traffic is only allowed in Open state.
@@ -199,7 +213,10 @@ mod tests {
         advance_attestation_gate(&mut gate, AttestationEvent::QuoteGenerated).unwrap();
         assert!(!is_network_traffic_allowed(&gate));
         advance_attestation_gate(&mut gate, AttestationEvent::VerificationPassed).unwrap();
-        assert!(is_network_traffic_allowed(&gate), "open gate must allow traffic");
+        assert!(
+            is_network_traffic_allowed(&gate),
+            "open gate must allow traffic"
+        );
     }
 
     /// Direct transition from Closed to Open is rejected (no-skip-path guarantee).
@@ -207,7 +224,10 @@ mod tests {
     fn test_attestation_gate_does_not_transition_directly_from_closed_to_open() {
         let mut gate = create_attestation_gate();
         let result = advance_attestation_gate(&mut gate, AttestationEvent::VerificationPassed);
-        assert!(result.is_err(), "Closed -> Open direct transition must be rejected");
+        assert!(
+            result.is_err(),
+            "Closed -> Open direct transition must be rejected"
+        );
         assert_eq!(
             get_attestation_gate_state(&gate),
             AttestationGateState::Closed,
@@ -222,8 +242,14 @@ mod tests {
         advance_attestation_gate(&mut gate, AttestationEvent::MeasurementComplete).unwrap();
         advance_attestation_gate(&mut gate, AttestationEvent::QuoteGenerated).unwrap();
         advance_attestation_gate(&mut gate, AttestationEvent::VerificationFailed).unwrap();
-        assert_eq!(get_attestation_gate_state(&gate), AttestationGateState::Failed);
-        assert!(!is_network_traffic_allowed(&gate), "failed gate must block traffic");
+        assert_eq!(
+            get_attestation_gate_state(&gate),
+            AttestationGateState::Failed
+        );
+        assert!(
+            !is_network_traffic_allowed(&gate),
+            "failed gate must block traffic"
+        );
     }
 
     /// Timeout event from any state moves gate to Failed.
@@ -231,7 +257,10 @@ mod tests {
     fn test_attestation_gate_timeout_from_any_state_moves_to_failed() {
         let mut gate = create_attestation_gate();
         advance_attestation_gate(&mut gate, AttestationEvent::Timeout).unwrap();
-        assert_eq!(get_attestation_gate_state(&gate), AttestationGateState::Failed);
+        assert_eq!(
+            get_attestation_gate_state(&gate),
+            AttestationGateState::Failed
+        );
     }
 
     /// Advancing an already-Open gate returns GateAlreadyOpen error.
@@ -259,16 +288,21 @@ mod tests {
     fn test_attestation_gate_completes_with_mock_tpm_responses() {
         let mut gate = create_attestation_gate();
 
-        assert_eq!(get_attestation_gate_state(&gate), AttestationGateState::Closed);
+        assert_eq!(
+            get_attestation_gate_state(&gate),
+            AttestationGateState::Closed
+        );
         assert!(!is_network_traffic_allowed(&gate));
 
         let measurement_result =
             advance_attestation_gate(&mut gate, AttestationEvent::MeasurementComplete);
         assert!(measurement_result.is_ok());
-        assert_eq!(get_attestation_gate_state(&gate), AttestationGateState::MeasuringPlatform);
+        assert_eq!(
+            get_attestation_gate_state(&gate),
+            AttestationGateState::MeasuringPlatform
+        );
 
-        let quote_result =
-            advance_attestation_gate(&mut gate, AttestationEvent::QuoteGenerated);
+        let quote_result = advance_attestation_gate(&mut gate, AttestationEvent::QuoteGenerated);
         assert!(quote_result.is_ok());
         assert_eq!(
             get_attestation_gate_state(&gate),
@@ -278,7 +312,10 @@ mod tests {
         let verification_result =
             advance_attestation_gate(&mut gate, AttestationEvent::VerificationPassed);
         assert!(verification_result.is_ok());
-        assert_eq!(get_attestation_gate_state(&gate), AttestationGateState::Open);
+        assert_eq!(
+            get_attestation_gate_state(&gate),
+            AttestationGateState::Open
+        );
         assert!(is_network_traffic_allowed(&gate));
     }
 
@@ -289,10 +326,12 @@ mod tests {
         advance_attestation_gate(&mut gate, AttestationEvent::MeasurementComplete).unwrap();
         advance_attestation_gate(&mut gate, AttestationEvent::QuoteGenerated).unwrap();
 
-        let timeout_result =
-            advance_attestation_gate(&mut gate, AttestationEvent::Timeout);
+        let timeout_result = advance_attestation_gate(&mut gate, AttestationEvent::Timeout);
         assert!(timeout_result.is_ok());
-        assert_eq!(get_attestation_gate_state(&gate), AttestationGateState::Failed);
+        assert_eq!(
+            get_attestation_gate_state(&gate),
+            AttestationGateState::Failed
+        );
         assert!(!is_network_traffic_allowed(&gate));
     }
 }

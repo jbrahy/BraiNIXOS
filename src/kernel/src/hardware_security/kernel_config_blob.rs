@@ -176,7 +176,10 @@ mod tests {
         let modified_blob = create_kernel_security_config_blob(1, 1, 1, 0);
         let original_hash = compute_config_blob_hash(&original_blob);
         let modified_hash = compute_config_blob_hash(&modified_blob);
-        assert_ne!(original_hash, modified_hash, "spectre mode change must change hash");
+        assert_ne!(
+            original_hash, modified_hash,
+            "spectre mode change must change hash"
+        );
     }
 
     /// Verifies changing memory_encryption_enforcement_mode changes the hash.
@@ -186,7 +189,10 @@ mod tests {
         let modified_blob = create_kernel_security_config_blob(0, 0, 1, 0);
         let original_hash = compute_config_blob_hash(&original_blob);
         let modified_hash = compute_config_blob_hash(&modified_blob);
-        assert_ne!(original_hash, modified_hash, "encryption mode change must change hash");
+        assert_ne!(
+            original_hash, modified_hash,
+            "encryption mode change must change hash"
+        );
     }
 
     /// Verifies spectre_v1_lfence_barriers_applied is always 1 (D-02).
@@ -206,6 +212,9 @@ mod tests {
         let development_blob = create_kernel_security_config_blob(0, 1, 1, 1);
         let production_hash = compute_config_blob_hash(&production_blob);
         let development_hash = compute_config_blob_hash(&development_blob);
-        assert_ne!(production_hash, development_hash, "dev build marker change must change hash");
+        assert_ne!(
+            production_hash, development_hash,
+            "dev build marker change must change hash"
+        );
     }
 }

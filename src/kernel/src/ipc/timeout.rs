@@ -20,14 +20,13 @@ const RESERVED_INVALID_TIMEOUT: u64 = u64::MAX;
 ///
 /// Enforces INV-IPC-003: no infinite timeout.
 /// Verified by: test_ipc_timeout_unblocks_sender_with_timeout_error (SC-03)
-pub fn compute_timeout_deadline(
-    current_tick: u64,
-    timeout_ticks: u64,
-) -> Result<u64, IpcError> {
+pub fn compute_timeout_deadline(current_tick: u64, timeout_ticks: u64) -> Result<u64, IpcError> {
     if timeout_ticks == RESERVED_INVALID_TIMEOUT {
         return Err(IpcError::InvalidTimeout);
     }
-    current_tick.checked_add(timeout_ticks).ok_or(IpcError::InvalidTimeout)
+    current_tick
+        .checked_add(timeout_ticks)
+        .ok_or(IpcError::InvalidTimeout)
 }
 
 /// Returns `true` if `current_tick` has reached or passed `deadline_tick`.

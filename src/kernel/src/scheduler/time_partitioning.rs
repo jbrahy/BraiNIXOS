@@ -7,7 +7,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use super::partition_table::{PARTITION_TABLE};
+use super::partition_table::PARTITION_TABLE;
 use super::SchedulerAction;
 
 /// Global monotonic tick counter incremented by the APIC timer interrupt handler.
@@ -78,7 +78,10 @@ fn current_slot_duration(state: &MajorFrameState) -> u64 {
 ///
 /// Enforces INV-SCHED-001: domains cannot execute outside their assigned slot.
 /// Verified by: test_domain_does_not_run_outside_its_assigned_slot
-pub fn is_thread_eligible_for_current_slot(thread_domain_slot: u8, state: &MajorFrameState) -> bool {
+pub fn is_thread_eligible_for_current_slot(
+    thread_domain_slot: u8,
+    state: &MajorFrameState,
+) -> bool {
     thread_domain_slot == current_active_domain_identifier(state)
 }
 
@@ -88,6 +91,7 @@ pub fn current_active_domain(state: &MajorFrameState) -> u8 {
 }
 
 /// Resets the elapsed tick count and advances the slot index, wrapping at table end.
+#[allow(clippy::arithmetic_side_effects)]
 fn advance_to_next_slot(state: &mut MajorFrameState) {
     state.ticks_elapsed_in_current_slot = 0;
     state.current_slot_index += 1;
@@ -105,6 +109,7 @@ fn advance_to_next_slot(state: &mut MajorFrameState) {
 ///
 /// Enforces INV-SCHED-001: domains cannot execute outside their assigned slot.
 /// Verified by: test_domain_does_not_run_outside_its_assigned_slot
+#[allow(clippy::arithmetic_side_effects)]
 pub fn advance_partition_slot_if_expired(state: &mut MajorFrameState) -> SchedulerAction {
     increment_global_monotonic_tick_count();
     state.ticks_elapsed_in_current_slot += 1;
@@ -161,10 +166,16 @@ mod tests {
     #[test]
     fn test_major_frame_wraps_to_slot_zero_after_last_slot() {
         let mut state = new_major_frame_state();
-        let total_ticks: u64 = PARTITION_TABLE.iter().map(|slot| slot.duration_in_ticks).sum();
+        let total_ticks: u64 = PARTITION_TABLE
+            .iter()
+            .map(|slot| slot.duration_in_ticks)
+            .sum();
         for _ in 0..total_ticks {
             advance_partition_slot_if_expired(&mut state);
         }
-        assert_eq!(state.current_slot_index, 0, "major frame must wrap to slot 0");
+        assert_eq!(
+            state.current_slot_index, 0,
+            "major frame must wrap to slot 0"
+        );
     }
 }

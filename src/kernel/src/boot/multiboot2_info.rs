@@ -125,7 +125,9 @@ fn populate_allocator_from_boot_information(
 ) {
     let memory_map_tag = boot_information.memory_map_tag();
     validate_memory_map_tag_present(memory_map_tag, boot_step_logger);
-    register_memory_regions_from_map(memory_map_tag.unwrap());
+    if let Some(tag) = memory_map_tag {
+        register_memory_regions_from_map(tag);
+    }
     register_kernel_binary_pages();
     boot_step_logger.ok("Physical allocator initialized from memory map");
 }
@@ -205,7 +207,7 @@ fn page_is_in_reserved_low_memory(physical_address: u64) -> bool {
 
 /// Returns true if the physical address is within the kernel binary range.
 fn page_is_in_kernel_binary_range(physical_address: u64) -> bool {
-    physical_address >= KERNEL_PHYSICAL_START && physical_address < KERNEL_PHYSICAL_END
+    (KERNEL_PHYSICAL_START..KERNEL_PHYSICAL_END).contains(&physical_address)
 }
 
 /// Aligns a physical address up to the next page boundary.

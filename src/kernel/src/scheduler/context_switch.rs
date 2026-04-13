@@ -85,6 +85,7 @@ fn issue_indirect_branch_prediction_barrier_before_switch() {
 /// Enforces INV-SCHED-001: per-domain CPU budget accounting.
 /// Enforces INV-X86-002: IBPB on every context switch path.
 /// Verified by: context_switch inline tests
+#[allow(clippy::arithmetic_side_effects)]
 pub fn process_scheduler_tick(state: &mut SchedulerState) -> SchedulerAction {
     state.current_tick += 1;
     issue_indirect_branch_prediction_barrier_before_switch();
@@ -122,7 +123,9 @@ fn is_thread_eligible_to_run(
 fn insert_eligible_thread_into_run_queue(thread_index: usize, state: &mut SchedulerState) {
     let effective_priority =
         compute_effective_priority(&state.effective_priority_table[thread_index]);
-    let _ = state.run_queue.insert_thread(thread_index as u32, effective_priority);
+    let _ = state
+        .run_queue
+        .insert_thread(thread_index as u32, effective_priority);
 }
 
 /// Rebuilds the run queue for the current partition slot.

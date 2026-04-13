@@ -82,7 +82,9 @@ fn read_architecture_capabilities_msr() -> u64 {
 }
 
 /// Maps a capabilities MSR value to the appropriate mitigation mode.
-fn determine_mode_from_capabilities(architecture_capabilities_msr_value: u64) -> SpectreV2MitigationMode {
+fn determine_mode_from_capabilities(
+    architecture_capabilities_msr_value: u64,
+) -> SpectreV2MitigationMode {
     use crate::hardware_security::cpu_feature_detection::is_enhanced_ibrs_supported;
     if is_enhanced_ibrs_supported(architecture_capabilities_msr_value) {
         SpectreV2MitigationMode::EnhancedIndirectBranchRestrictedSpeculation
@@ -101,7 +103,8 @@ fn determine_mode_from_capabilities(architecture_capabilities_msr_value: u64) ->
 #[cfg(target_arch = "x86_64")]
 pub fn enable_spectre_v2_mitigation(mitigation_mode: SpectreV2MitigationMode) {
     use crate::arch::hardware_registers::write_model_specific_register;
-    if mitigation_mode == SpectreV2MitigationMode::RetpolineWithIndirectBranchRestrictedSpeculation {
+    if mitigation_mode == SpectreV2MitigationMode::RetpolineWithIndirectBranchRestrictedSpeculation
+    {
         write_model_specific_register(
             SPECULATIVE_EXECUTION_CONTROL_MSR_ADDRESS,
             INDIRECT_BRANCH_RESTRICTED_SPECULATION_ENABLE_BIT,
@@ -176,7 +179,9 @@ pub fn issue_speculative_load_barrier() {
     // - Invariant: INV-X86-002 (Spectre v1 mitigation, D-02)
     // - Evidence: LFENCE presence verified via grep in acceptance criteria
     // Allowlist: src/kernel/src/arch/hardware_registers.rs (arch/ unsafe boundary)
-    unsafe { core::arch::x86_64::_mm_lfence(); }
+    unsafe {
+        core::arch::x86_64::_mm_lfence();
+    }
 }
 
 #[cfg(test)]
@@ -190,7 +195,10 @@ mod tests {
     fn test_select_spectre_v2_mitigation_mode_returns_enhanced_ibrs_when_supported() {
         let enhanced_ibrs_msr_value = 1u64 << 1;
         let mode = determine_mode_from_capabilities(enhanced_ibrs_msr_value);
-        assert_eq!(mode, SpectreV2MitigationMode::EnhancedIndirectBranchRestrictedSpeculation);
+        assert_eq!(
+            mode,
+            SpectreV2MitigationMode::EnhancedIndirectBranchRestrictedSpeculation
+        );
     }
 
     /// eIBRS MSR bit 1 clear => select RetpolineWithIbrs mode.
@@ -200,7 +208,10 @@ mod tests {
     fn test_select_spectre_v2_mitigation_mode_returns_retpoline_when_eibrs_absent() {
         let no_eibrs_msr_value = 0u64;
         let mode = determine_mode_from_capabilities(no_eibrs_msr_value);
-        assert_eq!(mode, SpectreV2MitigationMode::RetpolineWithIndirectBranchRestrictedSpeculation);
+        assert_eq!(
+            mode,
+            SpectreV2MitigationMode::RetpolineWithIndirectBranchRestrictedSpeculation
+        );
     }
 
     /// SpectreV2MitigationMode serializes to u8 (repr(u8)) for config blob inclusion.
@@ -208,8 +219,10 @@ mod tests {
     /// Enforces D-03: mitigation mode must be serializable for PCR[1] config blob.
     #[test]
     fn test_mitigation_mode_serializes_to_u8_for_config_blob() {
-        let enhanced_ibrs_value = SpectreV2MitigationMode::EnhancedIndirectBranchRestrictedSpeculation as u8;
-        let retpoline_value = SpectreV2MitigationMode::RetpolineWithIndirectBranchRestrictedSpeculation as u8;
+        let enhanced_ibrs_value =
+            SpectreV2MitigationMode::EnhancedIndirectBranchRestrictedSpeculation as u8;
+        let retpoline_value =
+            SpectreV2MitigationMode::RetpolineWithIndirectBranchRestrictedSpeculation as u8;
         assert_eq!(enhanced_ibrs_value, 1u8);
         assert_eq!(retpoline_value, 0u8);
     }

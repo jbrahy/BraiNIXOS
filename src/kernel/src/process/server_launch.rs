@@ -11,9 +11,7 @@ use crate::capability::capability_rights::CapabilityRights;
 use crate::capability::capability_slot::{CapabilitySlot, CapabilitySlotState};
 use crate::capability::capability_space::CapabilitySpace;
 use crate::capability::capability_type::CapabilityType;
-use crate::process::address_space::{
-    build_process_address_space_layout, AddressSpaceError,
-};
+use crate::process::address_space::{build_process_address_space_layout, AddressSpaceError};
 use crate::process::ProcessType;
 use crate::thread::{Thread, ThreadState};
 
@@ -55,9 +53,15 @@ pub fn create_server_process(
 ) -> Result<ServerProcessHandle, ServerLaunchError> {
     let layout = build_layout_or_error(entry_point_address)?;
     let _capability_space = CapabilitySpace::new();
-    let _thread = build_initial_thread(layout.entry_point_virtual_address, layout.stack_top_virtual_address);
+    let _thread = build_initial_thread(
+        layout.entry_point_virtual_address,
+        layout.stack_top_virtual_address,
+    );
     let thread_index = allocate_thread_pool_slot();
-    Ok(ServerProcessHandle { process_type, thread_index })
+    Ok(ServerProcessHandle {
+        process_type,
+        thread_index,
+    })
 }
 
 /// Builds the process address space layout or maps the error to ServerLaunchError.
@@ -70,12 +74,19 @@ fn build_layout_or_error(
 
 /// Maps an AddressSpaceError to a ServerLaunchError.
 fn map_address_space_result(
-    address_space_result: Result<crate::process::address_space::ProcessAddressSpaceLayout, AddressSpaceError>,
+    address_space_result: Result<
+        crate::process::address_space::ProcessAddressSpaceLayout,
+        AddressSpaceError,
+    >,
 ) -> Result<crate::process::address_space::ProcessAddressSpaceLayout, ServerLaunchError> {
     match address_space_result {
         Ok(layout) => Ok(layout),
-        Err(AddressSpaceError::EntryPointNotCanonical) => Err(ServerLaunchError::EntryPointNotCanonical),
-        Err(AddressSpaceError::PageAllocationFailed) => Err(ServerLaunchError::PageAllocationFailed),
+        Err(AddressSpaceError::EntryPointNotCanonical) => {
+            Err(ServerLaunchError::EntryPointNotCanonical)
+        }
+        Err(AddressSpaceError::PageAllocationFailed) => {
+            Err(ServerLaunchError::PageAllocationFailed)
+        }
         Err(AddressSpaceError::MappingFailed) => Err(ServerLaunchError::PageAllocationFailed),
     }
 }
@@ -85,7 +96,10 @@ fn map_address_space_result(
 /// Sets register_rcx = entry point (SYSRET loads RIP from RCX per D-02).
 /// Sets register_rsp = stack top (stack grows downward from top).
 /// Sets thread_state = Ready (eligible to run immediately after scheduling).
-fn build_initial_thread(entry_point_virtual_address: u64, stack_top_virtual_address: u64) -> Thread {
+fn build_initial_thread(
+    entry_point_virtual_address: u64,
+    stack_top_virtual_address: u64,
+) -> Thread {
     let mut thread = Thread::new();
     thread.register_save_area.register_rcx = entry_point_virtual_address;
     thread.register_save_area.register_rsp = stack_top_virtual_address;

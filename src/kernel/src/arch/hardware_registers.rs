@@ -40,7 +40,12 @@ pub fn execute_cpuid_query(leaf: u32, subleaf: u32) -> CpuidResult {
     // - Evidence: test_cpuid_leaf_one_returns_nonzero_result
     // Allowlist: src/kernel/src/arch/hardware_registers.rs -- cpuid instruction
     let raw_result = unsafe { core::arch::x86_64::__cpuid_count(leaf, subleaf) };
-    build_cpuid_result(raw_result.eax, raw_result.ebx, raw_result.ecx, raw_result.edx)
+    build_cpuid_result(
+        raw_result.eax,
+        raw_result.ebx,
+        raw_result.ecx,
+        raw_result.edx,
+    )
 }
 
 /// Build a CpuidResult from the four register values.
@@ -111,7 +116,11 @@ pub fn execute_rdseed_instruction() -> Option<u64> {
 
 /// Returns `Some(value)` if carry is nonzero, `None` otherwise.
 fn extract_optional_value_from_carry(value: u64, carry_flag: u8) -> Option<u64> {
-    if carry_flag != 0 { Some(value) } else { None }
+    if carry_flag != 0 {
+        Some(value)
+    } else {
+        None
+    }
 }
 
 /// Reads a Model Specific Register (MSR) by address.
@@ -246,7 +255,7 @@ pub fn write_control_register_four(value: u64) {
 /// - Evidence: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
 #[cfg(target_arch = "x86_64")]
 pub fn read_tpm_register(offset: u32) -> u32 {
-    let register_address = (0xFED4_0000u64 + offset as u64) as *const u32;
+    let register_address = 0xFED4_0000u64.wrapping_add(offset as u64) as *const u32;
     // SAFETY: MMIO read from TPM TIS register at base 0xFED40000 + offset.
     // - Precondition: TPM TIS present at this address (verified during boot init)
     // - Invariant: INV-BOOT-001 (measured boot path integrity)
@@ -267,7 +276,7 @@ pub fn read_tpm_register(offset: u32) -> u32 {
 /// - Evidence: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
 #[cfg(target_arch = "x86_64")]
 pub fn write_tpm_register(offset: u32, value: u32) {
-    let register_address = (0xFED4_0000u64 + offset as u64) as *mut u32;
+    let register_address = 0xFED4_0000u64.wrapping_add(offset as u64) as *mut u32;
     // SAFETY: MMIO write to TPM TIS register at base 0xFED40000 + offset.
     // - Precondition: TPM TIS present at this address (verified during boot init)
     // - Invariant: INV-BOOT-001 (measured boot path integrity)
@@ -288,7 +297,7 @@ pub fn write_tpm_register(offset: u32, value: u32) {
 /// - Evidence: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
 #[cfg(target_arch = "x86_64")]
 pub fn read_tpm_data_fifo_byte(offset: u32) -> u8 {
-    let fifo_address = (0xFED4_0000u64 + offset as u64) as *const u8;
+    let fifo_address = 0xFED4_0000u64.wrapping_add(offset as u64) as *const u8;
     // SAFETY: MMIO byte read from TPM TIS data FIFO at base 0xFED40000 + offset.
     // - Precondition: TPM TIS present at this address (verified during boot init)
     // - Invariant: INV-BOOT-001 (measured boot path integrity)
@@ -309,7 +318,7 @@ pub fn read_tpm_data_fifo_byte(offset: u32) -> u8 {
 /// - Evidence: integration_swtpm_attestation_chain_completes_with_expected_pcr_values
 #[cfg(target_arch = "x86_64")]
 pub fn write_tpm_data_fifo_byte(offset: u32, value: u8) {
-    let fifo_address = (0xFED4_0000u64 + offset as u64) as *mut u8;
+    let fifo_address = 0xFED4_0000u64.wrapping_add(offset as u64) as *mut u8;
     // SAFETY: MMIO byte write to TPM TIS data FIFO at base 0xFED40000 + offset.
     // - Precondition: TPM TIS present at this address (verified during boot init)
     // - Invariant: INV-BOOT-001 (measured boot path integrity)

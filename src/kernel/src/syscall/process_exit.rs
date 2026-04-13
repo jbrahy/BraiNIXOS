@@ -46,7 +46,12 @@ pub fn execute_process_exit_sequence() -> ProcessExitRecord {
     let pages_deallocated = deallocate_process_pages_returning_result();
     let thread_deallocated = deallocate_process_thread_returning_result();
     let removed_from_scheduler = remove_process_from_scheduler_returning_result();
-    build_exit_record(capability_space_revoked, pages_deallocated, thread_deallocated, removed_from_scheduler)
+    build_exit_record(
+        capability_space_revoked,
+        pages_deallocated,
+        thread_deallocated,
+        removed_from_scheduler,
+    )
 }
 
 /// Builds a ProcessExitRecord from the four step results.
@@ -130,5 +135,7 @@ fn remove_process_from_scheduler_returning_result() -> bool {
 /// In Phase 7 the kernel halts (single-core, no scheduler wired yet).
 fn yield_to_next_runnable_thread() -> ! {
     // Phase 7 stub: scheduler pick-next wired in Phase 8.
-    loop {}
+    loop {
+        core::hint::spin_loop();
+    }
 }

@@ -48,11 +48,8 @@ pub struct ServerModuleDescriptor {
 ///
 /// Enforces INV-SPAWN-001: only explicitly whitelisted process types can be spawned.
 /// DeviceServer and NetworkServer are reserved for Phase 8 and Phase 9 respectively.
-const SPAWN_WHITELIST: [ProcessType; 3] = [
-    ProcessType::Init,
-    ProcessType::Spawnd,
-    ProcessType::Auditd,
-];
+const SPAWN_WHITELIST: [ProcessType; 3] =
+    [ProcessType::Init, ProcessType::Spawnd, ProcessType::Auditd];
 
 /// Identifies the process type for a server module from its multiboot2 command line string.
 ///
@@ -92,6 +89,7 @@ fn map_elf_result_to_module_result(
 ///
 /// Enforces INV-SPAWN-001: only whitelisted process types may be spawned.
 /// Verified by: tests::test_spawnd_refuses_process_type_not_in_whitelist
+#[allow(clippy::arithmetic_side_effects)]
 pub fn is_process_type_in_spawn_whitelist(process_type: ProcessType) -> bool {
     let mut whitelist_index = 0;
     while whitelist_index < SPAWN_WHITELIST.len() {
@@ -230,13 +228,19 @@ mod tests {
     #[test]
     fn test_device_server_process_type_is_not_in_spawn_whitelist() {
         let result = is_process_type_in_spawn_whitelist(ProcessType::DeviceServer);
-        assert!(!result, "DeviceServer must not be in spawn whitelist (Phase 8)");
+        assert!(
+            !result,
+            "DeviceServer must not be in spawn whitelist (Phase 8)"
+        );
     }
 
     /// Verifies NetworkServer is not in the spawn whitelist (Phase 9 reserved).
     #[test]
     fn test_network_server_process_type_is_not_in_spawn_whitelist() {
         let result = is_process_type_in_spawn_whitelist(ProcessType::NetworkServer);
-        assert!(!result, "NetworkServer must not be in spawn whitelist (Phase 9)");
+        assert!(
+            !result,
+            "NetworkServer must not be in spawn whitelist (Phase 9)"
+        );
     }
 }

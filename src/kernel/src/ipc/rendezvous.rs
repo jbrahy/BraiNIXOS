@@ -59,7 +59,12 @@ fn transfer_capability_between_cspaces(
 ) -> Result<(), IpcError> {
     validate_source_slot_has_grant_right(source_slot_index, sender_cspace)?;
     validate_destination_slot_is_null(destination_slot_index, receiver_cspace)?;
-    copy_capability_slot(source_slot_index, destination_slot_index, sender_cspace, receiver_cspace)
+    copy_capability_slot(
+        source_slot_index,
+        destination_slot_index,
+        sender_cspace,
+        receiver_cspace,
+    )
 }
 
 /// Returns `Err(GrantRightNotHeld)` if the sender's slot lacks the Grant right.
@@ -74,7 +79,11 @@ fn validate_source_slot_has_grant_right(
         return Err(IpcError::GrantRightNotHeld);
     }
     let slot_has_grant = source_slot.rights().contains(capability_rights::GRANT);
-    if slot_has_grant { Ok(()) } else { Err(IpcError::GrantRightNotHeld) }
+    if slot_has_grant {
+        Ok(())
+    } else {
+        Err(IpcError::GrantRightNotHeld)
+    }
 }
 
 /// Returns `Err(SlotOccupied)` if the receiver's destination slot is not null.
@@ -85,7 +94,11 @@ fn validate_destination_slot_is_null(
     receiver_cspace: &mut CapabilitySpace,
 ) -> Result<(), IpcError> {
     let destination_slot = receiver_cspace.lookup_slot_ref(destination_slot_index);
-    if destination_slot.is_null() { Ok(()) } else { Err(IpcError::SlotOccupied) }
+    if destination_slot.is_null() {
+        Ok(())
+    } else {
+        Err(IpcError::SlotOccupied)
+    }
 }
 
 /// Copies the capability slot value from sender to receiver cspace.
@@ -147,7 +160,8 @@ mod tests {
             &mut sender_cspace,
             &mut receiver_cspace,
             99,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(delivered.register_zero, 10);
         assert_eq!(delivered.register_one, 20);
         assert_eq!(delivered.register_two, 30);
@@ -160,14 +174,7 @@ mod tests {
         let message = IpcMessage::default();
         let mut sender_cspace = build_sender_cspace_with_grant_right();
         let mut receiver_cspace = CapabilitySpace::new();
-        perform_rendezvous(
-            &message,
-            1,
-            2,
-            &mut sender_cspace,
-            &mut receiver_cspace,
-            0,
-        ).unwrap();
+        perform_rendezvous(&message, 1, 2, &mut sender_cspace, &mut receiver_cspace, 0).unwrap();
         let received_slot = receiver_cspace.lookup_slot_ref(2);
         assert!(!received_slot.is_null());
         assert!(received_slot.rights().contains(capability_rights::READ));
@@ -189,7 +196,8 @@ mod tests {
             expiry_tick: None,
         };
         let mut receiver_cspace = CapabilitySpace::new();
-        let result = perform_rendezvous(&message, 1, 2, &mut sender_cspace, &mut receiver_cspace, 0);
+        let result =
+            perform_rendezvous(&message, 1, 2, &mut sender_cspace, &mut receiver_cspace, 0);
         assert_eq!(result, Err(IpcError::GrantRightNotHeld));
     }
 
@@ -209,7 +217,8 @@ mod tests {
             use_count_remaining: None,
             expiry_tick: None,
         };
-        let result = perform_rendezvous(&message, 1, 2, &mut sender_cspace, &mut receiver_cspace, 0);
+        let result =
+            perform_rendezvous(&message, 1, 2, &mut sender_cspace, &mut receiver_cspace, 0);
         assert_eq!(result, Err(IpcError::SlotOccupied));
     }
 }

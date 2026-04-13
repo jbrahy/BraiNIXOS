@@ -71,10 +71,18 @@ pub fn extend_platform_configuration_register(
 }
 
 /// Build the TPM2_PCR_Extend command into a fixed-size buffer.
-fn build_pcr_extend_command(pcr_index: u32, hash_value: &[u8; 32]) -> [u8; TPM2_COMMAND_BUFFER_SIZE] {
+fn build_pcr_extend_command(
+    pcr_index: u32,
+    hash_value: &[u8; 32],
+) -> [u8; TPM2_COMMAND_BUFFER_SIZE] {
     let mut buffer = [0u8; TPM2_COMMAND_BUFFER_SIZE];
     let total_length = compute_pcr_extend_command_length() as u32;
-    write_command_header(&mut buffer, TPM2_COMMAND_TAG_NO_SESSIONS, total_length, TPM2_COMMAND_CODE_PCR_EXTEND);
+    write_command_header(
+        &mut buffer,
+        TPM2_COMMAND_TAG_NO_SESSIONS,
+        total_length,
+        TPM2_COMMAND_CODE_PCR_EXTEND,
+    );
     write_pcr_extend_parameters(&mut buffer, pcr_index, hash_value);
     buffer
 }
@@ -115,7 +123,12 @@ pub fn get_random_bytes_from_tpm(byte_count: u16) -> Result<[u8; 32], TpmError> 
 pub fn build_get_random_command(byte_count: u16) -> [u8; TPM2_COMMAND_BUFFER_SIZE] {
     let mut buffer = [0u8; TPM2_COMMAND_BUFFER_SIZE];
     let total_length = compute_get_random_command_length() as u32;
-    write_command_header(&mut buffer, TPM2_COMMAND_TAG_NO_SESSIONS, total_length, TPM2_COMMAND_CODE_GET_RANDOM);
+    write_command_header(
+        &mut buffer,
+        TPM2_COMMAND_TAG_NO_SESSIONS,
+        total_length,
+        TPM2_COMMAND_CODE_GET_RANDOM,
+    );
     write_u16_big_endian(&mut buffer, 10, byte_count);
     buffer
 }
@@ -161,7 +174,12 @@ pub fn read_monotonic_counter_from_nv(nv_index: u32) -> Result<u64, TpmError> {
 pub fn build_nv_read_command(nv_index: u32, read_size: u16) -> [u8; TPM2_COMMAND_BUFFER_SIZE] {
     let mut buffer = [0u8; TPM2_COMMAND_BUFFER_SIZE];
     let total_length = compute_nv_read_command_length() as u32;
-    write_command_header(&mut buffer, TPM2_COMMAND_TAG_NO_SESSIONS, total_length, TPM2_COMMAND_CODE_NV_READ);
+    write_command_header(
+        &mut buffer,
+        TPM2_COMMAND_TAG_NO_SESSIONS,
+        total_length,
+        TPM2_COMMAND_CODE_NV_READ,
+    );
     write_nv_read_parameters(&mut buffer, nv_index, read_size);
     buffer
 }
@@ -210,7 +228,12 @@ pub fn increment_monotonic_counter_in_nv(nv_index: u32) -> Result<(), TpmError> 
 fn build_nv_increment_command(nv_index: u32) -> [u8; TPM2_COMMAND_BUFFER_SIZE] {
     let mut buffer = [0u8; TPM2_COMMAND_BUFFER_SIZE];
     let total_length = compute_nv_increment_command_length() as u32;
-    write_command_header(&mut buffer, TPM2_COMMAND_TAG_NO_SESSIONS, total_length, TPM2_COMMAND_CODE_NV_INCREMENT);
+    write_command_header(
+        &mut buffer,
+        TPM2_COMMAND_TAG_NO_SESSIONS,
+        total_length,
+        TPM2_COMMAND_CODE_NV_INCREMENT,
+    );
     write_u32_big_endian(&mut buffer, 10, nv_index);
     write_u32_big_endian(&mut buffer, 14, nv_index);
     buffer
@@ -246,7 +269,12 @@ fn build_quote_command(
 ) -> [u8; TPM2_COMMAND_BUFFER_SIZE] {
     let mut buffer = [0u8; TPM2_COMMAND_BUFFER_SIZE];
     let total_length = compute_quote_command_length() as u32;
-    write_command_header(&mut buffer, TPM2_COMMAND_TAG_NO_SESSIONS, total_length, TPM2_COMMAND_CODE_QUOTE);
+    write_command_header(
+        &mut buffer,
+        TPM2_COMMAND_TAG_NO_SESSIONS,
+        total_length,
+        TPM2_COMMAND_CODE_QUOTE,
+    );
     write_quote_parameters(&mut buffer, pcr_selection_bitmap, nonce);
     buffer
 }
@@ -278,7 +306,11 @@ fn extract_quote_from_response(
     validate_response_success(response_buffer)?;
     let pcr_digest = extract_pcr_digest_from_quote_response(response_buffer);
     let signature = extract_signature_from_quote_response(response_buffer);
-    Ok(TpmQuoteResponse { pcr_digest, signature, nonce_echo: *nonce })
+    Ok(TpmQuoteResponse {
+        pcr_digest,
+        signature,
+        nonce_echo: *nonce,
+    })
 }
 
 /// Extract the 32-byte PCR digest from the quote response (bytes 12..44).
@@ -379,9 +411,9 @@ fn submit_command_via_mmio(
     response_buffer: &mut [u8; TPM2_COMMAND_BUFFER_SIZE],
 ) -> Result<(), TpmError> {
     use super::registers::{
-        request_tpm_locality, wait_for_command_ready, wait_for_data_available,
-        write_byte_to_tpm_data_fifo, read_byte_from_tpm_data_fifo,
-        send_command_ready_to_tpm_status, send_execute_command_to_tpm_status,
+        read_byte_from_tpm_data_fifo, request_tpm_locality, send_command_ready_to_tpm_status,
+        send_execute_command_to_tpm_status, wait_for_command_ready, wait_for_data_available,
+        write_byte_to_tpm_data_fifo,
     };
     request_tpm_locality()?;
     send_command_ready_to_tpm_status();
@@ -400,8 +432,8 @@ fn write_command_bytes_to_fifo(
     command_length: usize,
     write_fn: fn(u8),
 ) {
-    for byte_index in 0..command_length {
-        write_fn(command_buffer[byte_index]);
+    for &byte_value in command_buffer.iter().take(command_length) {
+        write_fn(byte_value);
     }
 }
 
@@ -411,8 +443,8 @@ fn read_response_bytes_from_fifo(
     response_buffer: &mut [u8; TPM2_COMMAND_BUFFER_SIZE],
     read_fn: fn() -> u8,
 ) {
-    for byte_index in 0..TPM2_COMMAND_BUFFER_SIZE {
-        response_buffer[byte_index] = read_fn();
+    for response_slot in response_buffer.iter_mut() {
+        *response_slot = read_fn();
     }
 }
 

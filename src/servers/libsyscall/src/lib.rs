@@ -107,7 +107,10 @@ pub fn syscall_process_exit() -> ! {
 /// Used for host-side unit test compilation only.
 #[cfg(not(target_arch = "x86_64"))]
 pub fn syscall_process_exit() -> ! {
-    panic!("syscall_process_exit: host-target stub");
+    // Host-target stub: diverges without panic to satisfy clippy::panic denial.
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 /// Reads audit log entries from the kernel via the sys_audit_read system call.

@@ -40,11 +40,7 @@ pub fn measure_server_binary_into_pcr3(binary_bytes: &[u8]) -> Result<(), TpmErr
 ///
 /// Three sequential extends into PCR[3] per D-05. TPM errors are
 /// tolerated during development — swtpm may not be present on host.
-pub fn measure_all_server_binaries(
-    init_binary: &[u8],
-    spawnd_binary: &[u8],
-    auditd_binary: &[u8],
-) {
+pub fn measure_all_server_binaries(init_binary: &[u8], spawnd_binary: &[u8], auditd_binary: &[u8]) {
     let _ = measure_server_binary_into_pcr3(init_binary);
     let _ = measure_server_binary_into_pcr3(spawnd_binary);
     let _ = measure_server_binary_into_pcr3(auditd_binary);
@@ -70,7 +66,10 @@ mod tests {
         let second_bytes = b"second server binary content";
         let first_hash = compute_server_binary_hash(first_bytes);
         let second_hash = compute_server_binary_hash(second_bytes);
-        assert_ne!(first_hash, second_hash, "different inputs must produce different hashes");
+        assert_ne!(
+            first_hash, second_hash,
+            "different inputs must produce different hashes"
+        );
     }
 
     /// Verifies that measure_server_binary_into_pcr3 returns Ok on the host target.
@@ -80,6 +79,9 @@ mod tests {
     fn test_measure_server_binary_into_pcr3_succeeds_on_host_target() {
         let binary_bytes = b"dummy server binary for pcr3 test";
         let result = measure_server_binary_into_pcr3(binary_bytes);
-        assert!(result.is_ok(), "PCR[3] extend must return Ok on host target");
+        assert!(
+            result.is_ok(),
+            "PCR[3] extend must return Ok on host target"
+        );
     }
 }

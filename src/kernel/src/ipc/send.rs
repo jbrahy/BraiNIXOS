@@ -23,6 +23,7 @@ use crate::thread::{Thread, ThreadState};
 /// Enforces INV-IPC-001: sender blocks until rendezvous or timeout.
 /// Enforces INV-IPC-003: blocking requires an explicit finite timeout.
 /// Verified by: test_send_blocks_until_receiver_calls_receive (SC-01)
+#[allow(clippy::too_many_arguments)]
 pub fn ipc_send(
     sender_thread_index: u32,
     sender_message: &IpcMessage,
@@ -35,7 +36,9 @@ pub fn ipc_send(
     sender_thread: &mut Thread,
     sender_cspace: &mut CapabilitySpace,
 ) -> Result<(), IpcError> {
-    let endpoint = endpoint_pool.endpoint_at_mut(endpoint_index).ok_or(IpcError::EndpointRevoked)?;
+    let endpoint = endpoint_pool
+        .endpoint_at_mut(endpoint_index)
+        .ok_or(IpcError::EndpointRevoked)?;
     if endpoint.has_no_waiting_receiver() {
         return handle_no_receiver_present(
             sender_thread_index,
@@ -45,7 +48,9 @@ pub fn ipc_send(
             sender_thread,
         );
     }
-    let receiver_thread_index = endpoint.dequeue_receiver().ok_or(IpcError::EndpointRevoked)?;
+    let receiver_thread_index = endpoint
+        .dequeue_receiver()
+        .ok_or(IpcError::EndpointRevoked)?;
     let _ = endpoint;
     execute_send_rendezvous(
         sender_message,
@@ -150,7 +155,12 @@ pub fn check_and_apply_send_timeout(
     if !is_sender_timed_out(sender_thread, current_tick) {
         return None;
     }
-    unblock_timed_out_sender(sender_thread, endpoint_index, endpoint_pool, sender_thread_index);
+    unblock_timed_out_sender(
+        sender_thread,
+        endpoint_index,
+        endpoint_pool,
+        sender_thread_index,
+    );
     Some(IpcError::Timeout)
 }
 

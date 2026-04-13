@@ -17,26 +17,26 @@
 
 use crate::boot::logger::BootStepLogger;
 use crate::hardware_security::attestation_gate::{
-    create_attestation_gate, advance_attestation_gate, AttestationEvent,
+    advance_attestation_gate, create_attestation_gate, AttestationEvent,
 };
+use crate::hardware_security::binary_signing::IS_DEVELOPMENT_BUILD;
 use crate::hardware_security::csprng::{initialize_csprng_phase_a, initialize_csprng_phase_b};
 use crate::hardware_security::indirect_branch_tracking::{
     enable_indirect_branch_tracking, is_indirect_branch_tracking_active,
 };
 use crate::hardware_security::kernel_config_blob::create_kernel_security_config_blob;
+use crate::hardware_security::kernel_config_blob::KERNEL_BINARY_MONOTONIC_COUNTER_VALUE;
 use crate::hardware_security::kernel_write_protection::write_protect_kernel_sections;
 use crate::hardware_security::memory_encryption::{
     detect_and_enable_memory_encryption, MemoryEncryptionEnforcementResult,
 };
 use crate::hardware_security::pcr_measurement::{
-    compute_kernel_binary_measurement, compute_config_blob_measurement,
+    compute_config_blob_measurement, compute_kernel_binary_measurement,
 };
-use crate::hardware_security::binary_signing::IS_DEVELOPMENT_BUILD;
 use crate::hardware_security::spectre_mitigation::{
-    select_spectre_v2_mitigation_mode, enable_spectre_v2_mitigation,
+    enable_spectre_v2_mitigation, select_spectre_v2_mitigation_mode,
 };
 use crate::hardware_security::tpm::commands::generate_tpm_quote;
-use crate::hardware_security::kernel_config_blob::KERNEL_BINARY_MONOTONIC_COUNTER_VALUE;
 use crate::hardware_security::tpm::monotonic_counter::verify_and_update_monotonic_counter;
 use crate::scheduler::time_partitioning::{
     read_current_apic_timer_tick_count, SCHEDULER_TICKS_PER_SECOND,
@@ -86,14 +86,24 @@ fn query_cpuid_extended_memory_encryption_leaf(
 /// Query CPUID leaf 7 subleaf 0 (stub for non-x86_64 host compilation).
 #[cfg(not(target_arch = "x86_64"))]
 fn query_cpuid_leaf_seven() -> crate::hardware_security::cpu_feature_detection::CpuidResult {
-    crate::hardware_security::cpu_feature_detection::CpuidResult { eax: 0, ebx: 0, ecx: 0, edx: 0 }
+    crate::hardware_security::cpu_feature_detection::CpuidResult {
+        eax: 0,
+        ebx: 0,
+        ecx: 0,
+        edx: 0,
+    }
 }
 
 /// Query CPUID extended memory encryption leaf (stub for non-x86_64 host compilation).
 #[cfg(not(target_arch = "x86_64"))]
 fn query_cpuid_extended_memory_encryption_leaf(
 ) -> crate::hardware_security::cpu_feature_detection::CpuidResult {
-    crate::hardware_security::cpu_feature_detection::CpuidResult { eax: 0, ebx: 0, ecx: 0, edx: 0 }
+    crate::hardware_security::cpu_feature_detection::CpuidResult {
+        eax: 0,
+        ebx: 0,
+        ecx: 0,
+        edx: 0,
+    }
 }
 
 /// Convert a MemoryEncryptionEnforcementResult to the u8 config blob encoding.
@@ -142,7 +152,7 @@ fn apply_spectre_mitigations_step(boot_step_logger: &mut BootStepLogger) {
 #[cfg(target_arch = "x86_64")]
 fn compute_kernel_binary_measurement_from_sections() -> [u8; 32] {
     use crate::hardware_security::pcr_measurement::{
-        get_kernel_text_section_bounds, get_kernel_rodata_section_bounds,
+        get_kernel_rodata_section_bounds, get_kernel_text_section_bounds,
     };
     let (text_pointer, text_length) = get_kernel_text_section_bounds();
     let (rodata_pointer, rodata_length) = get_kernel_rodata_section_bounds();
@@ -190,15 +200,24 @@ fn collect_config_blob_runtime_parameters() -> (u8, u8, u8, u8) {
     let memory_encryption_mode = detect_memory_encryption_config_blob_byte();
     let ibt_enabled = u8::from(is_indirect_branch_tracking_active());
     let is_dev_build = u8::from(IS_DEVELOPMENT_BUILD);
-    (spectre_mode, memory_encryption_mode, ibt_enabled, is_dev_build)
+    (
+        spectre_mode,
+        memory_encryption_mode,
+        ibt_enabled,
+        is_dev_build,
+    )
 }
 
 /// Build the config blob and compute its PCR measurement.
 fn build_and_measure_config_blob() -> [u8; 32] {
     let (spectre_mode, memory_encryption_mode, ibt_enabled, is_dev_build) =
         collect_config_blob_runtime_parameters();
-    let config_blob =
-        create_kernel_security_config_blob(spectre_mode, memory_encryption_mode, ibt_enabled, is_dev_build);
+    let config_blob = create_kernel_security_config_blob(
+        spectre_mode,
+        memory_encryption_mode,
+        ibt_enabled,
+        is_dev_build,
+    );
     compute_config_blob_measurement(&config_blob)
 }
 
@@ -256,11 +275,8 @@ fn perform_tpm_attestation_gate_check(boot_step_logger: &mut BootStepLogger) {
 
     match quote_result {
         Ok(_) => {
-            advance_attestation_gate(
-                &mut attestation_gate,
-                AttestationEvent::VerificationPassed,
-            )
-            .unwrap_or_else(|_| halt_on_attestation_failure(boot_step_logger));
+            advance_attestation_gate(&mut attestation_gate, AttestationEvent::VerificationPassed)
+                .unwrap_or_else(|_| halt_on_attestation_failure(boot_step_logger));
             boot_step_logger.ok("Attestation gate open (TPM quote verified, D-22)");
         }
         Err(_) => {

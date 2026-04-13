@@ -5,14 +5,14 @@
 //!
 //! No cfg(target_arch) gate -- pure Rust logic, host-testable.
 
-pub mod partition_table;
-pub mod run_queue;
-pub mod priority_inheritance;
 pub mod budget_accounting;
-pub mod time_partitioning;
 pub mod context_switch;
 pub mod measurement;
+pub mod partition_table;
+pub mod priority_inheritance;
+pub mod run_queue;
 pub mod smt_isolation;
+pub mod time_partitioning;
 
 #[cfg(test)]
 mod tests;
@@ -81,6 +81,12 @@ pub struct SchedulerState {
     pub major_frame_state: MajorFrameState,
     /// Current global tick counter.
     pub current_tick: u64,
+}
+
+impl Default for SchedulerState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SchedulerState {

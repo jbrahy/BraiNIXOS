@@ -85,9 +85,7 @@ fn allocate_bootstrap_page_table() -> &'static mut PageTable {
 }
 
 /// Allocates a bootstrap page table and sets a parent entry to point at it.
-fn allocate_and_link_bootstrap_table(
-    parent_entry: &mut PageTableEntry,
-) -> &'static mut PageTable {
+fn allocate_and_link_bootstrap_table(parent_entry: &mut PageTableEntry) -> &'static mut PageTable {
     let new_table = allocate_bootstrap_page_table();
     let physical_address = compute_page_table_physical_address(new_table);
     let flags = compute_intermediate_page_table_flags();
@@ -250,10 +248,10 @@ fn map_page_range(
 ///
 /// Maps from INITIAL_KERNEL_STACK_BOTTOM to INITIAL_KERNEL_STACK_TOP.
 /// INITIAL_KERNEL_STACK_GUARD_PAGE_ADDRESS is NOT mapped (enforces INV-MEM-007).
+#[allow(clippy::arithmetic_side_effects)]
 fn map_kernel_stack_region(page_map_level_4: &mut PageTable) -> Result<(), MappingError> {
     let data_flags = compute_kernel_data_page_flags();
     let stack_virtual_start = INITIAL_KERNEL_STACK_BOTTOM;
-    #[allow(clippy::arithmetic_side_effects)]
     let stack_size_in_bytes = INITIAL_KERNEL_STACK_TOP - INITIAL_KERNEL_STACK_BOTTOM;
     let page_count = stack_size_in_bytes / PAGE_SIZE_IN_BYTES as u64;
     let physical_start = compute_kernel_stack_physical_address(stack_virtual_start);
@@ -295,6 +293,7 @@ fn map_pool_region(page_map_level_4: &mut PageTable) -> Result<(), MappingError>
 ///
 /// Enforces INV-MEM-003 (W^X) on every mapping.
 /// Enforces INV-MEM-007 (guard page never mapped) via map_kernel_stack_region.
+#[allow(clippy::expect_used)]
 fn map_all_kernel_regions(page_map_level_4: &mut PageTable, boot_step_logger: &mut BootStepLogger) {
     map_kernel_binary_region(page_map_level_4).expect("kernel binary region mapping failed");
     map_kernel_stack_region(page_map_level_4).expect("kernel stack region mapping failed");
@@ -377,7 +376,10 @@ mod tests {
         let mut entry_value: u64 = PRESENT_BIT | WRITABLE_BIT | 0x1000;
         clear_writable_flag_in_level_one_page_table_entry(&mut entry_value);
         let writable_bit_is_clear = (entry_value & WRITABLE_BIT) == 0;
-        assert!(writable_bit_is_clear, "writable bit must be cleared after protection");
+        assert!(
+            writable_bit_is_clear,
+            "writable bit must be cleared after protection"
+        );
     }
 
     /// Verifies clearing the writable bit preserves all other bits.
@@ -388,7 +390,10 @@ mod tests {
         let mut entry_value = original_value;
         clear_writable_flag_in_level_one_page_table_entry(&mut entry_value);
         let expected_value = original_value & !WRITABLE_BIT;
-        assert_eq!(entry_value, expected_value, "only writable bit must be cleared");
+        assert_eq!(
+            entry_value, expected_value,
+            "only writable bit must be cleared"
+        );
     }
 
     /// Verifies clearing writable bit on an already read-only entry is idempotent.
@@ -401,6 +406,9 @@ mod tests {
             entry_value
         };
         clear_writable_flag_in_level_one_page_table_entry(&mut entry_value);
-        assert_eq!(entry_value, value_after_first_call, "second call must not change value");
+        assert_eq!(
+            entry_value, value_after_first_call,
+            "second call must not change value"
+        );
     }
 }

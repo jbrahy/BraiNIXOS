@@ -130,7 +130,10 @@ fn test_transferred_capability_has_no_additional_rights() {
     let rights = received_slot.rights();
     assert!(rights.contains(capability_rights::READ));
     let has_write_right = rights.contains(capability_rights::WRITE);
-    assert!(!has_write_right, "receiver must not gain Write right not held by sender");
+    assert!(
+        !has_write_right,
+        "receiver must not gain Write right not held by sender"
+    );
 
     let mut sender_cspace_no_grant = CapabilitySpace::new();
     let mut receiver_cspace_two = CapabilitySpace::new();
@@ -175,13 +178,8 @@ fn test_ipc_timeout_unblocks_sender_with_timeout_error() {
     assert_eq!(sender_thread.thread_state, ThreadState::Blocked);
     assert_eq!(sender_thread.timeout_deadline_tick, 10);
 
-    let timeout_result = check_and_apply_send_timeout(
-        &mut sender_thread,
-        0,
-        &mut endpoint_pool,
-        0,
-        10,
-    );
+    let timeout_result =
+        check_and_apply_send_timeout(&mut sender_thread, 0, &mut endpoint_pool, 0, 10);
 
     assert_eq!(timeout_result, Some(IpcError::Timeout));
     assert_eq!(sender_thread.thread_state, ThreadState::Ready);
@@ -199,12 +197,18 @@ fn test_reply_capability_is_single_use() {
 
     install_cap_reply_in_server_cspace(&mut server_cspace, 0).unwrap();
     let reply_slot = server_cspace.lookup_slot_ref(255);
-    assert!(!reply_slot.is_null(), "reply slot must be occupied after install");
+    assert!(
+        !reply_slot.is_null(),
+        "reply slot must be occupied after install"
+    );
 
     let first_consume = consume_cap_reply_and_zero_slot(&mut server_cspace);
     assert_eq!(first_consume, Ok(()));
     let reply_slot_after = server_cspace.lookup_slot_ref(255);
-    assert!(reply_slot_after.is_null(), "reply slot must be null after first consume");
+    assert!(
+        reply_slot_after.is_null(),
+        "reply slot must be null after first consume"
+    );
 
     let second_consume = consume_cap_reply_and_zero_slot(&mut server_cspace);
     assert_eq!(second_consume, Err(IpcError::ReplyCapabilityAlreadyUsed));
@@ -224,8 +228,11 @@ fn property_ipc_cannot_increase_capability_rights() {
     let message = IpcMessage::default();
 
     let result = perform_rendezvous(&message, 1, 2, &mut sender_cspace, &mut receiver_cspace, 0);
-    assert_eq!(result, Err(IpcError::GrantRightNotHeld),
-        "transfer without Grant right must be rejected — rights cannot be amplified");
+    assert_eq!(
+        result,
+        Err(IpcError::GrantRightNotHeld),
+        "transfer without Grant right must be rejected — rights cannot be amplified"
+    );
 }
 
 /// SC-06 / INV-IPC-003 / INV-SCHED-003
@@ -255,17 +262,15 @@ fn integration_server_that_never_receives_does_not_hold_caller_indefinitely() {
 
     assert_eq!(caller_thread.thread_state, ThreadState::Blocked);
 
-    let timeout_result = check_and_apply_send_timeout(
-        &mut caller_thread,
-        0,
-        &mut endpoint_pool,
-        0,
-        5,
-    );
+    let timeout_result =
+        check_and_apply_send_timeout(&mut caller_thread, 0, &mut endpoint_pool, 0, 5);
 
     assert_eq!(timeout_result, Some(IpcError::Timeout));
-    assert_eq!(caller_thread.thread_state, ThreadState::Ready,
-        "caller must be unblocked after timeout — server cannot hold caller indefinitely");
+    assert_eq!(
+        caller_thread.thread_state,
+        ThreadState::Ready,
+        "caller must be unblocked after timeout — server cannot hold caller indefinitely"
+    );
 }
 
 /// D-03 / INV-IPC-004 (defense-in-depth)

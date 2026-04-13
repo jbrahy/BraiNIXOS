@@ -19,6 +19,12 @@ pub struct WaitForGraph {
     waiting_on_endpoint: [u32; MAXIMUM_THREADS],
 }
 
+impl Default for WaitForGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WaitForGraph {
     /// Returns a new wait-for graph with no recorded wait edges.
     pub const fn new() -> Self {
@@ -155,14 +161,13 @@ impl WaitForGraph {
             None => return Some(false),
             Some(found_index) => found_index,
         };
-        Self::check_for_cycle_or_visited(thread_index, start_thread, visited)
-            .or_else(|| {
-                Self::advance_endpoint_to_next(
-                    thread_index,
-                    current_endpoint,
-                    &self.waiting_on_endpoint,
-                )
-            })
+        Self::check_for_cycle_or_visited(thread_index, start_thread, visited).or_else(|| {
+            Self::advance_endpoint_to_next(
+                thread_index,
+                current_endpoint,
+                &self.waiting_on_endpoint,
+            )
+        })
     }
 }
 
@@ -292,11 +297,11 @@ mod tests {
         let mut graph = WaitForGraph::new();
         graph.record_wait_edge(0, 1); // thread 0 blocked on endpoint 1
         graph.record_wait_edge(1, 2); // thread 1 blocked on endpoint 2
-        // Thread 2 tries to call endpoint 1:
-        //   find thread at endpoint 1 -> thread 0
-        //   thread 0 != 2, mark visited[0]
-        //   advance: waiting_on_endpoint[0]=1 -> current=1 (back to endpoint 1 -- loops)
-        //   find thread at endpoint 1 -> thread 0, already visited -> dead end -> no cycle
+                                      // Thread 2 tries to call endpoint 1:
+                                      //   find thread at endpoint 1 -> thread 0
+                                      //   thread 0 != 2, mark visited[0]
+                                      //   advance: waiting_on_endpoint[0]=1 -> current=1 (back to endpoint 1 -- loops)
+                                      //   find thread at endpoint 1 -> thread 0, already visited -> dead end -> no cycle
         let no_cycle_result = graph.check_would_form_cycle(2, 1);
         assert!(!no_cycle_result);
         // Thread 0 tries to call endpoint 1 -- self-loop check:

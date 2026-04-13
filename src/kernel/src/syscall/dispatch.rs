@@ -14,12 +14,12 @@
 //! of the SYSCALL entry stub and is inseparable from it.
 #![allow(unsafe_code)]
 
-use brainix_libsyscall::{SYSCALL_NUMBER_AUDIT_READ, SYSCALL_NUMBER_PROCESS_EXIT};
 use crate::hardware_security::spectre_mitigation::issue_speculative_load_barrier;
 use crate::ipc::{
     SYSCALL_NUMBER_IPC_CALL, SYSCALL_NUMBER_IPC_RECEIVE, SYSCALL_NUMBER_IPC_SEND,
     SYSCALL_NUMBER_NOTIFY_POLL, SYSCALL_NUMBER_NOTIFY_SIGNAL, SYSCALL_NUMBER_NOTIFY_WAIT,
 };
+use brainix_libsyscall::{SYSCALL_NUMBER_AUDIT_READ, SYSCALL_NUMBER_PROCESS_EXIT};
 
 /// Issues LFENCE then routes IPC syscall numbers (1-3) to their handlers.
 ///

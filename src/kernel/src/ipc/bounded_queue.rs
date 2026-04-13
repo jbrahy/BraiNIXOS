@@ -19,6 +19,12 @@ where
     current_count: usize,
 }
 
+impl<T: Copy + Default, const CAPACITY: usize> Default for BoundedQueue<T, CAPACITY> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Copy + Default, const CAPACITY: usize> BoundedQueue<T, CAPACITY> {
     /// Returns a new empty queue with all slots set to `T::default()`.
     pub fn new() -> Self {
@@ -77,7 +83,11 @@ impl<T: Copy + Default, const CAPACITY: usize> BoundedQueue<T, CAPACITY> {
     /// Returns the next index in the circular buffer.
     fn next_circular_index(&self, index: usize) -> usize {
         let next = index.saturating_add(1);
-        if next >= CAPACITY { 0 } else { next }
+        if next >= CAPACITY {
+            0
+        } else {
+            next
+        }
     }
 }
 

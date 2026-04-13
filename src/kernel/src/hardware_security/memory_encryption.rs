@@ -107,8 +107,9 @@ fn select_encryption_mode(tme_supported: bool, sme_supported: bool) -> MemoryEnc
 #[cfg(target_arch = "x86_64")]
 fn enable_intel_total_memory_encryption() {
     use crate::arch::hardware_registers;
-    let current_value =
-        hardware_registers::read_model_specific_register(TOTAL_MEMORY_ENCRYPTION_CAPABILITY_MSR_ADDRESS);
+    let current_value = hardware_registers::read_model_specific_register(
+        TOTAL_MEMORY_ENCRYPTION_CAPABILITY_MSR_ADDRESS,
+    );
     let activate_value = current_value | TOTAL_MEMORY_ENCRYPTION_ENABLE_BIT;
     hardware_registers::write_model_specific_register(
         TOTAL_MEMORY_ENCRYPTION_ACTIVATE_MSR_ADDRESS,
@@ -188,7 +189,8 @@ pub fn detect_and_enable_memory_encryption(
     cpuid_extended_leaf_result: &CpuidResult,
     is_development_build: bool,
 ) -> MemoryEncryptionEnforcementResult {
-    let mode = detect_memory_encryption_support(cpuid_leaf_seven_result, cpuid_extended_leaf_result);
+    let mode =
+        detect_memory_encryption_support(cpuid_leaf_seven_result, cpuid_extended_leaf_result);
     enforce_memory_encryption_policy(mode, is_development_build)
 }
 
@@ -197,15 +199,30 @@ mod tests {
     use super::*;
 
     fn build_cpuid_result_with_ecx(ecx_value: u32) -> CpuidResult {
-        CpuidResult { eax: 0, ebx: 0, ecx: ecx_value, edx: 0 }
+        CpuidResult {
+            eax: 0,
+            ebx: 0,
+            ecx: ecx_value,
+            edx: 0,
+        }
     }
 
     fn build_cpuid_result_with_eax(eax_value: u32) -> CpuidResult {
-        CpuidResult { eax: eax_value, ebx: 0, ecx: 0, edx: 0 }
+        CpuidResult {
+            eax: eax_value,
+            ebx: 0,
+            ecx: 0,
+            edx: 0,
+        }
     }
 
     fn build_empty_cpuid_result() -> CpuidResult {
-        CpuidResult { eax: 0, ebx: 0, ecx: 0, edx: 0 }
+        CpuidResult {
+            eax: 0,
+            ebx: 0,
+            ecx: 0,
+            edx: 0,
+        }
     }
 
     /// CPUID leaf 0x7 ECX bit 13 set => detect_memory_encryption_support returns IntelTME.
@@ -240,17 +257,21 @@ mod tests {
     /// Production build + Unavailable => enforce_memory_encryption_policy returns ProductionFatalHalt.
     #[test]
     fn test_enforce_policy_returns_production_fatal_halt_when_unavailable_in_production() {
-        let result =
-            enforce_memory_encryption_policy(MemoryEncryptionMode::Unavailable, false);
-        assert_eq!(result, MemoryEncryptionEnforcementResult::ProductionFatalHalt);
+        let result = enforce_memory_encryption_policy(MemoryEncryptionMode::Unavailable, false);
+        assert_eq!(
+            result,
+            MemoryEncryptionEnforcementResult::ProductionFatalHalt
+        );
     }
 
     /// Development build + Unavailable => enforce_memory_encryption_policy returns DevelopmentWarning.
     #[test]
     fn test_enforce_policy_returns_development_warning_when_unavailable_in_development() {
-        let result =
-            enforce_memory_encryption_policy(MemoryEncryptionMode::Unavailable, true);
-        assert_eq!(result, MemoryEncryptionEnforcementResult::DevelopmentWarning);
+        let result = enforce_memory_encryption_policy(MemoryEncryptionMode::Unavailable, true);
+        assert_eq!(
+            result,
+            MemoryEncryptionEnforcementResult::DevelopmentWarning
+        );
     }
 
     /// TME mode => enforce_memory_encryption_policy returns Enabled(IntelTME).

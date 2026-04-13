@@ -69,10 +69,7 @@ fn write_apic_timer_initial_count() {
     // - Invariant: INV-SCHED-001 (timer starts firing after this write).
     // - Evidence: initialize_apic_timer integration with boot sequence.
     unsafe {
-        core::ptr::write_volatile(
-            register_address as *mut u32,
-            APIC_TIMER_INITIAL_COUNT_VALUE,
-        );
+        core::ptr::write_volatile(register_address as *mut u32, APIC_TIMER_INITIAL_COUNT_VALUE);
     }
 }
 

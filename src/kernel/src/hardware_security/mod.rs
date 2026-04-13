@@ -11,16 +11,16 @@
 //! (entropy_source, cpu_feature_detection) gate their unsafe blocks on
 //! `#[cfg(target_arch = "x86_64")]` internally.
 
-pub mod cpu_feature_detection;
-pub mod spectre_mitigation;
-pub mod indirect_branch_tracking;
-pub mod memory_encryption;
-pub mod csprng;
-pub mod entropy_source;
-pub mod kernel_write_protection;
 pub mod attestation_gate;
 pub mod binary_signing;
-pub mod pcr_measurement;
+pub mod cpu_feature_detection;
+pub mod csprng;
+pub mod entropy_source;
+pub mod indirect_branch_tracking;
 pub mod kernel_config_blob;
-pub mod tpm;
+pub mod kernel_write_protection;
+pub mod memory_encryption;
+pub mod pcr_measurement;
 pub mod server_measurement;
+pub mod spectre_mitigation;
+pub mod tpm;

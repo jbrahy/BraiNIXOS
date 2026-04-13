@@ -26,6 +26,12 @@ pub struct Endpoint {
     pub badge: u64,
 }
 
+impl Default for Endpoint {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Endpoint {
     /// Returns a new endpoint with empty queues and zero badge.
     pub fn new() -> Self {
@@ -52,7 +58,10 @@ impl Endpoint {
     }
 
     /// Queues `thread_identifier` on the receiver side.
-    pub fn enqueue_receiver(&mut self, thread_identifier: ThreadIdentifier) -> Result<(), IpcError> {
+    pub fn enqueue_receiver(
+        &mut self,
+        thread_identifier: ThreadIdentifier,
+    ) -> Result<(), IpcError> {
         self.receiver_queue.enqueue(thread_identifier)
     }
 
@@ -75,6 +84,12 @@ fn build_empty_endpoint() -> Endpoint {
 /// A fixed-size pool of endpoints backed by a BSS array.
 pub struct EndpointPool {
     endpoints: [Endpoint; crate::ipc::MAXIMUM_ENDPOINTS],
+}
+
+impl Default for EndpointPool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EndpointPool {

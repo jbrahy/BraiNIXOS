@@ -74,9 +74,8 @@ pub fn halt_if_rdrand_unavailable() {
 pub fn collect_rdrand_samples(sample_count: usize) -> Result<[u64; 8], EntropyError> {
     let mut samples = [0u64; 8];
     let bounded_count = sample_count.min(8);
-    for sample_index in 0..bounded_count {
-        let sample_value = collect_single_rdrand_sample()?;
-        samples[sample_index] = sample_value;
+    for sample_slot in samples.iter_mut().take(bounded_count) {
+        *sample_slot = collect_single_rdrand_sample()?;
     }
     Ok(samples)
 }
@@ -102,8 +101,8 @@ fn collect_single_rdrand_sample() -> Result<u64, EntropyError> {
 #[cfg(target_arch = "x86_64")]
 pub fn collect_rdseed_samples() -> [Option<u64>; 4] {
     let mut samples = [None; 4];
-    for sample_index in 0..4usize {
-        samples[sample_index] = collect_single_rdseed_sample();
+    for sample_slot in &mut samples {
+        *sample_slot = collect_single_rdseed_sample();
     }
     samples
 }

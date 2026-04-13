@@ -41,19 +41,29 @@ mod tests {
     #[test]
     fn test_same_domain_threads_are_smt_compatible() {
         let compatible = are_threads_smt_compatible(3, 3);
-        assert!(compatible, "threads in the same domain must be SMT-compatible");
+        assert!(
+            compatible,
+            "threads in the same domain must be SMT-compatible"
+        );
     }
 
     #[test]
     fn test_different_domain_threads_are_not_smt_compatible() {
         let compatible = are_threads_smt_compatible(1, 2);
-        assert!(!compatible, "threads in different domains must not be SMT-compatible");
+        assert!(
+            !compatible,
+            "threads in different domains must not be SMT-compatible"
+        );
     }
 
     #[test]
     fn test_check_smt_isolation_returns_ok_for_same_domain_pair() {
         let result = check_smt_isolation_for_scheduling(5, Some(5));
-        assert_eq!(result, Ok(()), "same-domain pair must pass SMT isolation check");
+        assert_eq!(
+            result,
+            Ok(()),
+            "same-domain pair must pass SMT isolation check"
+        );
     }
 
     #[test]

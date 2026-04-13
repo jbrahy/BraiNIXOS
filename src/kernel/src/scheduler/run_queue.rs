@@ -25,6 +25,12 @@ pub struct RunQueue {
     entry_count: usize,
 }
 
+impl Default for RunQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RunQueue {
     /// Creates a new empty run queue.
     pub const fn new() -> Self {
@@ -87,6 +93,7 @@ impl RunQueue {
     }
 
     /// Finds the position where a new entry with the given priority should be inserted.
+    #[allow(clippy::arithmetic_side_effects)]
     fn find_insertion_position(&self, effective_priority: u8) -> usize {
         let mut position: usize = 0;
         while position < self.entry_count {
@@ -99,6 +106,7 @@ impl RunQueue {
     }
 
     /// Shifts entries right starting from the given position to make room for insertion.
+    #[allow(clippy::arithmetic_side_effects)]
     fn shift_entries_right(&mut self, from_position: usize) {
         let mut shift_index = self.entry_count;
         while shift_index > from_position {
@@ -109,6 +117,7 @@ impl RunQueue {
     }
 
     /// Writes a thread entry at the specified position and increments the count.
+    #[allow(clippy::arithmetic_side_effects)]
     fn write_entry_at(&mut self, position: usize, thread_index: u32, effective_priority: u8) {
         self.thread_indices[position] = thread_index;
         self.effective_priorities[position] = effective_priority;
@@ -116,6 +125,7 @@ impl RunQueue {
     }
 
     /// Finds the position of a thread in the queue by its index.
+    #[allow(clippy::arithmetic_side_effects)]
     fn find_thread_position(&self, thread_index: u32) -> Option<usize> {
         let mut search_index: usize = 0;
         while search_index < self.entry_count {
@@ -128,6 +138,7 @@ impl RunQueue {
     }
 
     /// Shifts entries left to fill the gap at the given position after removal.
+    #[allow(clippy::arithmetic_side_effects)]
     fn shift_entries_left(&mut self, removed_position: usize) {
         let mut shift_index = removed_position;
         while shift_index + 1 < self.entry_count {

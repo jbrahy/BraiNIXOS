@@ -51,7 +51,10 @@ pub fn install_syscall_entry_point() {
 ///
 /// Ring 0 required. Entry point must be a valid kernel function pointer.
 unsafe fn write_lstar_msr_with_entry_point() {
-    let entry_point_address = syscall_entry_point as u64;
+    // SAFETY: function pointer cast to integer for MSR write; syscall_entry_point is a valid .text address.
+    // Using *const () intermediate to satisfy cast_fn_ptr_to_usize (clippy allows fn->*const()->usize).
+    let entry_point_fn_ptr = syscall_entry_point as *const ();
+    let entry_point_address = entry_point_fn_ptr as u64;
     let low_bits = entry_point_address as u32;
     let high_bits = (entry_point_address >> 32) as u32;
     // SAFETY: Ring 0 MSR write; IA32_LSTAR = 0xC0000082.

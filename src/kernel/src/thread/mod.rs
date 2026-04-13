@@ -33,8 +33,8 @@ pub struct RegisterSaveArea {
     pub register_rdx: u64,
     pub register_rdi: u64,
     pub register_rsi: u64,
-    pub register_r8:  u64,
-    pub register_r9:  u64,
+    pub register_r8: u64,
+    pub register_r9: u64,
     pub register_r10: u64,
     pub register_r11: u64,
     pub register_r12: u64,
@@ -75,8 +75,8 @@ const fn zeroed_register_save_area() -> RegisterSaveArea {
         register_rdx: 0,
         register_rdi: 0,
         register_rsi: 0,
-        register_r8:  0,
-        register_r9:  0,
+        register_r8: 0,
+        register_r9: 0,
         register_r10: 0,
         register_r11: 0,
         register_r12: 0,
@@ -85,6 +85,12 @@ const fn zeroed_register_save_area() -> RegisterSaveArea {
         register_r15: 0,
         register_rbp: 0,
         register_rsp: 0,
+    }
+}
+
+impl Default for Thread {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

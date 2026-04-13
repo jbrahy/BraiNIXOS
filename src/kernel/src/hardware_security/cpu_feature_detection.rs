@@ -65,7 +65,10 @@ pub fn is_enhanced_ibrs_supported(arch_capabilities_msr_value: u64) -> bool {
 /// Verified by: test_indirect_branch_tracking_detection_from_cpuid_when_bit_is_set
 pub fn is_indirect_branch_tracking_supported(cpuid_leaf_seven_result: &CpuidResult) -> bool {
     let indirect_branch_tracking_bit_position = 20u8;
-    extract_bit(cpuid_leaf_seven_result.edx, indirect_branch_tracking_bit_position)
+    extract_bit(
+        cpuid_leaf_seven_result.edx,
+        indirect_branch_tracking_bit_position,
+    )
 }
 
 /// Returns true if IBRS and IBPB are supported.
@@ -86,7 +89,10 @@ pub fn is_ibrs_ibpb_supported(cpuid_leaf_seven_result: &CpuidResult) -> bool {
 /// Verified by: test_total_memory_encryption_detection_from_cpuid_when_bit_is_set
 pub fn is_total_memory_encryption_supported(cpuid_leaf_seven_result: &CpuidResult) -> bool {
     let total_memory_encryption_bit_position = 13u8;
-    extract_bit(cpuid_leaf_seven_result.ecx, total_memory_encryption_bit_position)
+    extract_bit(
+        cpuid_leaf_seven_result.ecx,
+        total_memory_encryption_bit_position,
+    )
 }
 
 /// Returns true if AMD SME (Secure Memory Encryption) is supported.
@@ -96,7 +102,10 @@ pub fn is_total_memory_encryption_supported(cpuid_leaf_seven_result: &CpuidResul
 /// Verified by: test_secure_memory_encryption_detection_from_cpuid_when_bit_is_set
 pub fn is_secure_memory_encryption_supported(cpuid_leaf_extended_result: &CpuidResult) -> bool {
     let secure_memory_encryption_bit_position = 0u8;
-    extract_bit(cpuid_leaf_extended_result.eax, secure_memory_encryption_bit_position)
+    extract_bit(
+        cpuid_leaf_extended_result.eax,
+        secure_memory_encryption_bit_position,
+    )
 }
 
 /// Extracts a single bit from a u32 register value at the given bit position.
@@ -118,19 +127,39 @@ mod tests {
     use super::*;
 
     fn build_cpuid_result_with_ecx(ecx_value: u32) -> CpuidResult {
-        CpuidResult { eax: 0, ebx: 0, ecx: ecx_value, edx: 0 }
+        CpuidResult {
+            eax: 0,
+            ebx: 0,
+            ecx: ecx_value,
+            edx: 0,
+        }
     }
 
     fn build_cpuid_result_with_ebx(ebx_value: u32) -> CpuidResult {
-        CpuidResult { eax: 0, ebx: ebx_value, ecx: 0, edx: 0 }
+        CpuidResult {
+            eax: 0,
+            ebx: ebx_value,
+            ecx: 0,
+            edx: 0,
+        }
     }
 
     fn build_cpuid_result_with_edx(edx_value: u32) -> CpuidResult {
-        CpuidResult { eax: 0, ebx: 0, ecx: 0, edx: edx_value }
+        CpuidResult {
+            eax: 0,
+            ebx: 0,
+            ecx: 0,
+            edx: edx_value,
+        }
     }
 
     fn build_cpuid_result_with_eax(eax_value: u32) -> CpuidResult {
-        CpuidResult { eax: eax_value, ebx: 0, ecx: 0, edx: 0 }
+        CpuidResult {
+            eax: eax_value,
+            ebx: 0,
+            ecx: 0,
+            edx: 0,
+        }
     }
 
     /// CPUID leaf 1 ECX bit 30 set => RDRAND supported.

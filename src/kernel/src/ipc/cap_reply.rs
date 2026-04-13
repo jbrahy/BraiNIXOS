@@ -8,8 +8,8 @@
 //! Enforces INV-AUTH-006: CapReply is single-use, non-copyable structurally.
 
 use crate::capability::capability_slot::CapabilitySlot;
-use crate::capability::capability_type::CapabilityType;
 use crate::capability::capability_space::CapabilitySpace;
+use crate::capability::capability_type::CapabilityType;
 use crate::ipc::{IpcError, CAPABILITY_REPLY_DESIGNATED_SLOT};
 use crate::memory::slot_zeroing::zero_capability_slot_via_reference;
 
@@ -32,7 +32,11 @@ pub fn install_cap_reply_in_server_cspace(
 /// Returns `Err(IpcError::ReplySlotOccupied)` if the designated slot is not null.
 fn validate_reply_slot_is_empty(server_cspace: &CapabilitySpace) -> Result<(), IpcError> {
     let reply_slot = server_cspace.lookup_slot_ref(CAPABILITY_REPLY_DESIGNATED_SLOT);
-    if reply_slot.is_null() { Ok(()) } else { Err(IpcError::ReplySlotOccupied) }
+    if reply_slot.is_null() {
+        Ok(())
+    } else {
+        Err(IpcError::ReplySlotOccupied)
+    }
 }
 
 /// Writes a CapReply slot into the designated slot of `server_cspace`.
@@ -64,7 +68,11 @@ fn validate_reply_slot_has_cap_reply(server_cspace: &CapabilitySpace) -> Result<
         return Err(IpcError::ReplyCapabilityAlreadyUsed);
     }
     let is_reply_type = reply_slot.capability_type() == CapabilityType::Reply;
-    if is_reply_type { Ok(()) } else { Err(IpcError::ReplyCapabilityAlreadyUsed) }
+    if is_reply_type {
+        Ok(())
+    } else {
+        Err(IpcError::ReplyCapabilityAlreadyUsed)
+    }
 }
 
 /// Zeroes the designated reply slot using volatile write (INV-AUTH-004).

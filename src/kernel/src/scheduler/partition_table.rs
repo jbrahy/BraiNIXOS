@@ -29,9 +29,18 @@ pub struct PartitionSlot {
 /// Enforces INV-SCHED-001: domains cannot exceed their allocated budget.
 /// Verified by: test_partition_table_has_at_least_two_domain_slots
 pub const PARTITION_TABLE: &[PartitionSlot] = &[
-    PartitionSlot { domain_identifier: 0, duration_in_ticks: 100 },
-    PartitionSlot { domain_identifier: 1, duration_in_ticks: 100 },
-    PartitionSlot { domain_identifier: 2, duration_in_ticks: 50 },
+    PartitionSlot {
+        domain_identifier: 0,
+        duration_in_ticks: 100,
+    },
+    PartitionSlot {
+        domain_identifier: 1,
+        duration_in_ticks: 100,
+    },
+    PartitionSlot {
+        domain_identifier: 2,
+        duration_in_ticks: 50,
+    },
 ];
 
 /// Computes the total ticks in one major frame by summing all slot durations.
@@ -40,6 +49,7 @@ pub const PARTITION_TABLE: &[PartitionSlot] = &[
 ///
 /// Enforces INV-SCHED-001: total budget is the sum of all domain budgets.
 /// Verified by: test_compute_major_frame_total_ticks_sums_all_slot_durations
+#[allow(clippy::arithmetic_side_effects)]
 pub const fn compute_major_frame_total_ticks() -> u64 {
     let mut total_ticks: u64 = 0;
     let mut slot_index: usize = 0;

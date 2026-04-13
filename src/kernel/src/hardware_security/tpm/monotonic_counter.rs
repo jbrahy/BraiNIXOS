@@ -56,12 +56,12 @@ fn read_stored_counter_from_tpm() -> Result<u64, MonotonicCounterError> {
 }
 
 /// Return an error if binary_value is less than stored_value (rollback detected).
-fn check_for_rollback(
-    binary_value: u64,
-    stored_value: u64,
-) -> Result<(), MonotonicCounterError> {
+fn check_for_rollback(binary_value: u64, stored_value: u64) -> Result<(), MonotonicCounterError> {
     if should_reject_rollback(binary_value, stored_value) {
-        return Err(MonotonicCounterError::RollbackDetected { binary_value, stored_value });
+        return Err(MonotonicCounterError::RollbackDetected {
+            binary_value,
+            stored_value,
+        });
     }
     Ok(())
 }
@@ -136,7 +136,10 @@ mod tests {
             stored_value: 5,
         };
         match error {
-            MonotonicCounterError::RollbackDetected { binary_value, stored_value } => {
+            MonotonicCounterError::RollbackDetected {
+                binary_value,
+                stored_value,
+            } => {
                 assert_eq!(binary_value, 3);
                 assert_eq!(stored_value, 5);
             }
@@ -154,6 +157,9 @@ mod tests {
     #[test]
     fn test_verify_and_update_monotonic_counter_succeeds_on_host_with_zero_binary_value() {
         let result = verify_and_update_monotonic_counter(0);
-        assert!(result.is_ok(), "must succeed when binary_value >= stored (0 >= 0)");
+        assert!(
+            result.is_ok(),
+            "must succeed when binary_value >= stored (0 >= 0)"
+        );
     }
 }

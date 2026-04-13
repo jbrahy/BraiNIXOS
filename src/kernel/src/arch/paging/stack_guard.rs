@@ -55,7 +55,8 @@ fn verify_stack_bottom_is_one_page_above_guard() {
 
 /// Verifies the stack top is above the stack bottom (stack has positive size).
 fn verify_stack_top_is_above_stack_bottom() {
-    assert!(
+    #[allow(clippy::assertions_on_constants)]
+    const _: () = assert!(
         INITIAL_KERNEL_STACK_TOP > INITIAL_KERNEL_STACK_BOTTOM,
         "kernel stack top must be above stack bottom"
     );

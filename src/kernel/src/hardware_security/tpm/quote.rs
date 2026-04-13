@@ -72,7 +72,11 @@ pub fn parse_tpm_quote_response(
     let pcr_digest = extract_pcr_digest(raw_response);
     let nonce_echo = extract_nonce_echo(raw_response);
     let signature = extract_signature(raw_response);
-    Ok(TpmQuoteParseResult { pcr_digest, nonce_echo, signature })
+    Ok(TpmQuoteParseResult {
+        pcr_digest,
+        nonce_echo,
+        signature,
+    })
 }
 
 /// Validate that the response is at least the minimum required length.

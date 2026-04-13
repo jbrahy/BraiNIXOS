@@ -20,8 +20,8 @@ const PROGRAM_HEADER_TYPE_LOAD: u32 = 1;
 const PROGRAM_HEADER_ENTRY_SIZE: usize = 56;
 const SEGMENT_FLAG_EXECUTABLE: u32 = 1;
 const SEGMENT_FLAG_WRITABLE: u32 = 2;
+#[cfg(test)]
 const SEGMENT_FLAG_READABLE: u32 = 4;
-
 /// Errors that can occur when validating a server binary ELF header.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ElfLoadError {
@@ -66,12 +66,14 @@ fn extract_elf_data_encoding(binary_bytes: &[u8]) -> u8 {
     binary_bytes[5]
 }
 
+#[allow(clippy::arithmetic_side_effects)]
 fn extract_u16_little_endian_at(binary_bytes: &[u8], byte_offset: usize) -> u16 {
     let low_byte = binary_bytes[byte_offset];
     let high_byte = binary_bytes[byte_offset + 1];
     u16::from_le_bytes([low_byte, high_byte])
 }
 
+#[allow(clippy::arithmetic_side_effects)]
 fn extract_u32_little_endian_at(binary_bytes: &[u8], byte_offset: usize) -> u32 {
     let byte_array = [
         binary_bytes[byte_offset],
@@ -82,6 +84,7 @@ fn extract_u32_little_endian_at(binary_bytes: &[u8], byte_offset: usize) -> u32 
     u32::from_le_bytes(byte_array)
 }
 
+#[allow(clippy::arithmetic_side_effects)]
 fn extract_u64_little_endian_at(binary_bytes: &[u8], byte_offset: usize) -> u64 {
     let byte_array = [
         binary_bytes[byte_offset],
@@ -208,22 +211,27 @@ fn read_segment_type(binary_bytes: &[u8], header_offset: usize) -> u32 {
     extract_u32_little_endian_at(binary_bytes, header_offset)
 }
 
+#[allow(clippy::arithmetic_side_effects)]
 fn read_segment_flags(binary_bytes: &[u8], header_offset: usize) -> u32 {
     extract_u32_little_endian_at(binary_bytes, header_offset + 4)
 }
 
+#[allow(clippy::arithmetic_side_effects)]
 fn read_segment_file_offset(binary_bytes: &[u8], header_offset: usize) -> u64 {
     extract_u64_little_endian_at(binary_bytes, header_offset + 8)
 }
 
+#[allow(clippy::arithmetic_side_effects)]
 fn read_segment_virtual_address(binary_bytes: &[u8], header_offset: usize) -> u64 {
     extract_u64_little_endian_at(binary_bytes, header_offset + 16)
 }
 
+#[allow(clippy::arithmetic_side_effects)]
 fn read_segment_file_size(binary_bytes: &[u8], header_offset: usize) -> u64 {
     extract_u64_little_endian_at(binary_bytes, header_offset + 32)
 }
 
+#[allow(clippy::arithmetic_side_effects)]
 fn read_segment_memory_size(binary_bytes: &[u8], header_offset: usize) -> u64 {
     extract_u64_little_endian_at(binary_bytes, header_offset + 40)
 }
@@ -268,9 +276,14 @@ fn extract_single_program_header(
     }
     let flags = read_segment_flags(binary_bytes, header_offset);
     validate_segment_is_not_writable_and_executable(flags)?;
-    Ok(Some(build_loadable_segment(binary_bytes, header_offset, flags)?))
+    Ok(Some(build_loadable_segment(
+        binary_bytes,
+        header_offset,
+        flags,
+    )?))
 }
 
+#[allow(clippy::arithmetic_side_effects)]
 fn validate_program_header_offset_is_in_bounds(
     binary_bytes: &[u8],
     header_offset: usize,
@@ -297,14 +310,14 @@ pub fn extract_loadable_segments(
     collect_loadable_segments(binary_bytes, table_offset, header_count)
 }
 
+#[allow(clippy::arithmetic_side_effects)]
 fn collect_loadable_segments(
     binary_bytes: &[u8],
     table_offset: usize,
     header_count: usize,
 ) -> Result<[Option<LoadableSegment>; 8], ElfLoadError> {
-    let mut segments: [Option<LoadableSegment>; 8] = [
-        None, None, None, None, None, None, None, None,
-    ];
+    let mut segments: [Option<LoadableSegment>; 8] =
+        [None, None, None, None, None, None, None, None];
     let mut load_segment_index = 0;
     let mut header_index = 0;
     while header_index < header_count {
@@ -327,6 +340,7 @@ fn collect_loadable_segments(
 /// Returns `segment.memory_size - segment.file_size`. When this value is greater
 /// than zero, the kernel must zero-fill that many bytes after copying from the file
 /// (per INV-MEM-006: freed/newly-mapped memory is sanitized before use by userspace).
+#[allow(clippy::arithmetic_side_effects)]
 pub fn compute_zero_fill_size(segment: &LoadableSegment) -> u64 {
     segment.memory_size - segment.file_size
 }

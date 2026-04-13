@@ -15,6 +15,12 @@ pub struct Notification {
     signal_word: AtomicU64,
 }
 
+impl Default for Notification {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Notification {
     /// Returns a new notification with no pending signals.
     pub const fn new() -> Self {
@@ -53,6 +59,12 @@ fn build_cleared_notification() -> Notification {
 /// A fixed-size pool of notification objects backed by a BSS array.
 pub struct NotificationPool {
     notifications: [Notification; crate::ipc::MAXIMUM_ENDPOINTS],
+}
+
+impl Default for NotificationPool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NotificationPool {

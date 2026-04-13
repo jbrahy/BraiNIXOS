@@ -6,19 +6,21 @@ use crate::arch::paging::kernel_page_table::{
 };
 use crate::arch::paging::stack_guard::configure_kernel_stack_guard_page;
 use crate::arch::paging::user_page_table::build_user_page_table;
-use crate::boot::hardware_security_init::{finalize_hardware_security, initialize_hardware_security};
+use crate::boot::hardware_security_init::{
+    finalize_hardware_security, initialize_hardware_security,
+};
 use crate::boot::ipc_init::initialize_ipc_subsystem;
 use crate::boot::logger::BootStepLogger;
 use crate::boot::multiboot2_info::initialize_memory_subsystem;
 use crate::boot::scheduler_init::initialize_scheduler_subsystem;
 use crate::capability::audit_log::AuditRingBuffer;
 use crate::capability::audit_log_protection::protect_audit_log_pages;
-use crate::hardware_security::server_measurement::measure_all_server_binaries;
-use crate::process::ProcessType;
-use crate::process::server_launch::{create_server_process, grant_initial_capability_to_server};
-use crate::capability::capability_type::CapabilityType;
 use crate::capability::capability_rights;
 use crate::capability::capability_space::CapabilitySpace;
+use crate::capability::capability_type::CapabilityType;
+use crate::hardware_security::server_measurement::measure_all_server_binaries;
+use crate::process::server_launch::{create_server_process, grant_initial_capability_to_server};
+use crate::process::ProcessType;
 
 /// Run the full boot sequence. Called from `_start` after serial is ready.
 pub fn execute_boot_sequence(
@@ -108,22 +110,42 @@ fn load_and_launch_server_processes(boot_step_logger: &mut BootStepLogger) {
 fn launch_init_server_process() {
     let _ = create_server_process(ProcessType::Init, 0x0000_0000_0040_0000);
     let mut init_capability_space = CapabilitySpace::new();
-    grant_initial_capability_to_server(&mut init_capability_space, 0, CapabilityType::Spawn, capability_rights::GRANT);
-    grant_initial_capability_to_server(&mut init_capability_space, 1, CapabilityType::AuditRead, capability_rights::READ);
+    grant_initial_capability_to_server(
+        &mut init_capability_space,
+        0,
+        CapabilityType::Spawn,
+        capability_rights::GRANT,
+    );
+    grant_initial_capability_to_server(
+        &mut init_capability_space,
+        1,
+        CapabilityType::AuditRead,
+        capability_rights::READ,
+    );
 }
 
 /// Creates the spawnd server process and grants CapSpawn only.
 fn launch_spawnd_server_process() {
     let _ = create_server_process(ProcessType::Spawnd, 0x0000_0000_0040_0000);
     let mut spawnd_capability_space = CapabilitySpace::new();
-    grant_initial_capability_to_server(&mut spawnd_capability_space, 0, CapabilityType::Spawn, capability_rights::GRANT);
+    grant_initial_capability_to_server(
+        &mut spawnd_capability_space,
+        0,
+        CapabilityType::Spawn,
+        capability_rights::GRANT,
+    );
 }
 
 /// Creates the auditd server process and grants CapAuditRead (read-only) only.
 fn launch_auditd_server_process() {
     let _ = create_server_process(ProcessType::Auditd, 0x0000_0000_0040_0000);
     let mut auditd_capability_space = CapabilitySpace::new();
-    grant_initial_capability_to_server(&mut auditd_capability_space, 0, CapabilityType::AuditRead, capability_rights::READ);
+    grant_initial_capability_to_server(
+        &mut auditd_capability_space,
+        0,
+        CapabilityType::AuditRead,
+        capability_rights::READ,
+    );
 }
 
 fn log_kernel_banner(boot_step_logger: &mut BootStepLogger) {
