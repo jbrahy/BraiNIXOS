@@ -15,7 +15,9 @@ required-features = ["kernel-binary"]
 kernel-binary = []
 
 [dependencies]
-sha2 = { version = "0.10", default-features = false }
+# force-soft disables SIMD/cpufeatures runtime detection -- required for x86_64-unknown-none
+# (soft-float ABI; hardware SIMD instructions cannot be emitted).
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
 chacha20 = { version = "0.9", default-features = false }
 ed25519-dalek = { version = "2", default-features = false }
 

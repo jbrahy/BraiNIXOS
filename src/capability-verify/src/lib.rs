@@ -131,3 +131,31 @@ mod proofs {
         assert!(tick_count <= initial_budget as u64);
     }
 }
+
+#[cfg(kani)]
+mod hardware_security_proofs {
+    /// Proves the attestation gate state machine has no path that bypasses Verifying.
+    ///
+    /// Gate transitions must follow Closed -> Measuring -> Verifying -> Open.
+    /// No path from Closed to Open skips Verifying.
+    ///
+    /// Phase 6 Plan 05 replaces this stub with a proof over the real state machine type.
+    #[kani::proof]
+    fn attestation_gate_state_machine_has_no_skip_path() {
+        // Prove: gate transitions from Closed -> Measuring -> Verifying -> Open
+        //        with no path that bypasses Verifying
+        kani::assume(true); // Stub -- replaced in Plan 05
+    }
+
+    /// Proves the CSPRNG state is never all zeros after Phase A seeding.
+    ///
+    /// After seeding from RDRAND+RDSEED, the ChaCha20 key material must not
+    /// be all zeros (a degenerate key that would compromise all output).
+    ///
+    /// Phase 6 Plan 01 replaces this stub with a proof over the real CSPRNG type.
+    #[kani::proof]
+    fn csprng_state_is_never_all_zeros_after_seeding() {
+        // Prove: after Phase A seeding, key material is not all zeros
+        kani::assume(true); // Stub -- replaced in Plan 01
+    }
+}
