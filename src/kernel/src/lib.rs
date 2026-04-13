@@ -21,5 +21,7 @@ pub mod memory;
 
 pub mod thread;
 
+pub mod scheduler;
+
 #[cfg(target_arch = "x86_64")]
 pub mod syscall;
