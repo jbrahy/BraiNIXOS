@@ -7,8 +7,14 @@
 //! The kernel imports this crate as a dependency. Server crates also import it.
 //! This guarantees the kernel and all servers agree on the representation of every
 //! shared type at compile time.
+//!
+//! # Unsafe Code
+//!
+//! This file is allowlisted in `docs/security/UNSAFE_CODE_POLICY.md` for
+//! inline assembly (`core::arch::asm!`) for SYSCALL instruction wrappers.
+//! No other unsafe operations are permitted in this file.
 #![no_std]
-#![deny(unsafe_code)]
+#![allow(unsafe_code)]
 
 /// The process type assigned to each userspace server.
 ///
@@ -71,3 +77,95 @@ pub const SERVER_STACK_SIZE_IN_PAGES: usize = 16;
 /// This page is mapped as non-present so that stack overflow generates a
 /// page fault rather than silently corrupting adjacent memory.
 pub const SERVER_STACK_GUARD_PAGE_VIRTUAL_ADDRESS: u64 = 0x0000_0000_007E_F000;
+
+/// Exits the calling process by invoking the sys_process_exit system call.
+///
+/// Enforces INV-AUTH-001: bootstrap authority collapsed after init exits.
+/// The kernel removes all capability slots and marks the process as terminated.
+/// This function never returns.
+///
+/// Verified by: test_init_process_exits_after_handing_off_authority
+#[cfg(target_arch = "x86_64")]
+pub fn syscall_process_exit() -> ! {
+    // SAFETY: SYSCALL instruction transfers control to kernel.
+    // sys_process_exit never returns per D-07.
+    // - Precondition: called from ring-3 context.
+    // - Invariant: INV-AUTH-001 (bootstrap authority collapsed).
+    // - Evidence: test_init_process_exits_after_handing_off_authority.
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") SYSCALL_NUMBER_PROCESS_EXIT,
+            options(noreturn)
+        );
+    }
+}
+
+/// Host-target stub for syscall_process_exit.
+///
+/// Panics with a descriptive message when invoked outside x86_64.
+/// Used for host-side unit test compilation only.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn syscall_process_exit() -> ! {
+    panic!("syscall_process_exit: host-target stub");
+}
+
+/// Reads audit log entries from the kernel via the sys_audit_read system call.
+///
+/// The kernel copies up to `count` audit entries starting at `start_sequence`
+/// into the buffer at `buffer_pointer`. Returns the number of entries read,
+/// or a negative error code if the capability check fails.
+///
+/// Enforces INV-AUD-001: audit log read-only access via CapAuditRead.
+///
+/// # Arguments
+///
+/// - `capability_slot_index`: slot index of the CapAuditRead capability in the caller's CSpace
+/// - `start_sequence`: sequence number of the first entry to read
+/// - `count`: maximum number of entries to read
+/// - `buffer_pointer`: virtual address of the destination buffer in userspace
+///
+/// Verified by: test_auditd_cannot_write_to_audit_log
+#[cfg(target_arch = "x86_64")]
+pub fn syscall_audit_read(
+    capability_slot_index: u8,
+    start_sequence: u64,
+    count: u64,
+    buffer_pointer: u64,
+) -> i64 {
+    // SAFETY: SYSCALL instruction transfers control to kernel.
+    // Kernel validates capability and copies audit entries to buffer_pointer.
+    // - Precondition: buffer_pointer is a valid userspace buffer address.
+    // - Invariant: INV-AUD-001 (audit log read-only access).
+    // - Evidence: test_auditd_cannot_write_to_audit_log.
+    let return_value: i64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") SYSCALL_NUMBER_AUDIT_READ,
+            in("rdi") capability_slot_index as u64,
+            in("rsi") start_sequence,
+            in("rdx") count,
+            in("r10") buffer_pointer,
+            lateout("rax") return_value,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack)
+        );
+    }
+    return_value
+}
+
+/// Host-target stub for syscall_audit_read.
+///
+/// Returns 0 when invoked outside x86_64.
+/// Used for host-side unit test compilation only.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn syscall_audit_read(
+    _capability_slot_index: u8,
+    _start_sequence: u64,
+    _count: u64,
+    _buffer_pointer: u64,
+) -> i64 {
+    0
+}
