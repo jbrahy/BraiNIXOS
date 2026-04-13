@@ -10,14 +10,12 @@ use super::partition_table::{
     compute_major_frame_total_ticks, MAJOR_FRAME_TOTAL_TICKS, PARTITION_TABLE,
 };
 use super::priority_inheritance::{
-    apply_priority_inheritance_boost, compute_effective_priority,
-    new_effective_priority_record, restore_base_priority,
-    EffectivePriorityRecord,
+    apply_priority_inheritance_boost, compute_effective_priority, new_effective_priority_record,
+    restore_base_priority, EffectivePriorityRecord,
 };
 use super::run_queue::RunQueue;
 use super::time_partitioning::{
-    advance_partition_slot_if_expired, is_thread_eligible_for_current_slot,
-    new_major_frame_state,
+    advance_partition_slot_if_expired, is_thread_eligible_for_current_slot, new_major_frame_state,
 };
 use super::{SchedulerAction, SchedulerError, MAXIMUM_THREADS};
 
@@ -26,7 +24,10 @@ use super::{SchedulerAction, SchedulerError, MAXIMUM_THREADS};
 #[test]
 fn test_partition_table_has_at_least_two_domain_slots() {
     let slot_count = PARTITION_TABLE.len();
-    assert!(slot_count >= 2, "partition table must have at least 2 slots");
+    assert!(
+        slot_count >= 2,
+        "partition table must have at least 2 slots"
+    );
 }
 
 #[test]
@@ -70,7 +71,11 @@ fn test_run_queue_returns_threads_in_priority_order() {
     run_queue.insert_thread(2, 20).unwrap();
     run_queue.insert_thread(3, 10).unwrap();
     let highest = run_queue.select_highest_priority_thread();
-    assert_eq!(highest, Some(2), "thread with priority 20 should be selected first");
+    assert_eq!(
+        highest,
+        Some(2),
+        "thread with priority 20 should be selected first"
+    );
 }
 
 #[test]
@@ -186,7 +191,10 @@ fn test_priority_inheritance_boosts_low_priority_thread_while_holding_resource()
     };
     apply_priority_inheritance_boost(0, 10, &mut table);
     let boosted_priority = compute_effective_priority(&table[0]);
-    assert_eq!(boosted_priority, 10, "holder must be boosted to waiter priority");
+    assert_eq!(
+        boosted_priority, 10,
+        "holder must be boosted to waiter priority"
+    );
     let medium_priority = table[1].base_priority;
     assert!(
         medium_priority < boosted_priority,
@@ -194,7 +202,10 @@ fn test_priority_inheritance_boosts_low_priority_thread_while_holding_resource()
     );
     restore_base_priority(0, &mut table);
     let restored_priority = compute_effective_priority(&table[0]);
-    assert_eq!(restored_priority, 1, "holder returns to base priority after restore");
+    assert_eq!(
+        restored_priority, 1,
+        "holder returns to base priority after restore"
+    );
 }
 
 /// SC-03: A domain does not execute outside its assigned time slot.
@@ -259,8 +270,7 @@ fn integration_hostile_cpu_consumer_does_not_starve_other_domains() {
     let mut domain_one_eligible_tick_count: u64 = 0;
 
     for _ in 0..250 {
-        let domain_one_eligible =
-            is_thread_eligible_for_current_slot(1, &state.major_frame_state);
+        let domain_one_eligible = is_thread_eligible_for_current_slot(1, &state.major_frame_state);
         if domain_one_eligible {
             domain_one_eligible_tick_count += 1;
         }

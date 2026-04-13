@@ -72,9 +72,18 @@ mod tests {
     fn test_partition_table_hash_changes_when_table_changes() {
         let original_hash = compute_partition_table_hash();
         let modified_slots = [
-            PartitionSlot { domain_identifier: 0, duration_in_ticks: 99 },
-            PartitionSlot { domain_identifier: 1, duration_in_ticks: 100 },
-            PartitionSlot { domain_identifier: 2, duration_in_ticks: 50 },
+            PartitionSlot {
+                domain_identifier: 0,
+                duration_in_ticks: 99,
+            },
+            PartitionSlot {
+                domain_identifier: 1,
+                duration_in_ticks: 100,
+            },
+            PartitionSlot {
+                domain_identifier: 2,
+                duration_in_ticks: 50,
+            },
         ];
         let modified_hash = compute_partition_table_hash_from_slots(&modified_slots);
         assert_ne!(
