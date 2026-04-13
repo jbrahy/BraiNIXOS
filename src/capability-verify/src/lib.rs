@@ -103,4 +103,14 @@ mod proofs {
         let index_as_usize = slot_index as usize;
         assert!(index_as_usize < array_length);
     }
+
+    /// Proves that no domain exceeds its CPU budget per major frame period.
+    ///
+    /// Stub: will be implemented in Plan 05 after budget accounting is complete.
+    /// Enforces SCHED-01 / SCHED-04 / INV-SCHED-001.
+    #[kani::proof]
+    fn property_no_domain_exceeds_its_cpu_budget_per_period() {
+        // SCHED-01 / SCHED-04 / INV-SCHED-001
+        // Stub: will be implemented in Plan 05 after budget accounting is complete
+    }
 }

@@ -12,9 +12,44 @@ criteria = "safe-to-deploy"
 version = "2.11.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.block-buffer]]
+version = "0.10.4"
+criteria = "safe-to-deploy"
+notes = "SHA-2 block processing buffer. Pure computation, no_std compatible. Part of RustCrypto project (widely audited). Transitive dep of sha2 for PCR[2] measurement (SCHED-05)."
+
+[[exemptions.cfg-if]]
+version = "1.0.4"
+criteria = "safe-to-deploy"
+notes = "Compile-time conditional compilation macro. Pure macro, no runtime code. Transitive dep of sha2 via cpufeatures."
+
 [[exemptions.const_fn]]
 version = "0.4.12"
 criteria = "safe-to-deploy"
+
+[[exemptions.cpufeatures]]
+version = "0.2.17"
+criteria = "safe-to-deploy"
+notes = "CPU feature detection for runtime dispatch. Used by sha2 for hardware SHA acceleration. Contains platform-specific inline asm for CPUID; no_std compatible."
+
+[[exemptions.crypto-common]]
+version = "0.1.7"
+criteria = "safe-to-deploy"
+notes = "Common traits for RustCrypto crates (BlockSizeUser, OutputSizeUser). Pure trait definitions, no_std compatible. Transitive dep of sha2 for PCR[2] measurement (SCHED-05)."
+
+[[exemptions.digest]]
+version = "0.10.7"
+criteria = "safe-to-deploy"
+notes = "Cryptographic hash function traits (Digest, Update, FixedOutput). Pure Rust, no_std compatible. Part of RustCrypto project. Transitive dep of sha2 for PCR[2] measurement (SCHED-05)."
+
+[[exemptions.generic-array]]
+version = "0.14.7"
+criteria = "safe-to-deploy"
+notes = "Generic array type parameterized by typenum length. Pure Rust, no_std compatible. Used by sha2/digest for fixed-size output arrays. Widely used in the Rust ecosystem."
+
+[[exemptions.libc]]
+version = "0.2.185"
+criteria = "safe-to-deploy"
+notes = "Rust FFI bindings for libc. Only pulled in by cpufeatures for target_os-gated CPUID detection. Not compiled for no_std bare-metal target (x86_64-unknown-none)."
 
 [[exemptions.log]]
 version = "0.4.29"
@@ -44,6 +79,11 @@ criteria = "safe-to-deploy"
 version = "1.0.22"
 criteria = "safe-to-deploy"
 
+[[exemptions.sha2]]
+version = "0.10.9"
+criteria = "safe-to-deploy"
+notes = "SHA-256 implementation from RustCrypto project. Pure Rust, no_std compatible (default-features = false). Required for TPM PCR[2] partition table measurement (SCHED-05). MIT/Apache-2.0 licensed. Widely audited cryptographic library."
+
 [[exemptions.syn]]
 version = "2.0.117"
 criteria = "safe-to-deploy"
@@ -56,6 +96,11 @@ criteria = "safe-to-deploy"
 version = "2.0.18"
 criteria = "safe-to-deploy"
 
+[[exemptions.typenum]]
+version = "1.19.0"
+criteria = "safe-to-deploy"
+notes = "Type-level numbers for Rust. Pure computation at the type level, no runtime overhead. Used by generic-array for fixed-size array parameterization. Transitive dep of sha2."
+
 [[exemptions.uefi-raw]]
 version = "0.12.0"
 criteria = "safe-to-deploy"
@@ -67,6 +112,11 @@ criteria = "safe-to-deploy"
 [[exemptions.unicode-ident]]
 version = "1.0.24"
 criteria = "safe-to-deploy"
+
+[[exemptions.version_check]]
+version = "0.9.5"
+criteria = "safe-to-deploy"
+notes = "Compile-time Rust version checking. Build-script-only crate, no runtime code. Used by generic-array for conditional compilation based on Rust version."
 
 [[exemptions.volatile]]
 version = "0.4.6"
