@@ -5,8 +5,6 @@
 //! and all error types.
 
 pub mod audit_event_type;
-pub mod device_capability;
-pub mod irq_capability;
 pub mod audit_log;
 pub mod audit_log_protection;
 pub mod capability_error;
@@ -17,6 +15,8 @@ pub mod capability_type;
 pub mod derivation_record;
 pub mod derivation_tree;
 pub mod derive_capability;
+pub mod device_capability;
+pub mod irq_capability;
 pub mod revocation;
 pub mod temporal_validation;
 pub mod tick_source;

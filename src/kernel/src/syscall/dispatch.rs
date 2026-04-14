@@ -86,7 +86,9 @@ fn handle_process_exit_dispatch() -> Option<i64> {
 fn handle_device_range_syscall(syscall_number: u64) -> Option<i64> {
     issue_speculative_load_barrier();
     match syscall_number {
-        SYSCALL_NUMBER_DEVICE_MAP_MMIO => Some(super::device_map_mmio::handle_device_map_mmio_syscall()),
+        SYSCALL_NUMBER_DEVICE_MAP_MMIO => {
+            Some(super::device_map_mmio::handle_device_map_mmio_syscall())
+        }
         SYSCALL_NUMBER_IRQ_BIND => Some(super::irq_bind::handle_irq_bind_syscall()),
         _ => None,
     }

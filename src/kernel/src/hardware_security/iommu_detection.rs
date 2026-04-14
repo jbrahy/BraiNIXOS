@@ -74,10 +74,7 @@ fn detect_iommu_presence_for_target() -> IommuDetectionResult {
 /// Verified by: test_iommu_policy_production_halts_on_absent,
 ///              test_iommu_policy_development_warns_on_absent,
 ///              test_iommu_policy_present_always_passes
-pub fn enforce_iommu_policy(
-    detection_result: IommuDetectionResult,
-    enforcement_mode: u8,
-) -> bool {
+pub fn enforce_iommu_policy(detection_result: IommuDetectionResult, enforcement_mode: u8) -> bool {
     let iommu_is_present = detection_result == IommuDetectionResult::Present;
     let mode_is_production = enforcement_mode == 1;
     compute_boot_may_continue(iommu_is_present, mode_is_production)
@@ -104,10 +101,11 @@ mod tests {
     /// Enforces INV-DEV-001: production kernel requires hardware IOMMU enforcement.
     #[test]
     fn test_iommu_policy_production_halts_on_absent() {
-        let boot_may_continue =
-            enforce_iommu_policy(IommuDetectionResult::Absent, 1);
-        assert!(!boot_may_continue,
-            "production mode must halt when IOMMU is absent (INV-DEV-001)");
+        let boot_may_continue = enforce_iommu_policy(IommuDetectionResult::Absent, 1);
+        assert!(
+            !boot_may_continue,
+            "production mode must halt when IOMMU is absent (INV-DEV-001)"
+        );
     }
 
     /// Verifies that development enforcement mode warns but does not halt when IOMMU is absent.
@@ -116,10 +114,11 @@ mod tests {
     /// Permits QEMU development without hardware IOMMU while maintaining visibility.
     #[test]
     fn test_iommu_policy_development_warns_on_absent() {
-        let boot_may_continue =
-            enforce_iommu_policy(IommuDetectionResult::Absent, 0);
-        assert!(boot_may_continue,
-            "development mode must continue when IOMMU is absent");
+        let boot_may_continue = enforce_iommu_policy(IommuDetectionResult::Absent, 0);
+        assert!(
+            boot_may_continue,
+            "development mode must continue when IOMMU is absent"
+        );
     }
 
     /// Verifies that enforcement always passes when IOMMU is present.
@@ -128,13 +127,15 @@ mod tests {
     /// Enforces INV-DEV-001: hardware IOMMU presence satisfies all enforcement modes.
     #[test]
     fn test_iommu_policy_present_always_passes() {
-        let production_passes =
-            enforce_iommu_policy(IommuDetectionResult::Present, 1);
-        let development_passes =
-            enforce_iommu_policy(IommuDetectionResult::Present, 0);
-        assert!(production_passes,
-            "production mode must pass when IOMMU is present");
-        assert!(development_passes,
-            "development mode must pass when IOMMU is present");
+        let production_passes = enforce_iommu_policy(IommuDetectionResult::Present, 1);
+        let development_passes = enforce_iommu_policy(IommuDetectionResult::Present, 0);
+        assert!(
+            production_passes,
+            "production mode must pass when IOMMU is present"
+        );
+        assert!(
+            development_passes,
+            "development mode must pass when IOMMU is present"
+        );
     }
 }

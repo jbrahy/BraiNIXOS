@@ -139,8 +139,8 @@ pub fn validate_mmio_mapping_request(
 #[cfg(test)]
 mod tests {
     use super::{
-        DeviceCapabilityData, DeviceMappingError, DeviceType, IRQ_NONE,
-        is_mmio_address_within_device_bounds, validate_mmio_mapping_request,
+        is_mmio_address_within_device_bounds, validate_mmio_mapping_request, DeviceCapabilityData,
+        DeviceMappingError, DeviceType, IRQ_NONE,
     };
 
     fn build_nic_test_data() -> DeviceCapabilityData {

@@ -241,7 +241,10 @@ mod tests {
     fn test_allocate_thread_pool_slot_returns_distinct_indices() {
         let first_slot_index = allocate_thread_pool_slot();
         let second_slot_index = allocate_thread_pool_slot();
-        assert_eq!(second_slot_index, first_slot_index.wrapping_add(1),
-            "successive allocations must return distinct incrementing indices");
+        assert_eq!(
+            second_slot_index,
+            first_slot_index.wrapping_add(1),
+            "successive allocations must return distinct incrementing indices"
+        );
     }
 }

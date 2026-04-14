@@ -110,8 +110,8 @@ fn zero_all_capability_space_slots(capability_space: &mut CapabilitySpace) {
 /// Enforces INV-OBJ-002: object reuse cannot preserve stale data.
 fn zero_slot_if_not_null(capability_space: &mut CapabilitySpace, slot_index: u8) {
     let slot = capability_space.lookup_slot_mut(slot_index);
-    let slot_state_is_active = slot.state == CapabilitySlotState::Valid
-        || slot.state == CapabilitySlotState::Revoking;
+    let slot_state_is_active =
+        slot.state == CapabilitySlotState::Valid || slot.state == CapabilitySlotState::Revoking;
     if slot_state_is_active {
         zero_capability_slot_via_reference(slot);
     }
@@ -221,9 +221,21 @@ mod tests {
     #[test]
     fn test_process_exit_revokes_capability_space() {
         let exit_record = execute_process_exit_sequence();
-        assert!(exit_record.capability_space_revoked, "CSpace must be revoked on process exit");
-        assert!(exit_record.pages_deallocated, "pages must be deallocated on process exit");
-        assert!(exit_record.thread_deallocated, "thread must be deallocated on process exit");
-        assert!(exit_record.removed_from_scheduler, "process must be removed from scheduler");
+        assert!(
+            exit_record.capability_space_revoked,
+            "CSpace must be revoked on process exit"
+        );
+        assert!(
+            exit_record.pages_deallocated,
+            "pages must be deallocated on process exit"
+        );
+        assert!(
+            exit_record.thread_deallocated,
+            "thread must be deallocated on process exit"
+        );
+        assert!(
+            exit_record.removed_from_scheduler,
+            "process must be removed from scheduler"
+        );
     }
 }

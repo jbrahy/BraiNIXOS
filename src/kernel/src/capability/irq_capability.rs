@@ -127,7 +127,13 @@ pub fn bind_irq_to_endpoint(
     }
     let inactive_slot_index = find_inactive_slot_index(table);
     let slot_index = inactive_slot_index.ok_or(IrqBindingError::BindingTableFull)?;
-    write_binding_record(table, slot_index, irq_number, endpoint_slot_index, process_index);
+    write_binding_record(
+        table,
+        slot_index,
+        irq_number,
+        endpoint_slot_index,
+        process_index,
+    );
     Ok(())
 }
 
@@ -188,8 +194,8 @@ pub fn lookup_binding_for_irq(table: &IrqBindingTable, irq_number: u8) -> Option
 #[cfg(test)]
 mod tests {
     use super::{
-        IrqBindingError, IrqBindingTable, MAXIMUM_IRQ_BINDINGS,
-        bind_irq_to_endpoint, is_irq_in_device_set, lookup_binding_for_irq,
+        bind_irq_to_endpoint, is_irq_in_device_set, lookup_binding_for_irq, IrqBindingError,
+        IrqBindingTable, MAXIMUM_IRQ_BINDINGS,
     };
     use crate::capability::device_capability::{DeviceCapabilityData, DeviceType, IRQ_NONE};
 
