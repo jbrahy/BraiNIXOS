@@ -56,6 +56,23 @@ pub const SYSCALL_NUMBER_PROCESS_EXIT: u64 = 7;
 /// The kernel enforces read-only semantics: this syscall cannot write to the audit log.
 pub const SYSCALL_NUMBER_AUDIT_READ: u64 = 8;
 
+/// Syscall number for sys_device_map_mmio.
+///
+/// Maps a bounded device MMIO region into a device server's address space.
+/// The kernel enforces CapDevice MMIO bounds on every call — addresses outside
+/// the capability's mmio_base_address..mmio_base_address+mmio_size window are
+/// rejected with CapabilityError::OutOfBounds (INV-DEV-001).
+/// Requires a CapDevice capability with Write rights.
+pub const SYSCALL_NUMBER_DEVICE_MAP_MMIO: u64 = 9;
+
+/// Syscall number for sys_irq_bind.
+///
+/// Binds a device IRQ line to an IPC endpoint for interrupt delivery.
+/// When the IRQ fires, the kernel delivers a notification to the bound endpoint.
+/// The device server receives interrupt events by ipc_receive on that endpoint.
+/// Requires a CapIrq capability (INV-DEV-003: interrupt authority is explicit).
+pub const SYSCALL_NUMBER_IRQ_BIND: u64 = 10;
+
 /// Virtual address where the kernel maps server binary code segments.
 ///
 /// Server ELF PT_LOAD segments with executable permission are placed at this base.
