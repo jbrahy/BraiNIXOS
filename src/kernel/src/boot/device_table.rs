@@ -27,6 +27,34 @@ pub const VIRTIO_BLK_MMIO_SIZE: u32 = 0x1000;
 /// IRQ number assigned to the virtio-blk-pci device in QEMU.
 pub const VIRTIO_BLK_IRQ_NUMBER: u8 = 10;
 
+/// Static DeviceCapabilityData for the NIC device.
+///
+/// Stored in kernel read-only data. Its address is written into the
+/// CapabilitySlot.object_pointer field when devd-nic's CapDevice is granted
+/// at boot, so Phase 9 syscall handlers can recover the MMIO bounds.
+///
+/// Mitigates T-DEV-018: CapDevice payload is associated at grant time.
+pub static NIC_DEVICE_CAPABILITY_DATA: DeviceCapabilityData = DeviceCapabilityData {
+    device_type: DeviceType::NetworkInterface,
+    mmio_base_address: VIRTIO_NET_MMIO_BASE_ADDRESS,
+    mmio_size: VIRTIO_NET_MMIO_SIZE,
+    irq_set: [VIRTIO_NET_IRQ_NUMBER, IRQ_NONE, IRQ_NONE, IRQ_NONE],
+};
+
+/// Static DeviceCapabilityData for the disk device.
+///
+/// Stored in kernel read-only data. Its address is written into the
+/// CapabilitySlot.object_pointer field when devd-disk's CapDevice is granted
+/// at boot, so Phase 9 syscall handlers can recover the MMIO bounds.
+///
+/// Mitigates T-DEV-018: CapDevice payload is associated at grant time.
+pub static DISK_DEVICE_CAPABILITY_DATA: DeviceCapabilityData = DeviceCapabilityData {
+    device_type: DeviceType::BlockStorage,
+    mmio_base_address: VIRTIO_BLK_MMIO_BASE_ADDRESS,
+    mmio_size: VIRTIO_BLK_MMIO_SIZE,
+    irq_set: [VIRTIO_BLK_IRQ_NUMBER, IRQ_NONE, IRQ_NONE, IRQ_NONE],
+};
+
 /// Builds the DeviceCapabilityData for the virtio-net-pci NIC device.
 ///
 /// Returns a DeviceCapabilityData scoped to the NIC's MMIO region and IRQ.
@@ -58,9 +86,9 @@ pub fn build_disk_device_capability_data() -> DeviceCapabilityData {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_disk_device_capability_data, build_nic_device_capability_data,
-        VIRTIO_BLK_IRQ_NUMBER, VIRTIO_BLK_MMIO_BASE_ADDRESS, VIRTIO_BLK_MMIO_SIZE,
-        VIRTIO_NET_IRQ_NUMBER, VIRTIO_NET_MMIO_BASE_ADDRESS, VIRTIO_NET_MMIO_SIZE,
+        build_disk_device_capability_data, build_nic_device_capability_data, VIRTIO_BLK_IRQ_NUMBER,
+        VIRTIO_BLK_MMIO_BASE_ADDRESS, VIRTIO_BLK_MMIO_SIZE, VIRTIO_NET_IRQ_NUMBER,
+        VIRTIO_NET_MMIO_BASE_ADDRESS, VIRTIO_NET_MMIO_SIZE,
     };
     use crate::capability::device_capability::{DeviceType, IRQ_NONE};
 

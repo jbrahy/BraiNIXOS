@@ -6,6 +6,7 @@ use crate::arch::paging::kernel_page_table::{
 };
 use crate::arch::paging::stack_guard::configure_kernel_stack_guard_page;
 use crate::arch::paging::user_page_table::build_user_page_table;
+use crate::boot::device_table::{DISK_DEVICE_CAPABILITY_DATA, NIC_DEVICE_CAPABILITY_DATA};
 use crate::boot::hardware_security_init::{
     finalize_hardware_security, initialize_hardware_security,
 };
@@ -215,45 +216,53 @@ fn launch_device_server_processes(boot_step_logger: &mut BootStepLogger) {
 /// Creates the devd-nic server process and grants CapDevice for the NIC.
 ///
 /// Per D-01: kernel grants CapDevice directly — no spawnd involvement.
+/// Mitigates T-DEV-018: object_pointer holds the NIC DeviceCapabilityData address.
 /// Enforces INV-DEV-002: NIC server receives only NIC-scoped authority.
 fn launch_devd_nic_server_process() {
     let _ = create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000);
-    let mut nic_capability_space = CapabilitySpace::new();
-    // GAP(Phase 9): CapabilityType::Device is granted without associating a
-    // DeviceCapabilityData payload (MMIO base, size, IRQ set). The
-    // build_nic_device_capability_data() function exists in device_table.rs
-    // and is tested, but CapabilitySlot has no payload field yet and the boot
-    // grant does not call it. Phase 9 must add the payload field to
-    // CapabilitySlot and wire build_nic_device_capability_data() here so the
-    // syscall bounds check has a non-zero MMIO range to validate against.
+    let mut capability_space = CapabilitySpace::new();
     grant_initial_capability_to_server(
-        &mut nic_capability_space,
+        &mut capability_space,
         0,
         CapabilityType::Device,
         capability_rights::READ | capability_rights::WRITE,
     );
+    wire_nic_device_data_into_slot(&mut capability_space);
+}
+
+/// Sets the NIC DeviceCapabilityData address in slot 0's object_pointer.
+///
+/// Stores the address of the static NIC_DEVICE_CAPABILITY_DATA so Phase 9
+/// syscall handlers can recover MMIO bounds without a separate lookup table.
+fn wire_nic_device_data_into_slot(capability_space: &mut CapabilitySpace) {
+    let slot = capability_space.lookup_slot_mut(0);
+    slot.object_pointer = core::ptr::addr_of!(NIC_DEVICE_CAPABILITY_DATA) as u64;
 }
 
 /// Creates the devd-disk server process and grants CapDevice for the disk.
 ///
 /// Per D-01: kernel grants CapDevice directly — no spawnd involvement.
+/// Mitigates T-DEV-018: object_pointer holds the disk DeviceCapabilityData address.
 /// Enforces INV-DEV-002: disk server receives only disk-scoped authority.
 fn launch_devd_disk_server_process() {
     let _ = create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000);
-    let mut disk_capability_space = CapabilitySpace::new();
-    // GAP(Phase 9): CapabilityType::Device is granted without associating a
-    // DeviceCapabilityData payload (MMIO base, size, IRQ set). The
-    // build_disk_device_capability_data() function exists in device_table.rs
-    // and is tested, but CapabilitySlot has no payload field yet and the boot
-    // grant does not call it. Phase 9 must add the payload field to
-    // CapabilitySlot and wire build_disk_device_capability_data() here so the
-    // syscall bounds check has a non-zero MMIO range to validate against.
+    let mut capability_space = CapabilitySpace::new();
     grant_initial_capability_to_server(
-        &mut disk_capability_space,
+        &mut capability_space,
         0,
         CapabilityType::Device,
         capability_rights::READ | capability_rights::WRITE,
     );
+    wire_disk_device_data_into_slot(&mut capability_space);
+}
+
+/// Sets the disk DeviceCapabilityData address in slot 0's object_pointer.
+///
+/// Stores the address of the static DISK_DEVICE_CAPABILITY_DATA so Phase 9
+/// syscall handlers can recover MMIO bounds without a separate lookup table.
+fn wire_disk_device_data_into_slot(capability_space: &mut CapabilitySpace) {
+    let slot = capability_space.lookup_slot_mut(0);
+    slot.object_pointer = core::ptr::addr_of!(DISK_DEVICE_CAPABILITY_DATA) as u64;
 }
 
 fn log_kernel_banner(boot_step_logger: &mut BootStepLogger) {

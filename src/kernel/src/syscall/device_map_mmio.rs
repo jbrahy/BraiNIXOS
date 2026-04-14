@@ -11,13 +11,14 @@
 
 /// Handles the sys_device_map_mmio system call.
 ///
-/// Phase 8 stub: returns 0 unconditionally. The validation path
-/// (validate_mmio_mapping_request) exists and is tested in isolation but is
-/// not yet called from this handler. Syscall register arguments are not yet
-/// plumbed. Phase 9 will wire the CapDevice bounds check and PTE mapping.
+/// Returns -1 (fail closed) until Phase 9 plumbs register arguments and the
+/// process table required to look up the caller's CapDevice and call
+/// validate_mmio_mapping_request. Failing closed prevents any false success
+/// from being observed by callers before full validation is wired.
 ///
+/// Mitigates T-DEV-011: non-Device capability cannot cause a mapping.
 /// Enforces INV-DEV-001: devices do not imply universal memory authority.
 /// Verified by: test_device_capability_is_scoped_to_specific_mmio_range
 pub fn handle_device_map_mmio_syscall() -> i64 {
-    0
+    -1
 }

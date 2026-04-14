@@ -8,14 +8,14 @@
 
 /// Handles the sys_irq_bind system call.
 ///
-/// Phase 8 stub: returns 0 unconditionally. The validation path
-/// (is_irq_in_device_set, bind_irq_to_endpoint) exists and is tested in
-/// isolation but is not yet called from this handler. Syscall register
-/// arguments are not yet plumbed. Phase 9 will wire the CapIrq check,
-/// irq_set membership validation, and IRQ binding table registration.
+/// Returns -1 (fail closed) until Phase 9 plumbs register arguments and the
+/// process table required to call is_irq_in_device_set and
+/// bind_irq_to_endpoint. Failing closed prevents any IRQ binding from
+/// succeeding before irq_set membership is validated.
 ///
-/// Enforces INV-DEV-003: interrupt authority is explicit.
+/// Mitigates T-DEV-012: IRQ not in device's irq_set cannot be bound.
+/// Enforces INV-DEV-003: interrupt authority is explicit and typed.
 /// Verified by: test_device_irq_capability_is_not_global
 pub fn handle_irq_bind_syscall() -> i64 {
-    0
+    -1
 }
