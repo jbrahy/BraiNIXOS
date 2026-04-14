@@ -80,6 +80,13 @@ impl IrqBindingTable {
     }
 }
 
+impl Default for IrqBindingTable {
+    /// Returns a default IrqBindingTable with all entries inactive and empty.
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Returns true if irq_number appears in the device's irq_set and is not IRQ_NONE.
 ///
 /// Enforces INV-DEV-003: interrupt authority is explicit — the IRQ number must
@@ -134,7 +141,7 @@ fn find_active_binding_index(table: &IrqBindingTable, irq_number: u8) -> Option<
         if is_active_match && found_index.is_none() {
             found_index = Some(slot_index);
         }
-        slot_index += 1;
+        slot_index = slot_index.wrapping_add(1);
     }
     found_index
 }
@@ -148,7 +155,7 @@ fn find_inactive_slot_index(table: &IrqBindingTable) -> Option<usize> {
         if slot_is_inactive && found_index.is_none() {
             found_index = Some(slot_index);
         }
-        slot_index += 1;
+        slot_index = slot_index.wrapping_add(1);
     }
     found_index
 }

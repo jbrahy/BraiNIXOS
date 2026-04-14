@@ -19,7 +19,10 @@ use crate::ipc::{
     SYSCALL_NUMBER_IPC_CALL, SYSCALL_NUMBER_IPC_RECEIVE, SYSCALL_NUMBER_IPC_SEND,
     SYSCALL_NUMBER_NOTIFY_POLL, SYSCALL_NUMBER_NOTIFY_SIGNAL, SYSCALL_NUMBER_NOTIFY_WAIT,
 };
-use brainix_libsyscall::{SYSCALL_NUMBER_AUDIT_READ, SYSCALL_NUMBER_PROCESS_EXIT};
+use brainix_libsyscall::{
+    SYSCALL_NUMBER_AUDIT_READ, SYSCALL_NUMBER_DEVICE_MAP_MMIO, SYSCALL_NUMBER_IRQ_BIND,
+    SYSCALL_NUMBER_PROCESS_EXIT,
+};
 
 /// Issues LFENCE then routes IPC syscall numbers (1-3) to their handlers.
 ///
@@ -73,6 +76,22 @@ fn handle_process_exit_dispatch() -> Option<i64> {
     super::process_exit::handle_process_exit_syscall();
 }
 
+/// Issues LFENCE then routes device syscall numbers (9-10) to their handlers.
+///
+/// The LFENCE barrier prevents speculative execution of device dispatch with an
+/// attacker-controlled syscall number. Mitigates T-DEV-010 (speculative execution
+/// of device syscall). Follows the D-02 pattern established in handle_ipc_range_syscall.
+///
+/// Returns `Some(result)` for a recognized device number, `None` otherwise.
+fn handle_device_range_syscall(syscall_number: u64) -> Option<i64> {
+    issue_speculative_load_barrier();
+    match syscall_number {
+        SYSCALL_NUMBER_DEVICE_MAP_MMIO => Some(super::device_map_mmio::handle_device_map_mmio_syscall()),
+        SYSCALL_NUMBER_IRQ_BIND => Some(super::irq_bind::handle_irq_bind_syscall()),
+        _ => None,
+    }
+}
+
 /// Routes a syscall to its handler based on `syscall_number` (passed from rax).
 ///
 /// Returns 0 for success, a negative discriminant for IpcError, or -1 for an
@@ -97,6 +116,7 @@ pub unsafe extern "C" fn dispatch_syscall(syscall_number: u64) -> i64 {
     handle_ipc_range_syscall(syscall_number)
         .or_else(|| handle_notify_range_syscall(syscall_number))
         .or_else(|| handle_process_lifecycle_syscall(syscall_number))
+        .or_else(|| handle_device_range_syscall(syscall_number))
         .unwrap_or(-1)
 }
 
