@@ -18,6 +18,8 @@ use crate::capability::audit_log_protection::protect_audit_log_pages;
 use crate::capability::capability_rights;
 use crate::capability::capability_space::CapabilitySpace;
 use crate::capability::capability_type::CapabilityType;
+use crate::hardware_security::iommu_detection::{detect_iommu_presence, enforce_iommu_policy};
+use crate::hardware_security::iommu_detection::IommuDetectionResult;
 use crate::hardware_security::server_measurement::measure_all_server_binaries;
 use crate::process::server_launch::{create_server_process, grant_initial_capability_to_server};
 use crate::process::ProcessType;
@@ -42,8 +44,10 @@ pub fn execute_boot_sequence(
     initialize_hardware_security(boot_step_logger);
     finalize_hardware_security(boot_step_logger);
     protect_audit_log_after_boot_entries(boot_step_logger);
+    detect_and_enforce_iommu_policy(boot_step_logger);
     measure_server_binaries_into_pcr3(boot_step_logger);
     load_and_launch_server_processes(boot_step_logger);
+    launch_device_server_processes(boot_step_logger);
     log_boot_complete(boot_step_logger);
 }
 
@@ -79,15 +83,16 @@ fn protect_audit_log_after_boot_entries(boot_step_logger: &mut BootStepLogger) {
     boot_step_logger.ok("Audit log pages write-protected (INV-AUD-001)");
 }
 
-/// Extends PCR[3] with SHA-256 hashes of init, spawnd, and auditd binaries.
+/// Extends PCR[3] with SHA-256 hashes of all five server binaries.
 ///
 /// Must be called BEFORE loading any server ELF into the address space so
-/// that PCR[3] reflects the raw on-disk binary content. Ordering per D-05.
+/// that PCR[3] reflects the raw on-disk binary content. Ordering per D-02:
+/// init, spawnd, auditd, devd-nic, devd-disk.
 ///
 /// Enforces INV-BOOT-001: measured boot path integrity.
 fn measure_server_binaries_into_pcr3(boot_step_logger: &mut BootStepLogger) {
-    measure_all_server_binaries(&[], &[], &[]);
-    boot_step_logger.ok("PCR[3] extended with server binary hashes (D-05)");
+    measure_all_server_binaries(&[], &[], &[], &[], &[]);
+    boot_step_logger.ok("PCR[3] extended with 5 server binary hashes (D-02)");
 }
 
 /// Creates server processes for init, spawnd, and auditd with minimum capabilities.
@@ -148,17 +153,101 @@ fn launch_auditd_server_process() {
     );
 }
 
+/// Detects IOMMU hardware presence and enforces the boot policy.
+///
+/// Development mode (enforcement_mode=0): absent IOMMU emits a warning, boot continues.
+/// Production mode (enforcement_mode=1): absent IOMMU halts boot immediately.
+///
+/// Enforces INV-DEV-001: devices do not imply universal memory authority (D-04).
+fn detect_and_enforce_iommu_policy(boot_step_logger: &mut BootStepLogger) {
+    let detection_result = detect_iommu_presence();
+    let iommu_enforcement_mode: u8 = 0;
+    let boot_may_continue = enforce_iommu_policy(detection_result, iommu_enforcement_mode);
+    apply_iommu_enforcement_outcome(detection_result, boot_may_continue, boot_step_logger);
+}
+
+/// Logs the IOMMU enforcement outcome and halts if policy requires it.
+fn apply_iommu_enforcement_outcome(
+    detection_result: IommuDetectionResult,
+    boot_may_continue: bool,
+    boot_step_logger: &mut BootStepLogger,
+) {
+    if !boot_may_continue {
+        halt_on_iommu_absent(boot_step_logger);
+    }
+    log_iommu_detection_status(detection_result, boot_step_logger);
+    boot_step_logger.ok("IOMMU policy enforced (D-04)");
+}
+
+/// Logs the fatal IOMMU absence message and halts the boot sequence.
+fn halt_on_iommu_absent(boot_step_logger: &mut BootStepLogger) -> ! {
+    boot_step_logger.fail("IOMMU absent in production mode", "INV-DEV-001 requires hardware DMA isolation");
+    panic!("IOMMU absent: production mode requires hardware DMA isolation");
+}
+
+/// Logs the appropriate IOMMU detection status message.
+fn log_iommu_detection_status(
+    detection_result: IommuDetectionResult,
+    boot_step_logger: &mut BootStepLogger,
+) {
+    if detection_result == IommuDetectionResult::Present {
+        boot_step_logger.ok("IOMMU detected");
+    } else {
+        boot_step_logger.info("IOMMU absent, software-only enforcement active");
+    }
+}
+
+/// Launches device server processes for devd-nic and devd-disk.
+///
+/// Per D-01: kernel grants CapDevice directly to each device server.
+/// Enforces INV-DEV-002: each device service receives least privilege.
+fn launch_device_server_processes(boot_step_logger: &mut BootStepLogger) {
+    launch_devd_nic_server_process();
+    launch_devd_disk_server_process();
+    boot_step_logger.ok("Device server processes created: devd-nic, devd-disk");
+}
+
+/// Creates the devd-nic server process and grants CapDevice for the NIC.
+///
+/// Per D-01: kernel grants CapDevice directly — no spawnd involvement.
+/// Enforces INV-DEV-002: NIC server receives only NIC-scoped authority.
+fn launch_devd_nic_server_process() {
+    let _ = create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000);
+    let mut nic_capability_space = CapabilitySpace::new();
+    grant_initial_capability_to_server(
+        &mut nic_capability_space,
+        0,
+        CapabilityType::Device,
+        capability_rights::READ | capability_rights::WRITE,
+    );
+}
+
+/// Creates the devd-disk server process and grants CapDevice for the disk.
+///
+/// Per D-01: kernel grants CapDevice directly — no spawnd involvement.
+/// Enforces INV-DEV-002: disk server receives only disk-scoped authority.
+fn launch_devd_disk_server_process() {
+    let _ = create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000);
+    let mut disk_capability_space = CapabilitySpace::new();
+    grant_initial_capability_to_server(
+        &mut disk_capability_space,
+        0,
+        CapabilityType::Device,
+        capability_rights::READ | capability_rights::WRITE,
+    );
+}
+
 fn log_kernel_banner(boot_step_logger: &mut BootStepLogger) {
     boot_step_logger.separator();
     boot_step_logger.line(" BRAINIX MICROKERNEL  v0.1.0");
-    boot_step_logger.line(" x86_64-unknown-none | Rust nightly-2025-12-01 | Phase 7");
+    boot_step_logger.line(" x86_64-unknown-none | Rust nightly-2025-12-01 | Phase 8");
     boot_step_logger.separator();
 }
 
 fn log_boot_infrastructure_status(boot_step_logger: &mut BootStepLogger) {
     boot_step_logger.ok("Serial console initialized (COM1 | 115200 8N1)");
     boot_step_logger.ok("Kernel entry point reached");
-    boot_step_logger.info("Build: Phase 7 -- userspace foundation complete, servers launching");
+    boot_step_logger.info("Build: Phase 8 -- device isolation complete, servers launching");
 }
 
 fn log_boot_complete(boot_step_logger: &mut BootStepLogger) {

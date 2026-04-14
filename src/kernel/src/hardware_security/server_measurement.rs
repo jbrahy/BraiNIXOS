@@ -36,14 +36,23 @@ pub fn measure_server_binary_into_pcr3(binary_bytes: &[u8]) -> Result<(), TpmErr
     extend_platform_configuration_register(PCR_INDEX_SERVER_BINARIES, &binary_hash)
 }
 
-/// Extends init, spawnd, and auditd binary hashes into PCR[3] in order.
+/// Extends init, spawnd, auditd, devd-nic, and devd-disk binary hashes into PCR[3] in order.
 ///
-/// Three sequential extends into PCR[3] per D-05. TPM errors are
-/// tolerated during development — swtpm may not be present on host.
-pub fn measure_all_server_binaries(init_binary: &[u8], spawnd_binary: &[u8], auditd_binary: &[u8]) {
+/// Five sequential extends into PCR[3] per D-02 ordering: init, spawnd, auditd,
+/// devd-nic, devd-disk. TPM errors are tolerated during development — swtpm may
+/// not be present on host. Any change to any server binary changes PCR[3].
+pub fn measure_all_server_binaries(
+    init_binary: &[u8],
+    spawnd_binary: &[u8],
+    auditd_binary: &[u8],
+    devd_nic_binary: &[u8],
+    devd_disk_binary: &[u8],
+) {
     let _ = measure_server_binary_into_pcr3(init_binary);
     let _ = measure_server_binary_into_pcr3(spawnd_binary);
     let _ = measure_server_binary_into_pcr3(auditd_binary);
+    let _ = measure_server_binary_into_pcr3(devd_nic_binary);
+    let _ = measure_server_binary_into_pcr3(devd_disk_binary);
 }
 
 #[cfg(test)]
