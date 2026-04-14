@@ -45,6 +45,8 @@ The following table is the exhaustive list of source locations where `unsafe` is
 | `src/servers/libsyscall/src/lib.rs` | Userspace syscall wrappers require inline assembly for the SYSCALL instruction. No safe Rust abstraction exists for the userspace side of the SYSCALL ABI. | Inline assembly (`core::arch::asm!`) for SYSCALL instruction wrappers with register constraints |
 | `src/kernel/src/capability/audit_log_protection.rs` | Write-protecting audit log pages requires modifying PTE write bits and issuing INVLPG. Already stubbed in Phase 3 with TODO(Phase 7). | PTE write-bit clear/set via page table entry manipulation, `invlpg` instruction for TLB invalidation |
 | `src/kernel/src/boot/server_measurement.rs` | PCR[3] measurement reads raw server binary bytes from multiboot2 module physical addresses for SHA-256 hashing. | Reading server binary bytes from physical addresses provided by multiboot2 module tags |
+| `src/kernel/src/syscall/device_map_mmio.rs` | Mapping device MMIO into a process address space requires writing to page table entries with device-specific physical addresses. This is inherently unsafe and has no safe Rust abstraction on bare metal. | PTE manipulation for MMIO mapping, raw physical address to page table entry conversion |
+| `src/kernel/src/hardware_security/iommu_detection.rs` | Reading the ACPI DMAR table requires dereferencing a firmware-provided physical address. The table location comes from the ACPI RSDP/RSDT chain. No safe abstraction exists for reading firmware tables on bare metal. | Raw pointer dereference over ACPI RSDP/RSDT/DMAR table memory, reading DMAR signature bytes |
 
 ### Allowlist Scope Rules
 
