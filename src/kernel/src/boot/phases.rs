@@ -18,8 +18,8 @@ use crate::capability::audit_log_protection::protect_audit_log_pages;
 use crate::capability::capability_rights;
 use crate::capability::capability_space::CapabilitySpace;
 use crate::capability::capability_type::CapabilityType;
-use crate::hardware_security::iommu_detection::{detect_iommu_presence, enforce_iommu_policy};
 use crate::hardware_security::iommu_detection::IommuDetectionResult;
+use crate::hardware_security::iommu_detection::{detect_iommu_presence, enforce_iommu_policy};
 use crate::hardware_security::server_measurement::measure_all_server_binaries;
 use crate::process::server_launch::{create_server_process, grant_initial_capability_to_server};
 use crate::process::ProcessType;
@@ -180,8 +180,13 @@ fn apply_iommu_enforcement_outcome(
 }
 
 /// Logs the fatal IOMMU absence message and halts the boot sequence.
+// INV-DEV-001: panic! is the kernel halt mechanism on bare-metal (-> !).
+#[allow(clippy::panic)]
 fn halt_on_iommu_absent(boot_step_logger: &mut BootStepLogger) -> ! {
-    boot_step_logger.fail("IOMMU absent in production mode", "INV-DEV-001 requires hardware DMA isolation");
+    boot_step_logger.fail(
+        "IOMMU absent in production mode",
+        "INV-DEV-001 requires hardware DMA isolation",
+    );
     panic!("IOMMU absent: production mode requires hardware DMA isolation");
 }
 
