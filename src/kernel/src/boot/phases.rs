@@ -214,6 +214,13 @@ fn launch_device_server_processes(boot_step_logger: &mut BootStepLogger) {
 fn launch_devd_nic_server_process() {
     let _ = create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000);
     let mut nic_capability_space = CapabilitySpace::new();
+    // GAP(Phase 9): CapabilityType::Device is granted without associating a
+    // DeviceCapabilityData payload (MMIO base, size, IRQ set). The
+    // build_nic_device_capability_data() function exists in device_table.rs
+    // and is tested, but CapabilitySlot has no payload field yet and the boot
+    // grant does not call it. Phase 9 must add the payload field to
+    // CapabilitySlot and wire build_nic_device_capability_data() here so the
+    // syscall bounds check has a non-zero MMIO range to validate against.
     grant_initial_capability_to_server(
         &mut nic_capability_space,
         0,
@@ -229,6 +236,13 @@ fn launch_devd_nic_server_process() {
 fn launch_devd_disk_server_process() {
     let _ = create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000);
     let mut disk_capability_space = CapabilitySpace::new();
+    // GAP(Phase 9): CapabilityType::Device is granted without associating a
+    // DeviceCapabilityData payload (MMIO base, size, IRQ set). The
+    // build_disk_device_capability_data() function exists in device_table.rs
+    // and is tested, but CapabilitySlot has no payload field yet and the boot
+    // grant does not call it. Phase 9 must add the payload field to
+    // CapabilitySlot and wire build_disk_device_capability_data() here so the
+    // syscall bounds check has a non-zero MMIO range to validate against.
     grant_initial_capability_to_server(
         &mut disk_capability_space,
         0,

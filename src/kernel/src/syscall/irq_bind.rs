@@ -8,10 +8,11 @@
 
 /// Handles the sys_irq_bind system call.
 ///
-/// Phase 8 establishes the validation path: check CapIrq type, check the IRQ
-/// is in the device's irq_set via is_irq_in_device_set, then register in
-/// the IRQ binding table via bind_irq_to_endpoint. Full interrupt delivery
-/// wiring from the IRQ handler to the endpoint is completed in Phase 9.
+/// Phase 8 stub: returns 0 unconditionally. The validation path
+/// (is_irq_in_device_set, bind_irq_to_endpoint) exists and is tested in
+/// isolation but is not yet called from this handler. Syscall register
+/// arguments are not yet plumbed. Phase 9 will wire the CapIrq check,
+/// irq_set membership validation, and IRQ binding table registration.
 ///
 /// Enforces INV-DEV-003: interrupt authority is explicit.
 /// Verified by: test_device_irq_capability_is_not_global

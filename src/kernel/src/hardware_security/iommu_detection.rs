@@ -50,6 +50,7 @@ pub fn detect_iommu_presence() -> IommuDetectionResult {
 /// Returns IOMMU detection result for the current compile target.
 #[cfg(target_arch = "x86_64")]
 fn detect_iommu_presence_for_target() -> IommuDetectionResult {
+    // TODO(Phase 9): ACPI DMAR traversal not yet implemented. Currently always returns Absent.
     IommuDetectionResult::Absent
 }
 

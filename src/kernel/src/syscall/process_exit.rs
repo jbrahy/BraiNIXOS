@@ -226,13 +226,4 @@ mod tests {
         assert!(exit_record.thread_deallocated, "thread must be deallocated on process exit");
         assert!(exit_record.removed_from_scheduler, "process must be removed from scheduler");
     }
-
-    /// Verifies that allocate_thread_pool_slot returns distinct indices for distinct calls.
-    ///
-    /// Enforces that multiple device servers receive non-overlapping thread pool slots.
-    /// Full pool allocation wired in Phase 8 Plan 02.
-    #[test]
-    fn test_allocate_thread_pool_slot_returns_distinct_indices() {
-        assert!(true);
-    }
 }
