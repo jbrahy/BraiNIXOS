@@ -1,8 +1,8 @@
-# Brainix Release and Signing Policy
+# BraiNIX Release and Signing Policy
 
 ## Purpose
 
-This document defines the release signing process, key management, binary authentication, and rollback protection mechanisms for Brainix. It specifies the signing algorithm, key types, key separation rules, the binary signing workflow, and emergency procedures.
+This document defines the release signing process, key management, binary authentication, and rollback protection mechanisms for BraiNIX. It specifies the signing algorithm, key types, key separation rules, the binary signing workflow, and emergency procedures.
 
 This is an authoritative specification. If code or configuration diverges from this document, the document must be updated in the same PR that introduces the change.
 
@@ -10,7 +10,7 @@ This is an authoritative specification. If code or configuration diverges from t
 
 ## 1. Signing Algorithm
 
-Brainix uses **Ed25519** exclusively for all binary signing operations.
+BraiNIX uses **Ed25519** exclusively for all binary signing operations.
 
 - No RSA signatures.
 - No ECDSA signatures.
@@ -33,7 +33,7 @@ Ed25519 is chosen for its combination of small signatures, fast verification (cr
 
 ## 2. Key Types
 
-Three distinct key types exist in the Brainix signing ecosystem. Each key type has a defined purpose, storage location, and usage constraint.
+Three distinct key types exist in the BraiNIX signing ecosystem. Each key type has a defined purpose, storage location, and usage constraint.
 
 | Key Type | Purpose | Storage | Usage Constraint |
 |----------|---------|---------|-----------------|
@@ -298,4 +298,4 @@ Development key compromise does not affect production security (keys are structu
 ---
 
 *Last updated: 2026-04-11*
-*This document is the authoritative specification for Brainix release signing.*
+*This document is the authoritative specification for BraiNIX release signing.*

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Brainix dev container and start it with SSH on port 2222.
+# Build the BraiNIX dev container and start it with SSH on port 2222.
 #
 # Usage:
 #   bin/deploy-docker.sh              — build image and start container

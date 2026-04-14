@@ -1,4 +1,4 @@
-# Brainix Development Access
+# BraiNIX Development Access
 
 ## Local Test Suite
 

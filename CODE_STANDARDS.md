@@ -1,16 +1,16 @@
-# CODE_STANDARDS.md — Brainix Coding Standards
+# CODE_STANDARDS.md — BraiNIX Coding Standards
 
 **Status:** Mandatory
-**Applies to:** All Brainix-authored Rust source code in this repository
+**Applies to:** All BraiNIX-authored Rust source code in this repository
 **Does not apply to:** Names exported by external crates consumed as dependencies
 
-These standards exist to make every line of Brainix code readable, auditable, and independently testable. Security code that cannot be read cannot be reviewed. Code that cannot be reviewed cannot be trusted.
+These standards exist to make every line of BraiNIX code readable, auditable, and independently testable. Security code that cannot be read cannot be reviewed. Code that cannot be reviewed cannot be trusted.
 
 ---
 
 ## Rule 1: Full-Word Names Only
 
-Every variable, function, method, type, field, constant, module, and lifetime name must use complete English words. No abbreviations, contractions, acronym-based names, or truncations are permitted in Brainix-authored code.
+Every variable, function, method, type, field, constant, module, and lifetime name must use complete English words. No abbreviations, contractions, acronym-based names, or truncations are permitted in BraiNIX-authored code.
 
 ### Required
 
@@ -70,7 +70,7 @@ let n = ...;                // single-letter (use "count")
 
 ### External Crate Exception
 
-Names that originate in external crates are used exactly as the crate defines them. You may bind an external crate's type to a Brainix-authored variable with a full-word name:
+Names that originate in external crates are used exactly as the crate defines them. You may bind an external crate's type to a BraiNIX-authored variable with a full-word name:
 
 ```rust
 // Allowed: external crate type used as-is
@@ -244,4 +244,4 @@ Violations are treated as defects, not style preferences. A function with abbrev
 ---
 
 *Last updated: 2026-04-11*
-*These rules apply to all Brainix code from this date forward.*
+*These rules apply to all BraiNIX code from this date forward.*

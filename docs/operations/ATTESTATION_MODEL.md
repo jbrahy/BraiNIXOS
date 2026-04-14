@@ -1,8 +1,8 @@
-# Brainix Attestation Model
+# BraiNIX Attestation Model
 
 ## Purpose
 
-This document defines the measured boot process, TPM PCR layout, attestation gate, quote format, and rollback protection for Brainix. It specifies how the system establishes a chain of trust from firmware through kernel to userspace servers, and how remote verifiers can confirm the integrity of a running Brainix instance.
+This document defines the measured boot process, TPM PCR layout, attestation gate, quote format, and rollback protection for BraiNIX. It specifies how the system establishes a chain of trust from firmware through kernel to userspace servers, and how remote verifiers can confirm the integrity of a running BraiNIX instance.
 
 This is an authoritative specification. If code or configuration diverges from this document, the document must be updated in the same PR that introduces the change.
 
@@ -10,7 +10,7 @@ This is an authoritative specification. If code or configuration diverges from t
 
 ## 1. PCR Layout
 
-Brainix uses four TPM 2.0 Platform Configuration Registers (PCRs) to record the measurement chain from firmware to userspace servers. Each PCR is a SHA-256 digest (32 bytes) that is extended (not overwritten) with each new measurement.
+BraiNIX uses four TPM 2.0 Platform Configuration Registers (PCRs) to record the measurement chain from firmware to userspace servers. Each PCR is a SHA-256 digest (32 bytes) that is extended (not overwritten) with each new measurement.
 
 | PCR | Contents | Measured By | When |
 |-----|----------|------------|------|
@@ -60,19 +60,19 @@ The measurement chain proceeds in strict sequential order. Each step must comple
 
 ### Step A: Firmware Self-Measurement
 
-The platform firmware (UEFI) measures itself into PCR[0]. This step is performed by the firmware before any Brainix code executes. Brainix trusts this measurement as part of the platform's root of trust.
+The platform firmware (UEFI) measures itself into PCR[0]. This step is performed by the firmware before any BraiNIX code executes. BraiNIX trusts this measurement as part of the platform's root of trust.
 
 In production, this measurement corresponds to the UEFI firmware image hash. In development (QEMU), this measurement corresponds to the SeaBIOS or OVMF image hash.
 
 ### Step B: Bootloader Measurement
 
-The platform firmware measures the Brainix bootloader binary and extends the hash into PCR[1]. This happens before the bootloader receives control.
+The platform firmware measures the BraiNIX bootloader binary and extends the hash into PCR[1]. This happens before the bootloader receives control.
 
 In UEFI Secure Boot mode, this measurement is performed as part of the Secure Boot verification chain. The bootloader must be signed with a key trusted by the UEFI firmware.
 
 ### Step C: Kernel Measurement
 
-The Brainix bootloader performs the following before jumping to the kernel entry point:
+The BraiNIX bootloader performs the following before jumping to the kernel entry point:
 
 1. Load the kernel binary into memory at the expected physical address.
 2. Verify the kernel's Ed25519 signature (see `RELEASE_AND_SIGNING_POLICY.md` for key types and verification process).
@@ -113,7 +113,7 @@ A TPM quote is a signed assertion of PCR state, used for remote attestation.
 
 | Field | Type | Size | Description |
 |-------|------|------|-------------|
-| `pcr_selection` | Bitmask | 3 bytes | Selects which PCRs are included (PCR[0] through PCR[3] for Brainix) |
+| `pcr_selection` | Bitmask | 3 bytes | Selects which PCRs are included (PCR[0] through PCR[3] for BraiNIX) |
 | `pcr_digest` | SHA-256 | 32 bytes | Hash over the concatenation of selected PCR values: SHA-256(PCR[0] \|\| PCR[1] \|\| PCR[2] \|\| PCR[3]) |
 | `nonce` | Bytes | 32 bytes | Freshness value provided by the verifier to prevent replay |
 | `clock_info` | TPM clock | 16 bytes | TPM internal clock and reset count (tamper-evident monotonic time) |
@@ -132,13 +132,13 @@ Two signing schemes are used in the attestation model:
 
 2. **Attestation Identity:** The TPM's attestation key (AK) is an RSA key generated inside the TPM and certified by the TPM's endorsement key (EK). The AK never leaves the TPM.
 
-The use of RSA for TPM quotes is a TPM 2.0 hardware constraint, not a design choice. All Brainix-authored signing (binary signing, key management) uses Ed25519 as specified in `RELEASE_AND_SIGNING_POLICY.md`.
+The use of RSA for TPM quotes is a TPM 2.0 hardware constraint, not a design choice. All BraiNIX-authored signing (binary signing, key management) uses Ed25519 as specified in `RELEASE_AND_SIGNING_POLICY.md`.
 
 ---
 
 ## 4. Attestation Gate
 
-The attestation gate ensures that no network traffic is accepted by a Brainix instance before its integrity has been verified via TPM quote.
+The attestation gate ensures that no network traffic is accepted by a BraiNIX instance before its integrity has been verified via TPM quote.
 
 ### Gate Sequence
 
@@ -194,7 +194,7 @@ swtpm socket \
 In development mode, PCR values are deterministic for a given build:
 
 - **PCR[0]:** Determined by the QEMU firmware image (SeaBIOS or OVMF). This value changes only when the QEMU firmware image changes.
-- **PCR[1]:** SHA-256 hash of the Brainix bootloader binary (development build).
+- **PCR[1]:** SHA-256 hash of the BraiNIX bootloader binary (development build).
 - **PCR[2]:** SHA-256(SHA-256(0^32 || kernel_text_rodata_hash) || partition_table_hash). Determined by the kernel binary and partition table.
 - **PCR[3]:** Accumulated hashes of all server binaries in spawn order.
 
@@ -245,11 +245,11 @@ Production attestation uses a hardware TPM 2.0 chip soldered to the motherboard 
 
 ### Remote Attestation Sequence
 
-1. **Verifier sends challenge.** The remote verifier generates a cryptographically random 32-byte nonce and sends it to the Brainix instance over the pre-attestation channel.
+1. **Verifier sends challenge.** The remote verifier generates a cryptographically random 32-byte nonce and sends it to the BraiNIX instance over the pre-attestation channel.
 
-2. **Brainix generates quote.** The attestation service issues TPM2_Quote with the nonce and PCR selection (PCR[0-3]). The TPM signs the quote with its attestation key.
+2. **BraiNIX generates quote.** The attestation service issues TPM2_Quote with the nonce and PCR selection (PCR[0-3]). The TPM signs the quote with its attestation key.
 
-3. **Brainix sends quote to verifier.** The signed quote, along with the TPM's attestation key certificate chain, is sent to the verifier.
+3. **BraiNIX sends quote to verifier.** The signed quote, along with the TPM's attestation key certificate chain, is sent to the verifier.
 
 4. **Verifier validates.** See Section 8 for the full verification process.
 
@@ -257,7 +257,7 @@ Production attestation uses a hardware TPM 2.0 chip soldered to the motherboard 
 
 ### Known-Good PCR Values
 
-The verifier maintains a database of known-good PCR values for each Brainix release. This database is updated with each release:
+The verifier maintains a database of known-good PCR values for each BraiNIX release. This database is updated with each release:
 
 - PCR[0]: Per-platform firmware hash (maintained per hardware model)
 - PCR[1]: Bootloader binary hash (from release manifest)
@@ -268,15 +268,15 @@ The verifier maintains a database of known-good PCR values for each Brainix rele
 
 ## 7. Rollback Protection
 
-Rollback protection prevents booting an older, potentially vulnerable Brainix release on a system that has previously booted a newer release.
+Rollback protection prevents booting an older, potentially vulnerable BraiNIX release on a system that has previously booted a newer release.
 
 ### Mechanism
 
 A monotonic counter stored in TPM NVRAM serves as the rollback boundary:
 
-1. **Provisioning:** At initial TPM provisioning, an NVRAM index is allocated for the Brainix monotonic counter. The counter starts at 0.
+1. **Provisioning:** At initial TPM provisioning, an NVRAM index is allocated for the BraiNIX monotonic counter. The counter starts at 0.
 
-2. **Release counter value:** Each Brainix release binary embeds a counter value in its image header. This value is set at build time and incremented by exactly 1 for each production release.
+2. **Release counter value:** Each BraiNIX release binary embeds a counter value in its image header. This value is set at build time and incremented by exactly 1 for each production release.
 
 3. **Boot-time check:** During the boot measurement process (after PCR measurements, before the attestation gate):
    - The kernel reads the current counter value from TPM NVRAM.
@@ -298,11 +298,11 @@ This upholds INV-BOOT-004 (rollback policy is explicit).
 
 ## 8. Quote Verification
 
-The verifier process validates a TPM quote to confirm the integrity of a remote Brainix instance.
+The verifier process validates a TPM quote to confirm the integrity of a remote BraiNIX instance.
 
 ### Verification Steps
 
-1. **Receive quote.** The verifier receives the TPM quote message, signature, and attestation key certificate chain from the Brainix instance.
+1. **Receive quote.** The verifier receives the TPM quote message, signature, and attestation key certificate chain from the BraiNIX instance.
 
 2. **Validate certificate chain.** The verifier traces the attestation key certificate back to a trusted TPM manufacturer root certificate. If the chain is invalid or the root is not trusted, verification fails.
 
@@ -337,4 +337,4 @@ The verifier must maintain a list of trusted TPM manufacturer root certificates.
 ---
 
 *Last updated: 2026-04-11*
-*This document is the authoritative specification for Brainix attestation.*
+*This document is the authoritative specification for BraiNIX attestation.*

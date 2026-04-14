@@ -1,4 +1,4 @@
-//! TPM 2.0 interface for Brainix kernel.
+//! TPM 2.0 interface for BraiNIX kernel.
 //!
 //! Phase 6 Plans 03-05: Hand-rolled TPM 2.0 CRB/TIS MMIO interface. No external
 //! TPM crate is used -- no viable no_std TPM2 crate exists for bare-metal.

@@ -1,4 +1,4 @@
-# Brainix development environment
+# BraiNIX development environment
 #
 # Contains: Rust nightly (pinned), QEMU x86_64, OpenSSH server, build tools.
 # Run via:  bin/deploy-docker.sh

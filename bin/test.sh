@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bin/test.sh — Full local test suite for Brainix
+# bin/test.sh — Full local test suite for BraiNIX
 #
 # Covers all UAT checkpoints: unit tests, bare-metal check, clippy,
 # device crates, fuzz registration, grub.cfg entries, and syscall dispatch.
@@ -45,7 +45,7 @@ fi
 
 HOST_TARGET="$(rustc -vV 2>/dev/null | awk '/^host:/{print $2}')"
 
-printf "${BOLD}=== Brainix Test Suite ===${NC}\n"
+printf "${BOLD}=== BraiNIX Test Suite ===${NC}\n"
 printf "Toolchain: %s\n" "${TOOLCHAIN_CHANNEL:-unknown}"
 printf "Host target: %s\n" "${HOST_TARGET:-unknown}"
 

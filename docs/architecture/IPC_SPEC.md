@@ -1,8 +1,8 @@
-# Brainix IPC Specification
+# BraiNIX IPC Specification
 
 ## 1. Overview
 
-Brainix uses synchronous rendezvous IPC as the sole inter-process communication mechanism. All communication between processes is kernel-mediated. There is no shared memory, no zero-copy path, and no ambient messaging namespace.
+BraiNIX uses synchronous rendezvous IPC as the sole inter-process communication mechanism. All communication between processes is kernel-mediated. There is no shared memory, no zero-copy path, and no ambient messaging namespace.
 
 Synchronous rendezvous means:
 
@@ -242,7 +242,7 @@ Timeout processing is deterministic with respect to the scheduler tick. The kern
 
 ## 8. SYSCALL/SYSRET ABI
 
-Brainix uses the x86-64 `SYSCALL`/`SYSRET` instruction pair for fast-path kernel entry and exit. This section defines the register layout for IPC syscalls.
+BraiNIX uses the x86-64 `SYSCALL`/`SYSRET` instruction pair for fast-path kernel entry and exit. This section defines the register layout for IPC syscalls.
 
 ### Kernel Entry (SYSCALL)
 
@@ -337,7 +337,7 @@ All cancellation paths leave the system in a consistent state with no dangling r
 
 ## 10. Deadlock Prevention
 
-Synchronous rendezvous IPC creates a fundamental deadlock risk: if Process A calls Process B, and Process B calls Process A, both block forever (or until timeout). Brainix addresses this structurally.
+Synchronous rendezvous IPC creates a fundamental deadlock risk: if Process A calls Process B, and Process B calls Process A, both block forever (or until timeout). BraiNIX addresses this structurally.
 
 ### Acyclic Call Graph Rule
 

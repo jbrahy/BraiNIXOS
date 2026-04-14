@@ -1,4 +1,4 @@
-//! Brainix system call ABI definitions shared between the kernel and userspace servers.
+//! BraiNIX system call ABI definitions shared between the kernel and userspace servers.
 //!
 //! This crate defines the stable ABI boundary (D-09): all types crossing the syscall
 //! boundary are defined here once and imported by both the kernel and server crates.
@@ -18,7 +18,7 @@
 
 /// The process type assigned to each userspace server.
 ///
-/// This enum encodes the role of a process in the Brainix microkernel. The kernel
+/// This enum encodes the role of a process in the BraiNIX microkernel. The kernel
 /// uses the process type to determine which capabilities may be granted at spawn time.
 /// spawnd enforces that only whitelisted process types can be spawned (INV-SPAWN-001).
 #[repr(u8)]
@@ -76,7 +76,7 @@ pub const SYSCALL_NUMBER_IRQ_BIND: u64 = 10;
 /// Virtual address where the kernel maps server binary code segments.
 ///
 /// Server ELF PT_LOAD segments with executable permission are placed at this base.
-/// All Brainix servers are position-dependent static binaries loaded at this address.
+/// All BraiNIX servers are position-dependent static binaries loaded at this address.
 pub const SERVER_CODE_BASE_VIRTUAL_ADDRESS: u64 = 0x0000_0000_0040_0000;
 
 /// Virtual address of the top of the server process stack.

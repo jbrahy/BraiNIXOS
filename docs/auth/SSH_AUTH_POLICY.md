@@ -1,17 +1,17 @@
 # SSH_AUTH_POLICY.md
 
-# Brainix SSH Authentication Policy
+# BraiNIX SSH Authentication Policy
 ## Minimal, High-Assurance Remote Access Policy
 
 Version: 1.0  
 Status: Mandatory  
-Scope: Remote administration, local administration policy alignment, prototype implementation guidance, and production Brainix requirements
+Scope: Remote administration, local administration policy alignment, prototype implementation guidance, and production BraiNIX requirements
 
 ---
 
 ## 1. Purpose
 
-This document defines the Brainix authentication policy for remote SSH access.
+This document defines the BraiNIX authentication policy for remote SSH access.
 
 The policy is intentionally minimal:
 
@@ -21,7 +21,7 @@ The policy is intentionally minimal:
 - root access requires SSH public key **and** a second factor
 - the second factor for root is Google Authenticator-style OTP in the prototype
 - console login uses an enrolled USB security key created during installation
-- any third-party reference implementation is for prototype behavior only and must be rewritten for Brainix in Rust before production use
+- any third-party reference implementation is for prototype behavior only and must be rewritten for BraiNIX in Rust before production use
 
 This project explicitly prefers **less functionality over bloated code**. Any feature not required for secure administration is out of scope.
 
@@ -37,14 +37,14 @@ This project explicitly prefers **less functionality over bloated code**. Any fe
 6. Root OTP must not replace the SSH key. It is a second factor, not a substitute.
 7. Console login must require an enrolled USB security key. No console password login is permitted.
 8. Recovery must not silently downgrade authentication strength.
-9. Prototype external components may be used only as behavior references and must be replaced with Brainix-native Rust implementations for production.
+9. Prototype external components may be used only as behavior references and must be replaced with BraiNIX-native Rust implementations for production.
 10. Any configuration option that weakens ownership checks, file-permission checks, or makes MFA optional is prohibited.
 
 ---
 
 ## 3. Security Objectives
 
-The Brainix authentication system must achieve the following:
+The BraiNIX authentication system must achieve the following:
 
 - eliminate password guessing, password reuse, and password phishing from the normal login path
 - ensure root requires possession of both a trusted private key and a time-based OTP secret
@@ -66,15 +66,15 @@ During prototype development and test bring-up, the following external component
 - google-authenticator-libpam semantics for root TOTP verification
 - pam_u2f / libfido2 semantics for console USB-token authentication
 
-These components must not be treated as permanent dependencies for the final Brainix operating system.
+These components must not be treated as permanent dependencies for the final BraiNIX operating system.
 
-### 4.2 Production Brainix Requirement
+### 4.2 Production BraiNIX Requirement
 
-Before Brainix is considered production-ready, the authentication path must be rewritten in Rust as native Brainix services and libraries, with the external tools serving only as prototype models.
+Before BraiNIX is considered production-ready, the authentication path must be rewritten in Rust as native BraiNIX services and libraries, with the external tools serving only as prototype models.
 
-Target Brainix-native components:
+Target BraiNIX-native components:
 
-- `brainix-sshd` — Brainix-native SSH daemon or SSH-compatible remote admin service
+- `brainix-sshd` — BraiNIX-native SSH daemon or SSH-compatible remote admin service
 - `brainix-authd` — central authentication coordinator
 - `brainix-otp` — TOTP validation service for root second factor
 - `brainix-console-auth` — local console USB-token authentication service
@@ -185,7 +185,7 @@ Match User root
 
 The root OTP policy exists only for root.
 
-Normal users must not be prompted for OTP during SSH login unless a future Brainix policy explicitly adds that requirement.
+Normal users must not be prompted for OTP during SSH login unless a future BraiNIX policy explicitly adds that requirement.
 
 Prototype Linux PAM service reference:
 
@@ -203,7 +203,7 @@ session required pam_permit.so
 
 ### Mandatory restrictions for the PAM module
 
-The following options are prohibited in the Brainix prototype and production design:
+The following options are prohibited in the BraiNIX prototype and production design:
 
 - `nullok`
 - `no_strict_owner`
@@ -255,7 +255,7 @@ During installation or first secure boot:
 
 - TOTP is for root only in the initial policy.
 - Root must not share OTP seeds across systems.
-- Each Brainix installation must have its own root OTP seed.
+- Each BraiNIX installation must have its own root OTP seed.
 - If root OTP enrollment is incomplete, direct root SSH must remain disabled.
 - If the root OTP secret file is missing or fails ownership/permission checks, root SSH authentication must fail closed.
 
@@ -265,7 +265,7 @@ During installation or first secure boot:
 
 Console login must not use passwords.
 
-The console must require an enrolled USB security key. The prototype behavior may follow pam_u2f/libfido2 semantics, but production Brainix must replace that with Rust-native code.
+The console must require an enrolled USB security key. The prototype behavior may follow pam_u2f/libfido2 semantics, but production BraiNIX must replace that with Rust-native code.
 
 Console login rules:
 
@@ -320,7 +320,7 @@ The recovery process must be documented independently and audited when used.
 
 ## 13. Audit Requirements
 
-All authentication-relevant events must be logged to the Brainix audit system:
+All authentication-relevant events must be logged to the BraiNIX audit system:
 
 - ssh login success/failure
 - root otp success/failure
@@ -338,7 +338,7 @@ Audit logs must not expose private keys, OTP seeds, or reusable challenge materi
 
 ## 14. Feature Cuts Required to Prevent Bloat
 
-The following are explicitly out of scope for the first secure Brainix authentication system:
+The following are explicitly out of scope for the first secure BraiNIX authentication system:
 
 - password authentication
 - password resets
@@ -355,7 +355,7 @@ The following are explicitly out of scope for the first secure Brainix authentic
 
 ## 15. Production Rust Rewrite Requirements
 
-The production Brainix authentication system must be rewritten in Rust with these goals:
+The production BraiNIX authentication system must be rewritten in Rust with these goals:
 
 - fewer features than the prototype
 - fewer code paths than the prototype

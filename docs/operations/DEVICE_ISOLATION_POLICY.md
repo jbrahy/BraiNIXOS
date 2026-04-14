@@ -1,8 +1,8 @@
-# Brainix Device Isolation Policy
+# BraiNIX Device Isolation Policy
 
 ## Purpose
 
-This document defines the device isolation model for Brainix. It specifies the one-server-per-device principle, the CapDevice capability type, authority rules, IOMMU requirements, cross-device isolation enforcement, interrupt binding, compromise containment guarantees, and development mode configuration.
+This document defines the device isolation model for BraiNIX. It specifies the one-server-per-device principle, the CapDevice capability type, authority rules, IOMMU requirements, cross-device isolation enforcement, interrupt binding, compromise containment guarantees, and development mode configuration.
 
 This is an authoritative specification. If code or configuration diverges from this document, the document must be updated in the same PR that introduces the change.
 
@@ -257,4 +257,4 @@ Each device server receives a CapDevice scoped to its virtio device's emulated M
 ---
 
 *Last updated: 2026-04-11*
-*This document is the authoritative specification for Brainix device isolation.*
+*This document is the authoritative specification for BraiNIX device isolation.*

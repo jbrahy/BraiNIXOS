@@ -1,12 +1,12 @@
-# Brainix Unsafe Code Policy
+# BraiNIX Unsafe Code Policy
 
 ## Purpose
 
-Unsafe Rust is **prohibited by default** in Brainix. This is not "allowed with documentation" or "permitted when justified." Unsafe is prohibited. The policy mirrors the capability model: no ambient authority means no ambient unsafe.
+Unsafe Rust is **prohibited by default** in BraiNIX. This is not "allowed with documentation" or "permitted when justified." Unsafe is prohibited. The policy mirrors the capability model: no ambient authority means no ambient unsafe.
 
-Every crate in the Brainix workspace applies `#![deny(unsafe_code)]` at the crate root. Only files explicitly listed in the allowlist below may use `#![allow(unsafe_code)]` at the file level to override this denial.
+Every crate in the BraiNIX workspace applies `#![deny(unsafe_code)]` at the crate root. Only files explicitly listed in the allowlist below may use `#![allow(unsafe_code)]` at the file level to override this denial.
 
-This document is the authoritative specification for all unsafe code governance in Brainix. It defines the default policy, the complete allowlist, the exception process, the enforcement mechanism, and the audit trail requirements.
+This document is the authoritative specification for all unsafe code governance in BraiNIX. It defines the default policy, the complete allowlist, the exception process, the enforcement mechanism, and the audit trail requirements.
 
 ---
 
@@ -14,7 +14,7 @@ This document is the authoritative specification for all unsafe code governance 
 
 The default policy is total prohibition:
 
-1. **Every Brainix crate** includes `#![deny(unsafe_code)]` at the crate root.
+1. **Every BraiNIX crate** includes `#![deny(unsafe_code)]` at the crate root.
 2. **Every `unsafe` block** outside the allowlist is a CI merge blocker. Not a warning, not an advisory, not a suggestion. A blocker.
 3. **No `unsafe` block** may exist without an accompanying `// SAFETY:` comment that explains the invariant being upheld.
 4. **No `unsafe` function** may be declared without a documented safety contract in its doc comment specifying assumptions, ownership rules, aliasing constraints, preconditions, postconditions, and what would make it unsound.
@@ -175,6 +175,6 @@ This policy directly enforces the following invariants from `docs/security/SECUR
 
 ## Final Rule
 
-Unsafe code in Brainix is not a convenience escape hatch. It is a managed hazard surface that exists only where hardware forces it. Every `unsafe` block is a place where Rust's safety guarantees do not apply, which means every `unsafe` block is a place where a bug can become a security vulnerability.
+Unsafe code in BraiNIX is not a convenience escape hatch. It is a managed hazard surface that exists only where hardware forces it. Every `unsafe` block is a place where Rust's safety guarantees do not apply, which means every `unsafe` block is a place where a bug can become a security vulnerability.
 
 The default is prohibition. The exception is documented, reviewed, and tracked. There is no third option.

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# docker/test.sh — Local GRUB2 ISO boot test for Brainix
+# docker/test.sh — Local GRUB2 ISO boot test for BraiNIX
 #
 # Mirrors the CI integration-test job (ci.yml integration-test job).
 # Run this script from the repository root inside the dev container.
 #
 # Per D-07: GRUB2 loads the bootloader binary, not -kernel with raw ELF.
-# Per D-10: asserts "Brainix: boot complete" in serial output.
+# Per D-10: asserts "BraiNIX: boot complete" in serial output.
 
 set -euo pipefail
 
@@ -40,7 +40,7 @@ cp target/x86_64-unknown-none/release/brainix-bootloader iso/boot/
 echo "[test.sh] Writing grub.cfg..."
 cat > iso/boot/grub/grub.cfg << 'GRUBEOF'
 set timeout=0
-menuentry "Brainix" {
+menuentry "BraiNIX" {
     multiboot2 /boot/brainix-bootloader
     boot
 }
@@ -97,7 +97,7 @@ timeout 30 qemu-system-x86_64 \
 
 echo "[test.sh] Asserting boot completion..."
 BOOT_PASS=0
-if grep -q "Brainix: boot complete" /tmp/boot.log; then
+if grep -q "BraiNIX: boot complete" /tmp/boot.log; then
     BOOT_PASS=1
 fi
 
@@ -116,7 +116,7 @@ if [ "${BOOT_PASS}" -eq 1 ]; then
     echo "[test.sh] PASS: kernel booted successfully via GRUB2 ISO"
     exit 0
 else
-    echo "[test.sh] FAIL: 'Brainix: boot complete' not found in serial output"
+    echo "[test.sh] FAIL: 'BraiNIX: boot complete' not found in serial output"
     echo "[test.sh] --- boot log ---"
     cat /tmp/boot.log
     echo "[test.sh] ---------------"

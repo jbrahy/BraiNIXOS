@@ -2,7 +2,7 @@
 #![no_main]
 #![allow(unsafe_code)]
 
-// Brainix bootloader binary entry point.
+// BraiNIX bootloader binary entry point.
 //
 // Unsafe is permitted in src/bootloader/src/ per UNSAFE_CODE_POLICY.md allowlist.
 //

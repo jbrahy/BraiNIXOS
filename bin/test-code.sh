@@ -22,7 +22,7 @@ for arg in "$@"; do
   [[ "$arg" == "--fix" ]] && FIX=true
 done
 
-printf "${BOLD}=== Brainix Local Test Suite ===${NC}\n"
+printf "${BOLD}=== BraiNIX Local Test Suite ===${NC}\n"
 printf "Target: x86_64-unknown-none | Toolchain: $(rustup show active-toolchain 2>/dev/null | cut -d' ' -f1)\n"
 
 # 1. Type check — bare-metal target

@@ -1,4 +1,4 @@
-# Brainix bootloader entry stub — GNU AT&T syntax, assembled with 'as'
+# BraiNIX bootloader entry stub — GNU AT&T syntax, assembled with 'as'
 #
 # Entry: 32-bit protected mode (GRUB2 multiboot2 handoff)
 #   EAX = 0x36D76289 (multiboot2 bootloader magic)

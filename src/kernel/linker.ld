@@ -1,4 +1,4 @@
-/* Brainix kernel linker script
+/* BraiNIX kernel linker script
  *
  * IMPORTANT: This address must match _kernel_start in src/bootloader/linker.ld.
  * The bootloader's start.s sets up a higher-half page table mapping

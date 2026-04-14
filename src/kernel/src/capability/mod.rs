@@ -1,6 +1,6 @@
 //! Capability manager module — Phase 3.
 //!
-//! Defines the complete type foundation for Brainix's capability-based access control:
+//! Defines the complete type foundation for BraiNIX's capability-based access control:
 //! typed capabilities, rights bitmasks, capability slots, the CSpace flat array,
 //! and all error types.
 

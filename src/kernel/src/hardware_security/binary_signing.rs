@@ -80,7 +80,7 @@ pub fn select_verification_key_set(is_development_build: bool) -> &'static [u8; 
 /// Returns `Ok(())` if the signature is valid for the given public key and hash.
 /// Returns `Err(InvalidSignature)` if the signature does not verify.
 ///
-/// Per D-18: all Brainix kernel binaries are signed with Ed25519.
+/// Per D-18: all BraiNIX kernel binaries are signed with Ed25519.
 /// Enforces INV-BOOT-003: dev and prod cryptographic material remain separate.
 pub fn verify_binary_signature(
     binary_hash: &[u8; 32],

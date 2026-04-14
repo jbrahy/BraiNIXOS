@@ -1,6 +1,6 @@
 # GOOGLE_AUTH_OTP_AND_CONSOLE_USB_LOGIN.md
 
-# Brainix Root OTP and Console USB Login Configuration
+# BraiNIX Root OTP and Console USB Login Configuration
 ## Prototype Reference Configuration and Production Rewrite Requirements
 
 Version: 1.0  
@@ -11,7 +11,7 @@ Scope: Root SSH OTP configuration, console USB-token login, enrollment flow, sys
 
 ## 1. Purpose
 
-This document provides the concrete prototype configuration model for two Brainix authentication mechanisms:
+This document provides the concrete prototype configuration model for two BraiNIX authentication mechanisms:
 
 1. **root remote SSH login** using:
    - SSH public key
@@ -21,7 +21,7 @@ This document provides the concrete prototype configuration model for two Braini
    - an enrolled USB security key created during installation
    - no password fallback
 
-These prototype configurations are reference behavior only. Brainix production images must not permanently depend on OpenSSH, Linux PAM, google-authenticator-libpam, pam_u2f, or libfido2. The production system must reimplement the required behavior in Rust with fewer features and tighter security controls.
+These prototype configurations are reference behavior only. BraiNIX production images must not permanently depend on OpenSSH, Linux PAM, google-authenticator-libpam, pam_u2f, or libfido2. The production system must reimplement the required behavior in Rust with fewer features and tighter security controls.
 
 ---
 
@@ -37,7 +37,7 @@ The following constraints apply to the whole design:
 - all files involved in authentication must live in root-owned system locations
 - no authentication state required for login may be stored in an encrypted home directory
 - no optional MFA settings such as `nullok` are allowed
-- any external prototype behavior must be reproduced with simpler Rust-native Brainix code later
+- any external prototype behavior must be reproduced with simpler Rust-native BraiNIX code later
 
 ---
 
@@ -252,7 +252,7 @@ The console should require possession of a USB security key plus user interactio
 - PIN verification
 - optional built-in user verification if the token supports it
 
-This provides a clean, minimal local-auth model that fits Brainix better than console passwords.
+This provides a clean, minimal local-auth model that fits BraiNIX better than console passwords.
 
 ---
 
@@ -270,7 +270,7 @@ Why:
 
 - central mappings are opened as `root`
 - per-user mappings in home directories can fail if the home directory is encrypted or unavailable before login
-- Brainix should keep login-critical material in system-owned locations
+- BraiNIX should keep login-critical material in system-owned locations
 
 ---
 
@@ -365,7 +365,7 @@ auth sufficient pam_u2f.so \
     userverification=0
 ```
 
-For Brainix, start with the simpler non-biometric PIN-verified flow unless you have a strong reason to support more.
+For BraiNIX, start with the simpler non-biometric PIN-verified flow unless you have a strong reason to support more.
 
 ---
 
@@ -443,7 +443,7 @@ Require two console keys at install time so loss of one token does not immediate
 
 ## 9. Production Rust Rewrite Plan
 
-The production Brainix implementation should replace the prototype stack with native Rust code.
+The production BraiNIX implementation should replace the prototype stack with native Rust code.
 
 ### 9.1 Replace OpenSSH/PAM Root OTP Path With:
 - `brainix-sshd`
@@ -451,7 +451,7 @@ The production Brainix implementation should replace the prototype stack with na
 - `brainix-otp`
 
 #### Responsibilities
-- parse only the minimum SSH features needed for Brainix admin access
+- parse only the minimum SSH features needed for BraiNIX admin access
 - accept only public-key authentication for general users
 - require a second factor only for root
 - validate TOTP in a fixed-format, system-owned seed store
@@ -473,7 +473,7 @@ The production Brainix implementation should replace the prototype stack with na
 
 ## 10. Minimal Feature Scope
 
-To avoid bloat, the first secure Brainix authentication implementation should support only:
+To avoid bloat, the first secure BraiNIX authentication implementation should support only:
 
 - SSH key login for users
 - SSH key + TOTP for root

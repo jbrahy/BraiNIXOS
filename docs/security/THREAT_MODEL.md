@@ -1,8 +1,8 @@
-# Brainix Threat Model
+# BraiNIX Threat Model
 
 ## Purpose
 
-This document defines the security boundaries, protected assets, attacker classes, trusted computing base, attack surfaces, in-scope threats, out-of-scope threats, required mitigations, and residual risks for Brainix.
+This document defines the security boundaries, protected assets, attacker classes, trusted computing base, attack surfaces, in-scope threats, out-of-scope threats, required mitigations, and residual risks for BraiNIX.
 
 It exists to prevent three common failures:
 
@@ -18,7 +18,7 @@ This is a living security-control document. Any change that affects privileged c
 
 This threat model answers the following questions:
 
-- What is Brainix protecting?
+- What is BraiNIX protecting?
 - From whom?
 - Under what assumptions?
 - Which components are trusted?
@@ -30,7 +30,7 @@ This threat model answers the following questions:
 
 ## System Summary
 
-Brainix is a Rust `no_std` x86-64 microkernel using explicit capabilities, minimal syscall surface, and synchronous IPC as the primary control path. It rejects ambient authority and rejects POSIX compatibility as a design requirement. It is developed initially in virtualized environments but only makes strong system-level claims in appropriately hardened bare-metal production mode.
+BraiNIX is a Rust `no_std` x86-64 microkernel using explicit capabilities, minimal syscall surface, and synchronous IPC as the primary control path. It rejects ambient authority and rejects POSIX compatibility as a design requirement. It is developed initially in virtualized environments but only makes strong system-level claims in appropriately hardened bare-metal production mode.
 
 ---
 
@@ -78,7 +78,7 @@ Production attestation and measured-boot state must not be spoofed or confused w
 Audit records must not be silently forged, erased, or reordered without detection.
 
 ### A14. Build and release integrity
-The software artifact shipped as Brainix must match reviewed and approved source inputs.
+The software artifact shipped as BraiNIX must match reviewed and approved source inputs.
 
 ### A15. Entropy and key material
 Bootstrapping randomness and cryptographic material must not be exposed, replayed, or initialized unsafely.
@@ -87,7 +87,7 @@ Bootstrapping randomness and cryptographic material must not be exposed, replaye
 
 ## Security Objectives
 
-Brainix must satisfy the following objectives.
+BraiNIX must satisfy the following objectives.
 
 ### O1. Prevent privilege escalation from compromised userspace to kernel
 ### O2. Prevent unauthorized authority acquisition
@@ -144,7 +144,7 @@ Production mode requires:
 - required mitigation baseline
 - platform features such as NX, SMEP, SMAP, and where supported CET/IBT
 
-Only in this mode may strong Brainix system-security claims be made.
+Only in this mode may strong BraiNIX system-security claims be made.
 
 ---
 
@@ -152,9 +152,9 @@ Only in this mode may strong Brainix system-security claims be made.
 
 ## Production TCB
 - CPU and physical memory hardware
-- firmware and boot chain up to the Brainix bootloader
-- Brainix bootloader
-- Brainix kernel
+- firmware and boot chain up to the BraiNIX bootloader
+- BraiNIX bootloader
+- BraiNIX kernel
 - minimal pre-userspace hardware initialization
 - TPM
 - production attestation verifier and trust anchors
@@ -253,7 +253,7 @@ Capabilities:
 - ability to tamper with emulated devices, timing, or attestation artifacts
 - ability to inspect guest memory
 
-This attacker is **out of scope for protection by Brainix in development mode** and must be documented as such.
+This attacker is **out of scope for protection by BraiNIX in development mode** and must be documented as such.
 
 ---
 
@@ -350,7 +350,7 @@ This attacker is **out of scope for protection by Brainix in development mode** 
 
 ## Trust Assumptions
 
-The following assumptions must hold for Brainix claims to remain valid in production mode:
+The following assumptions must hold for BraiNIX claims to remain valid in production mode:
 
 ### TA1
 The CPU implements required architectural security features correctly enough for documented mitigations to function.
@@ -371,7 +371,7 @@ Production signing keys are protected and not mixed with development keys.
 The build and release pipeline enforces artifact integrity.
 
 ### TA7
-The documented TCB is not already compromised before Brainix takes control.
+The documented TCB is not already compromised before BraiNIX takes control.
 
 If any trust assumption is false, the corresponding security claim must be downgraded.
 
@@ -449,7 +449,7 @@ These threats are explicitly outside the protection boundary unless later added.
 - legacy device stacks that have not been included in the trusted design
 - social engineering or operational misuse of keys outside the documented key policy
 
-Being out of scope does **not** mean unimportant. It means Brainix does not currently claim to defeat that threat.
+Being out of scope does **not** mean unimportant. It means BraiNIX does not currently claim to defeat that threat.
 
 ---
 
@@ -637,7 +637,7 @@ Real hardware integration is often where narrow kernels accumulate risk.
 
 ## Security Claim Levels
 
-Every security statement in Brainix documentation should use one of these labels:
+Every security statement in BraiNIX documentation should use one of these labels:
 
 - **Goal** — intended design objective
 - **Implemented** — present in code
@@ -683,7 +683,7 @@ This threat model must be revisited when any of the following occur:
 
 ## Final Security Posture Statement
 
-Brainix is designed to provide strong structural isolation, explicit authority handling, and narrow privilege boundaries for x86-64 systems. It is not secure because it is written in Rust alone, nor because it uses a microkernel alone, nor because it uses modern mitigations alone. It is secure only to the extent that:
+BraiNIX is designed to provide strong structural isolation, explicit authority handling, and narrow privilege boundaries for x86-64 systems. It is not secure because it is written in Rust alone, nor because it uses a microkernel alone, nor because it uses modern mitigations alone. It is secure only to the extent that:
 
 - the trust boundary is correct
 - capabilities are enforced correctly

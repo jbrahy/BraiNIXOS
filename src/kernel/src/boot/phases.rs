@@ -267,7 +267,7 @@ fn wire_disk_device_data_into_slot(capability_space: &mut CapabilitySpace) {
 
 fn log_kernel_banner(boot_step_logger: &mut BootStepLogger) {
     boot_step_logger.separator();
-    boot_step_logger.line(" BRAINIX MICROKERNEL  v0.1.0");
+    boot_step_logger.line(" BraiNIX MICROKERNEL  v0.1.0");
     boot_step_logger.line(" x86_64-unknown-none | Rust nightly-2025-12-01 | Phase 8");
     boot_step_logger.separator();
 }
@@ -279,5 +279,5 @@ fn log_boot_infrastructure_status(boot_step_logger: &mut BootStepLogger) {
 }
 
 fn log_boot_complete(boot_step_logger: &mut BootStepLogger) {
-    boot_step_logger.ok("Brainix: boot complete");
+    boot_step_logger.ok("BraiNIX: boot complete");
 }

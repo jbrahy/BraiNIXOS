@@ -1,8 +1,8 @@
-# Brainix Capability Model
+# BraiNIX Capability Model
 
 ## 1. Overview
 
-Brainix uses an seL4-inspired capability-based access control model. Every kernel object is accessed exclusively through an unforgeable, typed capability. There is no ambient authority anywhere in the system. No process, thread, or service possesses authority merely by existence, identity, or namespace presence.
+BraiNIX uses an seL4-inspired capability-based access control model. Every kernel object is accessed exclusively through an unforgeable, typed capability. There is no ambient authority anywhere in the system. No process, thread, or service possesses authority merely by existence, identity, or namespace presence.
 
 A capability is a kernel-managed token that grants its holder permission to perform specific operations on a specific kernel object. Capabilities are:
 
@@ -103,7 +103,7 @@ Slots are addressed by a `u8` index (0 through 255). This fixed-size addressing 
 
 ### Rationale for 256 Slots
 
-- **256 is sufficient** for a microkernel's minimal-capability design. A typical Brainix process needs: a few memory capabilities, an IPC endpoint or two, its thread capability, and perhaps a device or audit capability. Even the most capability-rich process (such as `spawnd`) needs far fewer than 256.
+- **256 is sufficient** for a microkernel's minimal-capability design. A typical BraiNIX process needs: a few memory capabilities, an IPC endpoint or two, its thread capability, and perhaps a device or audit capability. Even the most capability-rich process (such as `spawnd`) needs far fewer than 256.
 - **256 fits in a `u8` index**, which eliminates integer overflow and bounds-check concerns entirely. The index type itself guarantees it is always in range.
 - **256 slots per process** with a 40-byte capability structure means each CSpace consumes approximately 10 KiB of kernel memory. This is small enough for fixed-size allocation and large enough for any anticipated workload.
 - **Fixed size eliminates dynamic allocation** in the CSpace path, which means no allocation failure, no fragmentation, and no unbounded growth.
@@ -354,7 +354,7 @@ The capability model must uphold the following invariants from `docs/security/SE
 
 ## 11. API Contracts
 
-The capability system is accessed through the following syscall interface. All syscalls use the Brainix custom ABI (no POSIX compatibility). Arguments and return values are passed in registers.
+The capability system is accessed through the following syscall interface. All syscalls use the BraiNIX custom ABI (no POSIX compatibility). Arguments and return values are passed in registers.
 
 ### mint
 

@@ -33,7 +33,7 @@ pub fn zero_capability_slot_via_reference(slot_reference: &mut CapabilitySlot) {
 /// # Safety
 ///
 /// The caller must ensure slot_pointer is non-null, properly aligned, and exclusively
-/// owned. On single-core Brainix, exclusive ownership is guaranteed by the caller
+/// owned. On single-core BraiNIX, exclusive ownership is guaranteed by the caller
 /// holding `&mut CapabilitySpace`.
 pub unsafe fn zero_capability_slot_with_volatile_write(
     slot_pointer: *mut CapabilitySlot,

@@ -1,8 +1,8 @@
-# Brainix Platform Support Matrix
+# BraiNIX Platform Support Matrix
 
 ## Purpose
 
-This document defines the hardware platform requirements for Brainix. It specifies the supported architecture, CPU generation requirements, required and recommended CPU features, microcode baselines, and the separation between development and production environments.
+This document defines the hardware platform requirements for BraiNIX. It specifies the supported architecture, CPU generation requirements, required and recommended CPU features, microcode baselines, and the separation between development and production environments.
 
 This is an authoritative specification. If code or configuration diverges from this document, the document must be updated in the same PR that introduces the change.
 
@@ -10,7 +10,7 @@ This is an authoritative specification. If code or configuration diverges from t
 
 ## 1. Supported Architecture
 
-Brainix supports **x86-64 long mode only**.
+BraiNIX supports **x86-64 long mode only**.
 
 - No 32-bit (i386/IA-32) support.
 - No ARM (AArch64 or AArch32) support.
@@ -30,17 +30,17 @@ Single architecture focus enables deep hardware security integration (SMEP, SMAP
 | Intel | Haswell (4th gen) | 2013 | Earliest generation with both SMEP and SMAP support |
 | AMD | Zen 1 (Ryzen 1000 / EPYC Naples) | 2017 | Earliest AMD generation with both SMEP and SMAP support |
 
-CPUs older than these generations lack the hardware enforcement features Brainix requires for structural security. Running Brainix on unsupported hardware is not a degraded mode -- it is a refused boot.
+CPUs older than these generations lack the hardware enforcement features BraiNIX requires for structural security. Running BraiNIX on unsupported hardware is not a degraded mode -- it is a refused boot.
 
 ### Boot Rejection
 
-The Brainix bootloader checks for all required CPU features via CPUID before transferring control to the kernel. If any required feature is absent, the bootloader prints a diagnostic message to the serial console and halts. The kernel never executes on unsupported hardware.
+The BraiNIX bootloader checks for all required CPU features via CPUID before transferring control to the kernel. If any required feature is absent, the bootloader prints a diagnostic message to the serial console and halts. The kernel never executes on unsupported hardware.
 
 ---
 
 ## 3. Required CPU Features
 
-All features in this table must be present for Brainix to boot. The bootloader verifies each feature via CPUID before kernel entry.
+All features in this table must be present for BraiNIX to boot. The bootloader verifies each feature via CPUID before kernel entry.
 
 | Feature | Purpose | Detection Method | Invariant |
 |---------|---------|-----------------|-----------|
@@ -79,11 +79,11 @@ These features are used when available but are not required for boot. The kernel
 
 ### CPL0 Shadow Stack
 
-Intel CET defines two mechanisms: Indirect Branch Tracking (IBT) and Shadow Stack. Brainix supports IBT where available (Tiger Lake and later). However, **CPL0 (ring-0) shadow stack is not supported on current Intel silicon**.
+Intel CET defines two mechanisms: Indirect Branch Tracking (IBT) and Shadow Stack. BraiNIX supports IBT where available (Tiger Lake and later). However, **CPL0 (ring-0) shadow stack is not supported on current Intel silicon**.
 
 - Shadow stack for ring-3 (userspace) is available on Tiger Lake and later.
 - Shadow stack for ring-0 (kernel/supervisor) requires hardware support that is not present on shipping processors as of this specification.
-- Brainix will not implement CPL0 shadow stack support until hardware with verified ring-0 shadow stack capability is available and tested.
+- BraiNIX will not implement CPL0 shadow stack support until hardware with verified ring-0 shadow stack capability is available and tested.
 - IBT (indirect branch tracking) is independent of shadow stack and is supported.
 
 This limitation is documented explicitly per the project rule that security claims must be honest about hardware constraints (Rule 12.5 in PROJECT_RULES.md).
@@ -189,4 +189,4 @@ When KVM is not available (CI environments), QEMU runs in full emulation mode (T
 ---
 
 *Last updated: 2026-04-11*
-*This document is the authoritative specification for Brainix platform support.*
+*This document is the authoritative specification for BraiNIX platform support.*

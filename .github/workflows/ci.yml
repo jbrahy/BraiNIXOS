@@ -222,7 +222,7 @@ jobs:
           cp target/x86_64-unknown-none/release/brainix-bootloader iso/boot/
           cat > iso/boot/grub/grub.cfg << 'GRUBEOF'
           set timeout=0
-          menuentry "Brainix" {
+          menuentry "BraiNIX" {
               multiboot2 /boot/brainix-bootloader
               boot
           }
@@ -269,7 +269,7 @@ jobs:
 
       - name: Assert boot success
         run: |
-          grep -q "Brainix: boot complete" /tmp/boot.log || \
+          grep -q "BraiNIX: boot complete" /tmp/boot.log || \
             (echo "FAIL: boot complete message not found" && cat /tmp/boot.log && exit 1)
           echo "PASS: kernel booted successfully"
 

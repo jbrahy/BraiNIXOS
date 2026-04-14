@@ -1,6 +1,6 @@
 # PROJECT_RULES.md
 
-# Brainix Project Rules
+# BraiNIX Project Rules
 ## Non-Negotiable Rules for an Ultra-Secure x86-64 Microkernel System
 
 Version: 1.0  
@@ -11,7 +11,7 @@ Applies To: Architecture, kernel code, userspace services, build pipeline, CI, d
 
 ## 1. Purpose
 
-This document defines the mandatory rules that govern the Brainix project.
+This document defines the mandatory rules that govern the BraiNIX project.
 
 These rules exist to maximize practical security for a high-assurance x86-64 microkernel operating system written in Rust. They are not suggestions, preferences, or aspirational guidelines. They are project-level constraints that must be followed unless a rule is explicitly replaced by a stricter one.
 
@@ -103,7 +103,7 @@ Development mode may include:
 These components must not be silently treated as trustworthy in any production-strength security claim.
 
 ### Rule 5.3 — Host and Hypervisor Reality Must Be Acknowledged
-If Brainix runs as a guest, then the host kernel, hypervisor, emulator, and runtime beneath it are part of the effective trust story.
+If BraiNIX runs as a guest, then the host kernel, hypervisor, emulator, and runtime beneath it are part of the effective trust story.
 
 The project must never imply that guest-kernel guarantees are equal to hardware-rooted production guarantees.
 
@@ -559,7 +559,7 @@ If the whole project must be summarized in the fewest possible rules, use these:
 
 ## 22. Final Rule
 
-If a design choice makes Brainix easier to build but harder to trust, the design choice is wrong unless it is explicitly approved as a temporary, documented, and removable compromise.
+If a design choice makes BraiNIX easier to build but harder to trust, the design choice is wrong unless it is explicitly approved as a temporary, documented, and removable compromise.
 
 Security is not an add-on layer for this project. Security is the project.
 
@@ -567,15 +567,15 @@ Security is not an add-on layer for this project. Security is the project.
 
 ## 23. Coding Standards Rules
 
-These rules govern all Brainix-authored source code. They exist to make the codebase readable, auditable, and independently testable. See `CODE_STANDARDS.md` for the full specification with examples.
+These rules govern all BraiNIX-authored source code. They exist to make the codebase readable, auditable, and independently testable. See `CODE_STANDARDS.md` for the full specification with examples.
 
 ### Rule 23.1 — Full-Word Names Only
 
-No abbreviation, acronym-as-name, contraction, or truncation may be used in any Brainix-authored identifier (variable, function, method, type, field, constant, module, or lifetime name). Every name must use complete English words.
+No abbreviation, acronym-as-name, contraction, or truncation may be used in any BraiNIX-authored identifier (variable, function, method, type, field, constant, module, or lifetime name). Every name must use complete English words.
 
 Examples of prohibited names: `cap`, `idt`, `gdt`, `tss`, `pma`, `mem`, `addr`, `buf`, `ptr`, `idx`, `len`, `num`, `err`, `res`, `tmp`, `i`, `n`.
 
-Exception: names exported by external crates are used as-is; the rule applies only to names Brainix authors define.
+Exception: names exported by external crates are used as-is; the rule applies only to names BraiNIX authors define.
 
 ### Rule 23.2 — Maximum Six Lines Per Function Body
 

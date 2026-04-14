@@ -1,16 +1,16 @@
-# Brainix — High-Assurance Microkernel for x86-64
+# BraiNIX — High-Assurance Microkernel for x86-64
 
 ## Executive Summary
 
-Brainix is a **high-assurance microkernel operating system for x86-64**, written in Rust, with a design goal of making security properties **structural, explicit, and reviewable** rather than probabilistic or obscurity-dependent.
+BraiNIX is a **high-assurance microkernel operating system for x86-64**, written in Rust, with a design goal of making security properties **structural, explicit, and reviewable** rather than probabilistic or obscurity-dependent.
 
 Its core philosophy is simple:
 
 > **Authority must be explicit. Isolation must be structural. Security claims must be bounded by a named trust model.**
 
-Brainix does not attempt to be a general-purpose Unix clone. It does not prioritize POSIX compatibility, broad driver support, or legacy assumptions. It is an intentionally constrained operating system architecture designed for **high-assurance environments**, **security-sensitive research**, and **controlled deployments** where minimizing ambient authority and tightening the trusted computing base matter more than compatibility.
+BraiNIX does not attempt to be a general-purpose Unix clone. It does not prioritize POSIX compatibility, broad driver support, or legacy assumptions. It is an intentionally constrained operating system architecture designed for **high-assurance environments**, **security-sensitive research**, and **controlled deployments** where minimizing ambient authority and tightening the trusted computing base matter more than compatibility.
 
-Brainix began from a strong initial concept: a Rust `no_std` microkernel, capability-based access control, synchronous IPC, no ambient authority, no POSIX ABI, x86-64 focus, formal verification targets, and hardware-backed attestation. This revised project description preserves those strengths while making the security model more precise, deployment claims more honest, and implementation priorities more defensible.
+BraiNIX began from a strong initial concept: a Rust `no_std` microkernel, capability-based access control, synchronous IPC, no ambient authority, no POSIX ABI, x86-64 focus, formal verification targets, and hardware-backed attestation. This revised project description preserves those strengths while making the security model more precise, deployment claims more honest, and implementation priorities more defensible.
 
 ---
 
@@ -46,7 +46,7 @@ Security claims are only valid within the declared trust model. Development-mode
 Rust improves baseline memory safety, but Rust alone does not make a kernel safe. Every `unsafe` block must be tightly bounded, documented, reviewed, and treated as a security-critical boundary.
 
 ### 6. Assurance claims must be scoped
-Brainix may pursue seL4-style assurance goals, but it must not imply whole-system proof when only specific subsystems have been modeled, checked, or verified.
+BraiNIX may pursue seL4-style assurance goals, but it must not imply whole-system proof when only specific subsystems have been modeled, checked, or verified.
 
 ---
 
@@ -78,7 +78,7 @@ Brainix may pursue seL4-style assurance goals, but it must not imply whole-syste
 
 ## Explicit Non-Goals
 
-Brainix is **not** trying to be any of the following in its first serious secure implementation:
+BraiNIX is **not** trying to be any of the following in its first serious secure implementation:
 
 - a POSIX-compatible Unix replacement
 - a Linux-compatible ABI layer
@@ -126,10 +126,10 @@ Development mode exists to allow rapid bring-up, CI, fuzzing, and model validati
 - `swtpm`
 - virtualized device models
 
-In development mode, Brainix should be treated as a **guest security target**, not the root of trust.
+In development mode, BraiNIX should be treated as a **guest security target**, not the root of trust.
 
 ### Development Mode Security Boundary
-The following are **outside** Brainix's trust boundary in development mode:
+The following are **outside** BraiNIX's trust boundary in development mode:
 
 - host operating system
 - container runtime
@@ -161,7 +161,7 @@ Development mode cannot honestly claim:
 
 ## Production Mode
 
-Production mode is the only mode in which strong system-level Brainix security claims apply.
+Production mode is the only mode in which strong system-level BraiNIX security claims apply.
 
 ### Production Mode Requirements
 - x86-64 hardware in supported configuration
@@ -174,7 +174,7 @@ Production mode is the only mode in which strong system-level Brainix security c
 - CET/IBT enabled where supported
 - supported microcode baseline
 - approved boot chain
-- Brainix-specific production keying and signing policy
+- BraiNIX-specific production keying and signing policy
 
 ### Production Mode Policy
 - The kernel must refuse to start in “secure production mode” unless required platform capabilities are present.
@@ -191,9 +191,9 @@ The Trusted Computing Base must be stated explicitly for every deployment mode.
 The production TCB includes:
 
 - CPU and memory hardware
-- platform firmware and measured boot chain up to the Brainix bootloader
-- Brainix bootloader
-- Brainix kernel
+- platform firmware and measured boot chain up to the BraiNIX bootloader
+- BraiNIX bootloader
+- BraiNIX kernel
 - minimal device initialization code required before isolated device services take over
 - TPM
 - attestation verifier and key infrastructure
@@ -215,7 +215,7 @@ No document, presentation, or claim should collapse these two models into one.
 
 ## Threat Model Summary
 
-Brainix is designed to resist two primary classes of attacker:
+BraiNIX is designed to resist two primary classes of attacker:
 
 ### External attacker
 An attacker attempting to exploit a network-exposed service, malformed input path, parser, or protocol handler to gain unauthorized code execution or memory access.
@@ -230,7 +230,7 @@ An attacker who already controls a service or process in userspace and is trying
 - trigger scheduler or IPC pathologies
 - exhaust shared resources to affect other domains
 
-Brainix does **not** assume “one bug means total compromise.” The architecture must constrain compromised processes by default.
+BraiNIX does **not** assume “one bug means total compromise.” The architecture must constrain compromised processes by default.
 
 ---
 
@@ -330,7 +330,7 @@ Pure message passing is preferred. If later performance work introduces memory l
 
 ## Scheduler and Resource Governance
 
-Brainix must treat availability as part of security.
+BraiNIX must treat availability as part of security.
 
 ### Required Capabilities
 - fixed-priority preemptive scheduling
@@ -354,7 +354,7 @@ Brainix must treat availability as part of security.
 
 ## x86-64 Hardening Strategy
 
-Brainix is x86-64 specific at first, so x86 hardening must be treated as a first-class design pillar.
+BraiNIX is x86-64 specific at first, so x86 hardening must be treated as a first-class design pillar.
 
 ### Mandatory Production Features
 - NX
@@ -369,7 +369,7 @@ Brainix is x86-64 specific at first, so x86 hardening must be treated as a first
 - separate stacks for critical fault/interrupt paths where required
 
 ### Side-Channel Policy
-Brainix addresses selected x86 classes explicitly but does **not** claim blanket side-channel immunity.
+BraiNIX addresses selected x86 classes explicitly but does **not** claim blanket side-channel immunity.
 
 The system should document:
 - which transient execution attacks are specifically mitigated
@@ -433,7 +433,7 @@ The CI environment itself is not trusted in development mode, but it must still 
 
 ## Formal Methods and Assurance Strategy
 
-Brainix uses layered assurance rather than a single silver bullet.
+BraiNIX uses layered assurance rather than a single silver bullet.
 
 ### Methods
 - unit testing
@@ -554,7 +554,7 @@ The minimum documentation set for serious security work includes:
 
 ## Success Criteria
 
-Brainix should not be called “secure” merely because it boots, compiles, or uses Rust. A serious security milestone should require:
+BraiNIX should not be called “secure” merely because it boots, compiles, or uses Rust. A serious security milestone should require:
 
 - explicit trust boundary
 - named invariants
@@ -586,7 +586,7 @@ The major risks to the project are not primarily syntax or language mistakes. Th
 
 ## Strategic Recommendation
 
-Brainix should be developed as a **narrow, disciplined, security-first kernel program**, not as a feature race. The fastest path to a credible system is:
+BraiNIX should be developed as a **narrow, disciplined, security-first kernel program**, not as a feature race. The fastest path to a credible system is:
 
 1. document the security model rigorously
 2. keep the trusted core small

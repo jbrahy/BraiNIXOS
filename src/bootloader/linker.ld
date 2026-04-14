@@ -1,4 +1,4 @@
-/* Brainix bootloader linker script
+/* BraiNIX bootloader linker script
  *
  * Load address: 1 MiB (0x100000) — conventional multiboot2 load address.
  * The .multiboot2_header section is placed first so GRUB2 finds the

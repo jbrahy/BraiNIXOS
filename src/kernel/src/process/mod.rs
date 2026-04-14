@@ -1,4 +1,4 @@
-//! Userspace process management for the Brainix microkernel.
+//! Userspace process management for the BraiNIX microkernel.
 //!
 //! This module provides the scaffolding for loading and managing userspace server
 //! processes. Server binaries are delivered as multiboot2 modules and loaded by

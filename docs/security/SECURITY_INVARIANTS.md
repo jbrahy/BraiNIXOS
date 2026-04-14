@@ -1,8 +1,8 @@
-# Brainix Security Invariants
+# BraiNIX Security Invariants
 
 ## Purpose
 
-This document defines the security invariants Brainix must preserve at all times. These invariants are the backbone of the system's security model.
+This document defines the security invariants BraiNIX must preserve at all times. These invariants are the backbone of the system's security model.
 
 A feature is acceptable only if it preserves existing invariants or introduces a new invariant with explicit enforcement and evidence strategy.
 
@@ -17,7 +17,7 @@ This document should be used in four ways:
 1. **Design gate** — every new subsystem or feature must identify which invariants it touches.
 2. **Code review lens** — every security-critical change should be reviewed against relevant invariants.
 3. **Testing traceability map** — every invariant should eventually map to tests, fuzz targets, audits, or proof work.
-4. **Claim discipline** — no one should describe Brainix as “secure” in the abstract. They should refer to preserved invariants.
+4. **Claim discipline** — no one should describe BraiNIX as “secure” in the abstract. They should refer to preserved invariants.
 
 ---
 
@@ -426,7 +426,7 @@ Pool exhaustion, quota exhaustion, or scheduler admission failure must return a 
 # 6. x86 Platform and Execution Invariants
 
 ## INV-X86-001 — Only supported x86-64 execution modes are used
-Brainix operates only in documented 64-bit modes and does not depend on legacy mode behavior beyond controlled bootstrap transitions.
+BraiNIX operates only in documented 64-bit modes and does not depend on legacy mode behavior beyond controlled bootstrap transitions.
 
 **Why it matters:** Legacy compatibility expands poorly-audited state space.
 
@@ -669,7 +669,7 @@ Compiler and dependency changes must be explicit and reviewable.
 ---
 
 ## INV-BUILD-003 — Release signing authority is narrowly controlled
-The ability to publish trusted Brainix artifacts must be limited and auditable.
+The ability to publish trusted BraiNIX artifacts must be limited and auditable.
 
 **Why it matters:** Release-sign compromise defeats the rest of the chain.
 
@@ -742,6 +742,6 @@ Tests, fuzzing, model checking, or manual review performed.
 
 # Final Rule
 
-Brainix security is not defined by “Rust,” “microkernel,” “formal methods,” or “x86 hardening” in isolation. It is defined by whether these invariants remain true under attack, under failure, and under future feature growth.
+BraiNIX security is not defined by “Rust,” “microkernel,” “formal methods,” or “x86 hardening” in isolation. It is defined by whether these invariants remain true under attack, under failure, and under future feature growth.
 
 If an invariant is weakened, security is weakened, even if the code still compiles and the system still boots.

@@ -1,4 +1,4 @@
-//! Security boot property tests for the Brainix kernel.
+//! Security boot property tests for the BraiNIX kernel.
 //!
 //! These tests run on the HOST target (not x86_64-unknown-none) and verify
 //! structural security properties of the kernel by inspecting source code.

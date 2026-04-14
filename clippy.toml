@@ -1,4 +1,4 @@
-# Kernel-grade lint thresholds for Brainix
+# Kernel-grade lint thresholds for BraiNIX
 # Lint denials are in Cargo.toml [workspace.lints.clippy]
 
 # Threshold for cognitive_complexity lint.

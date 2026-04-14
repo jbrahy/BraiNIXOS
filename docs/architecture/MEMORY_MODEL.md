@@ -1,8 +1,8 @@
-# Brainix Memory Model
+# BraiNIX Memory Model
 
 ## 1. Overview
 
-Brainix uses a typed physical memory model with per-process page tables. The kernel has no dynamic heap. All kernel objects are allocated from fixed-size pool allocators that are pre-allocated at boot time.
+BraiNIX uses a typed physical memory model with per-process page tables. The kernel has no dynamic heap. All kernel objects are allocated from fixed-size pool allocators that are pre-allocated at boot time.
 
 The memory model is designed around three core principles:
 
@@ -10,7 +10,7 @@ The memory model is designed around three core principles:
 2. **The kernel is not mapped in user page tables.** Kernel Page Table Isolation (KPTI) ensures that userspace cannot address kernel memory, even speculatively.
 3. **No page is simultaneously writable and executable.** W^X is enforced globally with no exceptions.
 
-These three properties -- typed ownership, KPTI, and W^X -- form the foundation of Brainix's memory security. They are structural guarantees, not optional hardening flags.
+These three properties -- typed ownership, KPTI, and W^X -- form the foundation of BraiNIX's memory security. They are structural guarantees, not optional hardening flags.
 
 ---
 
@@ -100,7 +100,7 @@ The allocator never returns raw physical addresses to callers. It returns typed 
 
 ## 4. KPTI (Kernel Page Table Isolation)
 
-Brainix implements Kernel Page Table Isolation: the kernel is not mapped in user page tables. Each process has a separate user page table that contains only user mappings. The kernel has its own page table that contains both kernel and (temporarily, during syscalls) user mappings.
+BraiNIX implements Kernel Page Table Isolation: the kernel is not mapped in user page tables. Each process has a separate user page table that contains only user mappings. The kernel has its own page table that contains both kernel and (temporarily, during syscalls) user mappings.
 
 ### Page Table Structure
 
@@ -180,7 +180,7 @@ Equivalently: if a page is writable, its NX bit must be set. If a page is execut
 
 There are no exceptions to W^X:
 
-- No JIT compilation (Brainix does not support runtime code generation).
+- No JIT compilation (BraiNIX does not support runtime code generation).
 - No trampolines that require writable+executable memory.
 - No debugging features that temporarily make code pages writable.
 - No loader that maps code as writable during loading and then makes it read-only. Code pages are mapped read-only+executable from the start; the loading process writes to a separate staging area and then maps the final pages as read-only+executable.
@@ -246,7 +246,7 @@ For capability slot zeroing, `write_volatile` is used to prevent the compiler fr
 
 ## 7. Page Deduplication Prohibition
 
-Page deduplication is explicitly forbidden in Brainix. No mechanism exists to detect identical page contents and merge them into a shared mapping.
+Page deduplication is explicitly forbidden in BraiNIX. No mechanism exists to detect identical page contents and merge them into a shared mapping.
 
 ### Rationale
 

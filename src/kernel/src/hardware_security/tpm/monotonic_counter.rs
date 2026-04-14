@@ -14,7 +14,7 @@
 
 use super::registers::TpmError;
 
-/// TPM NV index for the Brainix monotonic rollback-protection counter.
+/// TPM NV index for the BraiNIX monotonic rollback-protection counter.
 pub const BRAINIX_MONOTONIC_COUNTER_NV_INDEX: u32 = 0x0150_0001;
 
 /// Errors that can occur during monotonic counter verification.

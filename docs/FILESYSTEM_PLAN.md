@@ -1,6 +1,6 @@
 # FILESYSTEM_PLAN.md
 
-# Brainix Filesystem Plan
+# BraiNIX Filesystem Plan
 ## Minimal Secure Storage Layout for an Ultra-Secure x86-64 Operating System
 
 Version: 1.0  
@@ -11,9 +11,9 @@ Scope: Boot storage, immutable operating system storage, mutable system state, m
 
 ## 1. Purpose
 
-This document defines the recommended filesystem layout for Brainix.
+This document defines the recommended filesystem layout for BraiNIX.
 
-The goal is not to choose a filesystem based on popularity or feature count. The goal is to choose a storage design that supports the Brainix security model:
+The goal is not to choose a filesystem based on popularity or feature count. The goal is to choose a storage design that supports the BraiNIX security model:
 
 - minimal complexity
 - strong integrity for the operating system image
@@ -34,7 +34,7 @@ This is intentionally simpler and more secure than a traditional fully writable 
 
 ## 2. Design Principles
 
-The Brainix filesystem design must follow these rules:
+The BraiNIX filesystem design must follow these rules:
 
 1. The boot process must start from a firmware-compatible partition.
 2. The main operating system image must be immutable during normal operation.
@@ -49,7 +49,7 @@ The Brainix filesystem design must follow these rules:
 
 ## 3. High-Level Recommendation
 
-Brainix should use the following storage layout:
+BraiNIX should use the following storage layout:
 
 ### Partition 1 — EFI / Boot Partition
 Filesystem type:
@@ -71,7 +71,7 @@ Filesystem type:
 - EROFS or an equivalent read-only filesystem
 
 Purpose:
-- the actual Brainix operating system image
+- the actual BraiNIX operating system image
 - system binaries
 - core userspace
 - immutable configuration
@@ -87,7 +87,7 @@ Why:
 
 ### Partition 3 — Writable State Partition
 Filesystem type:
-- a small, conservative writable filesystem such as ext4 or a Brainix-native equivalent
+- a small, conservative writable filesystem such as ext4 or a BraiNIX-native equivalent
 
 Purpose:
 - logs
@@ -112,8 +112,8 @@ The FAT32 partition is **not** the full operating system.
 The recommended boot sequence is:
 
 1. UEFI firmware reads the FAT32 EFI partition.
-2. Firmware or bootloader loads the Brainix kernel image or boot stub.
-3. The Brainix kernel starts and performs early initialization.
+2. Firmware or bootloader loads the BraiNIX kernel image or boot stub.
+3. The BraiNIX kernel starts and performs early initialization.
 4. The kernel mounts the immutable operating system partition.
 5. The kernel mounts the writable state partition.
 6. The system transitions into the full supervised runtime environment.
@@ -128,7 +128,7 @@ This means:
 
 ## 5. Recommended Mount Layout
 
-A recommended Brainix v1 mount model would look like this:
+A recommended BraiNIX v1 mount model would look like this:
 
 - EFI system partition mounted at `/boot` or another reserved boot path
 - immutable operating system partition mounted as `/` or `/sysroot`
@@ -190,7 +190,7 @@ Should not contain:
 
 Should contain:
 
-- Brainix system binaries
+- BraiNIX system binaries
 - core libraries
 - immutable service definitions
 - default system configuration
@@ -243,7 +243,7 @@ Recommended direction:
 - store or bind the root hash into the secure boot / measured boot chain
 - verify the image before trusting it as the live operating system body
 
-This gives Brainix two important protections:
+This gives BraiNIX two important protections:
 
 1. the filesystem is not writable during normal operation
 2. the filesystem cannot be silently modified offline without detection
@@ -280,7 +280,7 @@ Recommended direction:
 
 ## 9. Update Model
 
-The Brainix update model should match the filesystem design.
+The BraiNIX update model should match the filesystem design.
 
 ### Recommended update behavior
 
@@ -305,19 +305,19 @@ A traditional fully writable root filesystem causes several problems:
 - update rollback and forensics become harder
 - logs, configs, binaries, and state all mix together
 
-The Brainix model avoids that by separating:
+The BraiNIX model avoids that by separating:
 
 - bootstrapping
 - immutable system code
 - mutable state
 
-This is much closer to the security model Brainix wants.
+This is much closer to the security model BraiNIX wants.
 
 ---
 
 ## 11. Why Coda Should Not Be Used
 
-Coda should not be considered for the Brainix base filesystem.
+Coda should not be considered for the BraiNIX base filesystem.
 
 Reasons:
 
@@ -326,7 +326,7 @@ Reasons:
 - it depends on additional userland components and cache-management behavior
 - it is the wrong fit for a minimal, high-assurance local boot/runtime storage design
 
-Even if Coda is historically interesting, it is not an appropriate choice for the Brainix base operating system layout.
+Even if Coda is historically interesting, it is not an appropriate choice for the BraiNIX base operating system layout.
 
 ---
 
@@ -340,7 +340,7 @@ Filesystems with many advanced features may provide useful capabilities, but the
 - more maintenance burden
 - more code paths that must be trusted
 
-Brainix should prefer a filesystem plan that is:
+BraiNIX should prefer a filesystem plan that is:
 
 - simple
 - explicit
@@ -348,11 +348,11 @@ Brainix should prefer a filesystem plan that is:
 - easy to update safely
 - consistent with immutable-image deployment
 
-For Brainix v1, fewer features is a strength.
+For BraiNIX v1, fewer features is a strength.
 
 ---
 
-## 13. Proposed Brainix v1 Partition Table
+## 13. Proposed BraiNIX v1 Partition Table
 
 A simple conceptual layout could be:
 
@@ -361,22 +361,22 @@ A simple conceptual layout could be:
 - filesystem: FAT32
 - size: small, only as large as required for boot assets
 
-### Partition 2 — Brainix OS Image
+### Partition 2 — BraiNIX OS Image
 - type: immutable OS partition
 - filesystem: EROFS
 - integrity: dm-verity-like verification
 - size: sized for full system image plus controlled growth
 
-### Partition 3 — Brainix State
+### Partition 3 — BraiNIX State
 - type: writable system state
-- filesystem: ext4-like or Brainix-native equivalent
+- filesystem: ext4-like or BraiNIX-native equivalent
 - optional encryption for selected directories or the whole partition if later required
 
 Optional future partitions:
 - data partition
 - audit partition
 - recovery partition
-- swap, if Brainix ever supports swap and the security model permits it
+- swap, if BraiNIX ever supports swap and the security model permits it
 
 These should not be added to the first secure version unless clearly required.
 
@@ -389,7 +389,7 @@ These should not be added to the first secure version unless clearly required.
 - immutable OS partition always
 
 ### Writable
-- `/var` or Brainix state equivalent
+- `/var` or BraiNIX state equivalent
 - only directories that genuinely need mutation
 
 ### Avoid in v1
@@ -435,7 +435,7 @@ These paths must be root-owned and tightly permissioned.
 
 ## 17. Minimalism Rules
 
-The filesystem plan must remain aligned with Brainix minimalism:
+The filesystem plan must remain aligned with BraiNIX minimalism:
 
 1. No extra partitions without clear purpose.
 2. No feature-heavy filesystem just because it is fashionable.
@@ -446,9 +446,9 @@ The filesystem plan must remain aligned with Brainix minimalism:
 
 ---
 
-## 18. Final Recommended Brainix v1 Model
+## 18. Final Recommended BraiNIX v1 Model
 
-The recommended Brainix v1 filesystem model is:
+The recommended BraiNIX v1 filesystem model is:
 
 - **FAT32 EFI partition** for firmware bootstrapping
 - **EROFS immutable operating system partition** for the trusted OS body
@@ -460,7 +460,7 @@ In plain language:
 - the EROFS partition contains the actual operating system image
 - the writable partition contains the data the system needs to change over time
 
-That is the cleanest secure storage design for Brainix at this stage.
+That is the cleanest secure storage design for BraiNIX at this stage.
 
 ---
 
@@ -468,4 +468,4 @@ That is the cleanest secure storage design for Brainix at this stage.
 
 If this document must be reduced to one paragraph:
 
-Brainix should not use a single fully writable root filesystem. It should use a FAT32 EFI partition for bootstrapping, a separate EROFS read-only partition for the immutable operating system image, and a third writable partition for system state such as logs, mutable config, audit data, and machine-local secrets. The immutable OS image should also be integrity-protected, and updates should replace the image atomically rather than mutating the live root in place.
+BraiNIX should not use a single fully writable root filesystem. It should use a FAT32 EFI partition for bootstrapping, a separate EROFS read-only partition for the immutable operating system image, and a third writable partition for system state such as logs, mutable config, audit data, and machine-local secrets. The immutable OS image should also be integrity-protected, and updates should replace the image atomically rather than mutating the live root in place.

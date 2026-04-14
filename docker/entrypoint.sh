@@ -8,7 +8,7 @@ ssh-keygen -A
 # Start SSH daemon in the background
 /usr/sbin/sshd
 
-echo "Brainix dev container ready."
+echo "BraiNIX dev container ready."
 echo "SSH listening on port 22 (mapped to 2222 on host)."
 
 # If a kernel binary was built, launch QEMU with serial-over-TCP on port 4444.
