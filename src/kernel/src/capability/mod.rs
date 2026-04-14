@@ -5,6 +5,8 @@
 //! and all error types.
 
 pub mod audit_event_type;
+pub mod device_capability;
+pub mod irq_capability;
 pub mod audit_log;
 pub mod audit_log_protection;
 pub mod capability_error;

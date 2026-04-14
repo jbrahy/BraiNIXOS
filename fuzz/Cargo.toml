@@ -24,3 +24,8 @@ doc = false
 name = "fuzz_capability_slot_index_out_of_bounds"
 path = "fuzz_targets/fuzz_capability_slot_index_out_of_bounds.rs"
 doc = false
+
+[[bin]]
+name = "fuzz_devd_nic_ipc_boundary_cannot_reach_kernel_memory"
+path = "fuzz_targets/fuzz_devd_nic_ipc_boundary_cannot_reach_kernel_memory.rs"
+doc = false

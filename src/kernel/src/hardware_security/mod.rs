@@ -17,6 +17,7 @@ pub mod cpu_feature_detection;
 pub mod csprng;
 pub mod entropy_source;
 pub mod indirect_branch_tracking;
+pub mod iommu_detection;
 pub mod kernel_config_blob;
 pub mod kernel_write_protection;
 pub mod memory_encryption;
