@@ -15,6 +15,16 @@ pub mod boot;
 
 pub mod capability;
 
+/// Device table constants and builder functions (pure data, host-testable).
+///
+/// This module is exposed outside the x86_64-gated boot module so that
+/// unit tests can run on aarch64-apple-darwin host targets. The file lives
+/// in boot/ but contains no hardware access — only compile-time constants
+/// and pure constructor functions for DeviceCapabilityData.
+#[cfg(not(target_arch = "x86_64"))]
+#[path = "boot/device_table.rs"]
+pub mod device_table;
+
 pub mod ipc;
 
 pub mod memory;
