@@ -14,6 +14,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 brainix-bootloader-verify = { path = "../src/bootloader-verify" }
 brainix-kernel = { path = "../src/kernel" }
+brainix-devd-nic = { path = "../src/servers/devd-nic" }
 
 [[bin]]
 name = "fuzz_bootloader_multiboot2_info_struct_parsing"

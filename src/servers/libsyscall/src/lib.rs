@@ -189,3 +189,106 @@ pub fn syscall_audit_read(
 ) -> i64 {
     0
 }
+
+/// Maps a bounded MMIO region into the calling device server's address space.
+///
+/// The kernel enforces CapDevice MMIO bounds on every call — addresses outside
+/// the capability's mmio_base_address..mmio_base_address+mmio_size window are
+/// rejected with CapabilityError::OutOfBounds (INV-DEV-001).
+/// Requires a CapDevice capability with Write rights.
+///
+/// # Arguments
+///
+/// - `device_capability_slot`: slot index of the CapDevice capability in the caller's CSpace
+/// - `virtual_address`: target virtual address in the device server's address space
+/// - `physical_address`: physical address of the MMIO region to map
+/// - `size`: size in bytes of the MMIO region
+///
+/// Verified by: test_device_capability_is_scoped
+#[cfg(target_arch = "x86_64")]
+pub fn syscall_device_map_mmio(
+    device_capability_slot: u8,
+    virtual_address: u64,
+    physical_address: u64,
+    size: u64,
+) -> i64 {
+    // SAFETY: SYSCALL instruction transfers control to kernel.
+    // Kernel validates CapDevice bounds before mapping any MMIO region.
+    // - Precondition: device_capability_slot holds a valid CapDevice with Write rights.
+    // - Invariant: INV-DEV-001 (devices do not imply universal memory authority).
+    // - Evidence: test_device_capability_is_scoped.
+    let return_value: i64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") SYSCALL_NUMBER_DEVICE_MAP_MMIO,
+            in("rdi") device_capability_slot as u64,
+            in("rsi") virtual_address,
+            in("rdx") physical_address,
+            in("r10") size,
+            lateout("rax") return_value,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack)
+        );
+    }
+    return_value
+}
+
+/// Host-target stub for syscall_device_map_mmio.
+///
+/// Returns 0 when invoked outside x86_64.
+/// Used for host-side unit test compilation only.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn syscall_device_map_mmio(
+    _device_capability_slot: u8,
+    _virtual_address: u64,
+    _physical_address: u64,
+    _size: u64,
+) -> i64 {
+    0
+}
+
+/// Binds a device IRQ line to an IPC endpoint for interrupt delivery.
+///
+/// When the IRQ fires, the kernel delivers a notification to the bound endpoint.
+/// The device server receives interrupt events by ipc_receive on that endpoint.
+/// Requires a CapIrq capability (INV-DEV-003: interrupt authority is explicit).
+///
+/// # Arguments
+///
+/// - `irq_capability_slot`: slot index of the CapIrq capability in the caller's CSpace
+/// - `endpoint_capability_slot`: slot index of the IPC endpoint capability
+///
+/// Verified by: test_device_irq_capability_is_not_global
+#[cfg(target_arch = "x86_64")]
+pub fn syscall_irq_bind(irq_capability_slot: u8, endpoint_capability_slot: u8) -> i64 {
+    // SAFETY: SYSCALL instruction transfers control to kernel.
+    // Kernel validates CapIrq before registering IRQ-to-endpoint binding.
+    // - Precondition: irq_capability_slot holds a valid CapIrq capability.
+    // - Invariant: INV-DEV-003 (interrupt authority is explicit).
+    // - Evidence: test_device_irq_capability_is_not_global.
+    let return_value: i64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") SYSCALL_NUMBER_IRQ_BIND,
+            in("rdi") irq_capability_slot as u64,
+            in("rsi") endpoint_capability_slot as u64,
+            lateout("rax") return_value,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack)
+        );
+    }
+    return_value
+}
+
+/// Host-target stub for syscall_irq_bind.
+///
+/// Returns 0 when invoked outside x86_64.
+/// Used for host-side unit test compilation only.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn syscall_irq_bind(_irq_capability_slot: u8, _endpoint_capability_slot: u8) -> i64 {
+    0
+}
