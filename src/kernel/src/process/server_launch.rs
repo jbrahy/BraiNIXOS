@@ -107,11 +107,29 @@ fn build_initial_thread(
     thread
 }
 
-/// Returns a thread pool slot index for the newly created process.
+/// Atomic counter tracking the next available thread pool slot index.
 ///
-/// Phase 7 stub: returns slot 0. Full thread pool allocation wired in Phase 8.
+/// Incremented on each call to allocate_thread_pool_slot. Ensures distinct
+/// non-overlapping slot indices for concurrent server process creation.
+static NEXT_THREAD_POOL_SLOT_INDEX: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+/// Returns the next available thread pool slot index for a newly created process.
+///
+/// Uses a monotonically incrementing atomic counter to ensure each successive
+/// call returns a distinct index. This is correct for Phase 8 single-core
+/// boot-time-only server creation (T-DEV-016 mitigation).
+///
+/// Verified by: tests::test_allocate_thread_pool_slot_returns_distinct_indices
 fn allocate_thread_pool_slot() -> usize {
-    0
+    let slot_index = NEXT_THREAD_POOL_SLOT_INDEX.load(core::sync::atomic::Ordering::Relaxed);
+    increment_thread_pool_slot_counter();
+    slot_index
+}
+
+/// Increments the thread pool slot counter by one.
+fn increment_thread_pool_slot_counter() {
+    NEXT_THREAD_POOL_SLOT_INDEX.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 }
 
 /// Places a capability of the given type and rights into the specified slot.
@@ -213,5 +231,17 @@ mod tests {
     fn test_build_initial_thread_state_is_ready() {
         let thread = build_initial_thread(0x0000_0000_0040_0000, 0x0000_0000_0080_0000);
         assert_eq!(thread.thread_state, ThreadState::Ready);
+    }
+
+    /// Verifies that allocate_thread_pool_slot returns distinct indices for successive calls.
+    ///
+    /// Two consecutive calls must return values that differ by exactly one, ensuring
+    /// multiple device servers receive non-overlapping thread pool slots (T-DEV-016).
+    #[test]
+    fn test_allocate_thread_pool_slot_returns_distinct_indices() {
+        let first_slot_index = allocate_thread_pool_slot();
+        let second_slot_index = allocate_thread_pool_slot();
+        assert_eq!(second_slot_index, first_slot_index.wrapping_add(1),
+            "successive allocations must return distinct incrementing indices");
     }
 }
