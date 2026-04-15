@@ -209,7 +209,11 @@ pub fn dispatch_ipc_send(thread_identifier: u32) -> i64 {
         Err(error) => return encode_ipc_error_as_return_code(error),
     };
     let message = build_ipc_message_from_syscall_registers();
-    // SAFETY: Single-core dispatch. Globals initialized at boot. INV-IPC-001.
+    // SAFETY: Called only from single-core SYSCALL dispatch path.
+    // - Precondition: initialize_kernel_endpoint_pool and initialize_kernel_process_table
+    //   called at boot before any SYSCALL can reach this point (single-core, no TOCTOU).
+    // - Invariant: INV-IPC-001 (kernel-mediated IPC), T-10-03-02 (single-core prevents TOCTOU).
+    // - Evidence: integration_ipc_round_trip_through_syscall_dispatch_layer.
     let result = unsafe { perform_ipc_send(thread_identifier, &message, &arguments) };
     encode_ipc_result_send(result)
 }
@@ -244,12 +248,32 @@ unsafe fn perform_ipc_send(
     )
 }
 
+/// Resolves a mutable Thread reference for `thread_identifier`, or EndpointRevoked if OOB.
+///
+/// # Safety
+///
+/// Called only from single-core SYSCALL dispatch path.
+/// - Precondition: Kernel thread pool initialized at boot before any SYSCALL can reach
+///   this point. kernel_thread_at_mut performs the bounds check internally.
+/// - Invariant: INV-AUTH-005 (bounds check performed inside kernel_thread_at_mut).
+/// - Evidence: integration_ipc_round_trip_through_syscall_dispatch_layer.
+unsafe fn resolve_thread_for_identifier(
+    thread_identifier: u32,
+) -> Result<&'static mut crate::thread::Thread, IpcError> {
+    kernel_ipc_state::kernel_thread_at_mut(thread_identifier as usize)
+        .ok_or(IpcError::EndpointRevoked)
+}
+
 /// Calls ipc_send with all resolved parameters.
 ///
 /// # Safety
 ///
-/// Precondition: thread_identifier < MAXIMUM_THREADS (checked before calling).
-/// Invariant: INV-IPC-001.
+/// Called only from single-core SYSCALL dispatch path via perform_ipc_send.
+/// - Precondition: Called from perform_ipc_send, which is called only from
+///   single-core SYSCALL dispatch. kernel_thread_at_mut enforces bounds internally
+///   (returns None -> Err on out-of-bounds — callers need not pre-check).
+/// - Invariant: INV-IPC-001.
+/// - Evidence: integration_ipc_round_trip_through_syscall_dispatch_layer.
 unsafe fn call_ipc_send(
     thread_identifier: u32,
     message: &IpcMessage,
@@ -258,8 +282,7 @@ unsafe fn call_ipc_send(
     endpoint_pool: &mut crate::ipc::endpoint::EndpointPool,
     caller_cspace: &mut CapabilitySpace,
 ) -> Result<(), IpcError> {
-    let sender_thread = kernel_ipc_state::kernel_thread_at_mut(thread_identifier as usize)
-        .ok_or(IpcError::EndpointRevoked)?;
+    let sender_thread = resolve_thread_for_identifier(thread_identifier)?;
     ipc_send(
         thread_identifier,
         message,
@@ -285,7 +308,11 @@ pub fn dispatch_ipc_receive(thread_identifier: u32) -> i64 {
         Ok(arguments) => arguments,
         Err(error) => return encode_ipc_error_as_return_code(error),
     };
-    // SAFETY: Single-core dispatch. Globals initialized at boot. INV-IPC-001.
+    // SAFETY: Called only from single-core SYSCALL dispatch path.
+    // - Precondition: initialize_kernel_endpoint_pool and initialize_kernel_process_table
+    //   called at boot before any SYSCALL can reach this point (single-core, no TOCTOU).
+    // - Invariant: INV-IPC-001 (kernel-mediated IPC), T-10-03-02 (single-core prevents TOCTOU).
+    // - Evidence: integration_ipc_round_trip_through_syscall_dispatch_layer.
     let result = unsafe { perform_ipc_receive(thread_identifier, &arguments) };
     encode_ipc_result_receive(result)
 }
@@ -324,8 +351,12 @@ unsafe fn perform_ipc_receive(
 ///
 /// # Safety
 ///
-/// Precondition: thread_identifier < MAXIMUM_THREADS (checked before calling).
-/// Invariant: INV-IPC-001.
+/// Called only from single-core SYSCALL dispatch path via perform_ipc_receive.
+/// - Precondition: Called from perform_ipc_receive, which is called only from
+///   single-core SYSCALL dispatch. kernel_thread_at_mut enforces bounds internally
+///   (returns None -> Err on out-of-bounds — callers need not pre-check).
+/// - Invariant: INV-IPC-001.
+/// - Evidence: integration_ipc_round_trip_through_syscall_dispatch_layer.
 unsafe fn call_ipc_receive(
     thread_identifier: u32,
     arguments: &IpcReceiveArguments,
@@ -333,8 +364,7 @@ unsafe fn call_ipc_receive(
     endpoint_pool: &mut crate::ipc::endpoint::EndpointPool,
     receiver_cspace: &mut CapabilitySpace,
 ) -> Result<IpcMessage, IpcError> {
-    let receiver_thread = kernel_ipc_state::kernel_thread_at_mut(thread_identifier as usize)
-        .ok_or(IpcError::EndpointRevoked)?;
+    let receiver_thread = resolve_thread_for_identifier(thread_identifier)?;
     ipc_receive(
         thread_identifier,
         arguments.receiver_capability_destination_slot,
@@ -363,7 +393,12 @@ pub fn dispatch_ipc_call(thread_identifier: u32) -> i64 {
         Err(error) => return encode_ipc_error_as_return_code(error),
     };
     let message = build_ipc_message_from_syscall_registers();
-    // SAFETY: Single-core dispatch. Globals initialized at boot. INV-IPC-001, INV-IPC-004.
+    // SAFETY: Called only from single-core SYSCALL dispatch path.
+    // - Precondition: initialize_kernel_endpoint_pool and initialize_kernel_process_table
+    //   called at boot before any SYSCALL can reach this point (single-core, no TOCTOU).
+    // - Invariant: INV-IPC-001 (kernel-mediated IPC), INV-IPC-004 (deadlock detection),
+    //   T-10-03-02 (single-core prevents TOCTOU).
+    // - Evidence: integration_ipc_round_trip_through_syscall_dispatch_layer.
     let result = unsafe { perform_ipc_call(thread_identifier, &message, &arguments) };
     encode_ipc_result_send(result)
 }
@@ -402,8 +437,12 @@ unsafe fn perform_ipc_call(
 ///
 /// # Safety
 ///
-/// Precondition: thread_identifier < MAXIMUM_THREADS (checked before calling).
-/// Invariant: INV-IPC-001, INV-IPC-004.
+/// Called only from single-core SYSCALL dispatch path via perform_ipc_call.
+/// - Precondition: Called from perform_ipc_call, which is called only from
+///   single-core SYSCALL dispatch. kernel_thread_at_mut enforces bounds internally
+///   (returns None -> Err on out-of-bounds — callers need not pre-check).
+/// - Invariant: INV-IPC-001, INV-IPC-004.
+/// - Evidence: integration_ipc_round_trip_through_syscall_dispatch_layer.
 unsafe fn call_ipc_call(
     thread_identifier: u32,
     message: &IpcMessage,
@@ -412,8 +451,7 @@ unsafe fn call_ipc_call(
     endpoint_pool: &mut crate::ipc::endpoint::EndpointPool,
     caller_cspace: &mut CapabilitySpace,
 ) -> Result<(), IpcError> {
-    let caller_thread = kernel_ipc_state::kernel_thread_at_mut(thread_identifier as usize)
-        .ok_or(IpcError::EndpointRevoked)?;
+    let caller_thread = resolve_thread_for_identifier(thread_identifier)?;
     let wait_for_graph = kernel_ipc_state::kernel_wait_for_graph_mut();
     ipc_call(
         thread_identifier,
