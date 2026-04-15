@@ -31,14 +31,14 @@ use brainix_libsyscall::{
 /// Mitigates T-HW-SPEC-01 (bounds-check bypass). Per D-02.
 ///
 /// Returns `Some(result)` for a recognized IPC number, `None` otherwise.
-fn handle_ipc_range_syscall(syscall_number: u64) -> Option<i64> {
+fn handle_ipc_range_syscall(syscall_number: u64, thread_identifier: u32) -> Option<i64> {
     // Spectre v1 mitigation: LFENCE after dispatch table indexing on user-supplied syscall number.
     // Prevents speculative load of dispatch table entry with attacker-controlled value. Per D-02.
     issue_speculative_load_barrier();
     match syscall_number {
-        SYSCALL_NUMBER_IPC_SEND => Some(handle_ipc_send_syscall()),
-        SYSCALL_NUMBER_IPC_RECEIVE => Some(handle_ipc_receive_syscall()),
-        SYSCALL_NUMBER_IPC_CALL => Some(handle_ipc_call_syscall()),
+        SYSCALL_NUMBER_IPC_SEND => Some(handle_ipc_send_syscall(thread_identifier)),
+        SYSCALL_NUMBER_IPC_RECEIVE => Some(handle_ipc_receive_syscall(thread_identifier)),
+        SYSCALL_NUMBER_IPC_CALL => Some(handle_ipc_call_syscall(thread_identifier)),
         _ => None,
     }
 }
@@ -133,7 +133,7 @@ fn handle_server_range_syscall(syscall_number: u64) -> Option<i64> {
 /// - Evidence: test_dispatch_syscall_routes_all_six_syscall_numbers.
 #[no_mangle]
 pub unsafe extern "C" fn dispatch_syscall(syscall_number: u64, thread_identifier: u32) -> i64 {
-    handle_ipc_range_syscall(syscall_number)
+    handle_ipc_range_syscall(syscall_number, thread_identifier)
         .or_else(|| handle_notify_range_syscall(syscall_number))
         .or_else(|| handle_process_lifecycle_syscall(syscall_number, thread_identifier))
         .or_else(|| handle_device_range_syscall(syscall_number))
@@ -141,25 +141,25 @@ pub unsafe extern "C" fn dispatch_syscall(syscall_number: u64, thread_identifier
         .unwrap_or(-1)
 }
 
-/// Phase 4 stub for SYS_IPC_SEND (syscall number 1).
+/// Dispatches SYS_IPC_SEND to the real ipc_send implementation.
 ///
-/// Phase 5 wires in the actual send implementation from ipc::send.
-fn handle_ipc_send_syscall() -> i64 {
-    0
+/// Enforces INV-IPC-001: all IPC through kernel-validated dispatch.
+fn handle_ipc_send_syscall(thread_identifier: u32) -> i64 {
+    super::ipc_dispatch_handlers::dispatch_ipc_send(thread_identifier)
 }
 
-/// Phase 4 stub for SYS_IPC_RECEIVE (syscall number 2).
+/// Dispatches SYS_IPC_RECEIVE to the real ipc_receive implementation.
 ///
-/// Phase 5 wires in the actual receive implementation from ipc::receive.
-fn handle_ipc_receive_syscall() -> i64 {
-    0
+/// Enforces INV-IPC-001: all IPC through kernel-validated dispatch.
+fn handle_ipc_receive_syscall(thread_identifier: u32) -> i64 {
+    super::ipc_dispatch_handlers::dispatch_ipc_receive(thread_identifier)
 }
 
-/// Phase 4 stub for SYS_IPC_CALL (syscall number 3).
+/// Dispatches SYS_IPC_CALL to the real ipc_call implementation.
 ///
-/// Phase 5 wires in the actual call implementation from ipc::call.
-fn handle_ipc_call_syscall() -> i64 {
-    0
+/// Enforces INV-IPC-001: all IPC through kernel-validated dispatch.
+fn handle_ipc_call_syscall(thread_identifier: u32) -> i64 {
+    super::ipc_dispatch_handlers::dispatch_ipc_call(thread_identifier)
 }
 
 /// Phase 4 stub for SYS_NOTIFY_SIGNAL (syscall number 4).
