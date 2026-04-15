@@ -164,21 +164,24 @@ fn handle_ipc_call_syscall(thread_identifier: u32) -> i64 {
 
 /// Phase 4 stub for SYS_NOTIFY_SIGNAL (syscall number 4).
 ///
+/// Returns -1 (not implemented) so callers can detect stub behavior.
 /// Phase 5 wires in the actual notify_signal implementation.
 fn handle_notify_signal_syscall() -> i64 {
-    0
+    -1
 }
 
 /// Phase 4 stub for SYS_NOTIFY_WAIT (syscall number 5).
 ///
+/// Returns -1 (not implemented) so callers can detect stub behavior.
 /// Phase 5 wires in the actual notify_wait implementation.
 fn handle_notify_wait_syscall() -> i64 {
-    0
+    -1
 }
 
 /// Phase 4 stub for SYS_NOTIFY_POLL (syscall number 6).
 ///
+/// Returns -1 (not implemented) so callers can detect stub behavior.
 /// Phase 5 wires in the actual notify_poll implementation.
 fn handle_notify_poll_syscall() -> i64 {
-    0
+    -1
 }
