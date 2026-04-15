@@ -137,12 +137,13 @@ mod tests {
         let layout = alloc::alloc::Layout::new::<ProcessTable>();
         // SAFETY: layout is non-zero size (ProcessTable is ~320 KiB).
         // - Precondition: layout has non-zero size for ProcessTable.
-        // - Invariant: each entry is initialized via initialize_entries_as_none before use.
+        // - Invariant: null check below enforces non-null before any dereference.
         // - Evidence: test_process_table_new_creates_empty_table validates None state.
         let raw_pointer = unsafe { alloc::alloc::alloc(layout) } as *mut ProcessTable;
+        assert!(!raw_pointer.is_null(), "ProcessTable heap allocation failed: allocator returned null");
         initialize_process_table_entries_as_none(raw_pointer);
-        // SAFETY: raw_pointer is non-null; all entries initialized by initialize helper.
-        // - Precondition: initialize_process_table_entries_as_none ran on raw_pointer.
+        // SAFETY: raw_pointer is non-null (asserted above); all entries initialized.
+        // - Precondition: null check passed; initialize_process_table_entries_as_none ran.
         // - Invariant: Box::from_raw requires non-null, fully initialized pointer.
         // - Evidence: test_process_table_new_creates_empty_table validates None state.
         unsafe { Box::from_raw(raw_pointer) }
@@ -174,11 +175,12 @@ mod tests {
         let layout = alloc::alloc::Layout::new::<CapabilitySpace>();
         // SAFETY: layout is non-zero size (CapabilitySpace is ~10 KiB).
         // - Precondition: layout has non-zero size for CapabilitySpace.
-        // - Invariant: ptr::write initializes the struct before Box::from_raw.
+        // - Invariant: null check below enforces non-null before any dereference.
         // - Evidence: allocate_capability_space_on_heap is test-only infrastructure.
         let raw_pointer = unsafe { alloc::alloc::alloc(layout) } as *mut CapabilitySpace;
-        // SAFETY: raw_pointer is non-null; ptr::write initializes the struct fully.
-        // - Precondition: raw_pointer allocated for CapabilitySpace by alloc.
+        assert!(!raw_pointer.is_null(), "CapabilitySpace heap allocation failed: allocator returned null");
+        // SAFETY: raw_pointer is non-null (asserted above); ptr::write initializes fully.
+        // - Precondition: null check passed; raw_pointer allocated for CapabilitySpace.
         // - Invariant: CapabilitySpace::new() produces all-null slots per INV-AUTH-001.
         // - Evidence: allocate_capability_space_on_heap is test-only infrastructure.
         unsafe {

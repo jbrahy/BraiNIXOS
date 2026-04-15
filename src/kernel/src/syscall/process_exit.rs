@@ -238,10 +238,15 @@ mod tests {
         let layout = alloc::alloc::Layout::new::<ProcessTable>();
         // SAFETY: layout is non-zero size (ProcessTable is ~320 KiB).
         // - Precondition: layout has non-zero size for ProcessTable.
-        // - Invariant: each entry initialized via initialize_entries_as_none before use.
+        // - Invariant: null check below enforces non-null before any dereference.
+        // - Evidence: test_process_exit_revokes_capability_space validates table use.
         let raw_pointer = unsafe { alloc::alloc::alloc(layout) } as *mut ProcessTable;
+        assert!(!raw_pointer.is_null(), "ProcessTable heap allocation failed: allocator returned null");
         initialize_process_table_entries_as_none(raw_pointer);
-        // SAFETY: raw_pointer is non-null; all entries initialized by initialize helper.
+        // SAFETY: raw_pointer is non-null (asserted above); all entries initialized.
+        // - Precondition: null check passed; initialize_process_table_entries_as_none ran.
+        // - Invariant: Box::from_raw requires non-null, fully initialized pointer.
+        // - Evidence: test_process_exit_revokes_capability_space validates table use.
         unsafe { Box::from_raw(raw_pointer) }
     }
 
