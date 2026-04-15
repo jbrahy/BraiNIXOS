@@ -129,6 +129,21 @@ fn convert_identifier_to_slot_index(thread_identifier: ThreadIdentifier) -> Opti
 #[cfg(test)]
 extern crate alloc;
 
+/// Writes None into each entry of a ProcessTable via raw pointer.
+///
+/// Used by both heap-allocation test helpers and in-place kernel global initialization.
+/// Accessing the private `entries` field via raw pointer is permitted in this module.
+///
+/// # Safety
+///
+/// `raw_pointer` must be non-null and point to allocated memory of size >= sizeof(ProcessTable).
+/// Caller is responsible for ensuring no concurrent access during initialization.
+/// Invariant: INV-AUTH-001 (no thread holds authority until explicitly inserted).
+/// Evidence: test_process_table_new_creates_empty_table validates None state.
+pub unsafe fn initialize_process_table_entries_in_place(raw_pointer: *mut ProcessTable) {
+    initialize_entries_as_none_via_raw_pointer(raw_pointer);
+}
+
 /// Test-only: heap-allocates a ProcessTable and returns it as a Box.
 ///
 /// ProcessTable is ~320 KiB and overflows the test stack. This function performs
@@ -159,11 +174,11 @@ pub(crate) fn allocate_process_table_on_heap_for_test() -> alloc::boxed::Box<Pro
     unsafe { alloc::boxed::Box::from_raw(raw_pointer) }
 }
 
-/// Test-only: writes None into each entry of a heap-allocated ProcessTable.
+/// Writes None into each entry of a ProcessTable via raw pointer.
 ///
 /// Must be called from within this module so that the private `entries` field
-/// is accessible. Called only by `allocate_process_table_on_heap_for_test`.
-#[cfg(test)]
+/// is accessible. Used by both heap-allocation test helpers and in-place
+/// kernel global initialization via `initialize_process_table_entries_in_place`.
 fn initialize_entries_as_none_via_raw_pointer(raw_pointer: *mut ProcessTable) {
     for entry_index in 0..MAXIMUM_THREADS {
         // SAFETY: raw_pointer is non-null; entry_index < MAXIMUM_THREADS is in bounds.

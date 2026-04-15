@@ -11,7 +11,7 @@ use core::mem::MaybeUninit;
 use crate::ipc::endpoint::EndpointPool;
 use crate::ipc::wait_for_graph::WaitForGraph;
 use crate::ipc::MAXIMUM_THREADS;
-use crate::process::process_table::ProcessTable;
+use crate::process::process_table::{initialize_process_table_entries_in_place, ProcessTable};
 use crate::thread::Thread;
 
 /// Kernel-owned endpoint pool. Initialized at boot via `initialize_kernel_endpoint_pool`.
@@ -38,7 +38,10 @@ pub unsafe fn initialize_kernel_endpoint_pool() {
     (*pool_pointer).write(EndpointPool::new());
 }
 
-/// Initializes the kernel process table. Must be called once at boot.
+/// Initializes the kernel process table in-place without a stack-allocated temporary.
+///
+/// Writes None into each entry directly via raw pointer to avoid constructing
+/// a ~320 KiB ProcessTable on the stack (which overflows in test environments).
 ///
 /// # Safety
 ///
@@ -47,7 +50,8 @@ pub unsafe fn initialize_kernel_endpoint_pool() {
 /// Invariant: INV-AUTH-001 (process table ready for CSpace insertion).
 pub unsafe fn initialize_kernel_process_table() {
     let table_pointer = core::ptr::addr_of_mut!(KERNEL_PROCESS_TABLE);
-    (*table_pointer).write(ProcessTable::new());
+    let raw_pointer = (*table_pointer).as_mut_ptr();
+    initialize_process_table_entries_in_place(raw_pointer);
 }
 
 /// Returns a mutable reference to the kernel endpoint pool.

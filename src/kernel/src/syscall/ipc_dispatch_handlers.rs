@@ -382,3 +382,210 @@ unsafe fn call_ipc_call(
         wait_for_graph,
     )
 }
+
+// These tests modify kernel IPC globals (static mut). Run with --test-threads=1.
+#[cfg(test)]
+mod tests {
+    use core::sync::atomic::Ordering;
+
+    use super::*;
+    use crate::capability::capability_rights;
+    use crate::capability::capability_slot::CapabilitySlotState;
+    use crate::capability::capability_space::CapabilitySpace;
+    use crate::capability::capability_type::CapabilityType;
+    use crate::ipc::receive::ipc_receive;
+    use crate::ipc::CAPABILITY_TRANSFER_NONE_SENTINEL;
+    use crate::syscall::kernel_ipc_state;
+    use crate::syscall::kernel_syscall_registers::{
+        KERNEL_SYSCALL_CAPABILITY_REGISTER_VALUE, KERNEL_SYSCALL_CAP_SLOT_VALUE,
+        KERNEL_SYSCALL_ENDPOINT_SLOT_VALUE, KERNEL_SYSCALL_MESSAGE_REGISTER_ONE_VALUE,
+        KERNEL_SYSCALL_MESSAGE_REGISTER_TWO_VALUE, KERNEL_SYSCALL_MESSAGE_REGISTER_ZERO_VALUE,
+        KERNEL_SYSCALL_TIMEOUT_TICKS_VALUE,
+    };
+
+    /// Stores IPC send argument values into the AtomicU64 syscall globals.
+    fn set_ipc_send_globals(
+        endpoint_slot: u64,
+        cap_slot: u64,
+        timeout: u64,
+        mr0: u64,
+        mr1: u64,
+        mr2: u64,
+        cap_reg: u64,
+    ) {
+        KERNEL_SYSCALL_ENDPOINT_SLOT_VALUE.store(endpoint_slot, Ordering::Relaxed);
+        KERNEL_SYSCALL_CAP_SLOT_VALUE.store(cap_slot, Ordering::Relaxed);
+        KERNEL_SYSCALL_TIMEOUT_TICKS_VALUE.store(timeout, Ordering::Relaxed);
+        KERNEL_SYSCALL_MESSAGE_REGISTER_ZERO_VALUE.store(mr0, Ordering::Relaxed);
+        KERNEL_SYSCALL_MESSAGE_REGISTER_ONE_VALUE.store(mr1, Ordering::Relaxed);
+        KERNEL_SYSCALL_MESSAGE_REGISTER_TWO_VALUE.store(mr2, Ordering::Relaxed);
+        KERNEL_SYSCALL_CAPABILITY_REGISTER_VALUE.store(cap_reg, Ordering::Relaxed);
+    }
+
+    /// Initializes the kernel endpoint pool and process table globals.
+    ///
+    /// # Safety
+    ///
+    /// Must be called at the start of each test that exercises dispatch functions.
+    /// Single-threaded test execution (--test-threads=1) ensures no concurrent access.
+    unsafe fn initialize_test_kernel_state() {
+        kernel_ipc_state::initialize_kernel_endpoint_pool();
+        kernel_ipc_state::initialize_kernel_process_table();
+    }
+
+    /// Builds a CapabilitySpace with a Valid Endpoint capability at slot 0.
+    ///
+    /// The object_pointer is set to `endpoint_index` so dispatch can resolve it.
+    fn build_cspace_with_endpoint_capability(endpoint_index: u64) -> CapabilitySpace {
+        let mut capability_space = CapabilitySpace::new();
+        let slot = capability_space.lookup_slot_mut(0);
+        slot.state = CapabilitySlotState::Valid;
+        slot.capability_type = CapabilityType::Endpoint;
+        slot.rights_bitmask = capability_rights::GRANT;
+        slot.object_pointer = endpoint_index;
+        capability_space
+    }
+
+    /// Inserts a CSpace with an Endpoint capability at slot 0 into the process table.
+    ///
+    /// # Safety
+    ///
+    /// Requires initialize_test_kernel_state to have been called first.
+    unsafe fn register_thread_with_endpoint_capability(
+        thread_identifier: u32,
+        endpoint_index: u64,
+    ) {
+        let capability_space = build_cspace_with_endpoint_capability(endpoint_index);
+        let process_table = kernel_ipc_state::kernel_process_table_mut();
+        process_table
+            .insert_entry(thread_identifier, capability_space)
+            .expect("register_thread_with_endpoint_capability: insert must succeed");
+    }
+
+    /// Enqueues thread 1 as a receiver on endpoint 0 by calling ipc_receive directly.
+    ///
+    /// When no sender is present, ipc_receive blocks the receiver and returns Ok(default).
+    ///
+    /// # Safety
+    ///
+    /// Requires initialize_test_kernel_state and register_thread_with_endpoint_capability
+    /// for thread 1 to have been called first.
+    unsafe fn enqueue_thread_as_receiver_on_endpoint(
+        receiver_thread_identifier: u32,
+        endpoint_index: usize,
+    ) {
+        let endpoint_pool = kernel_ipc_state::kernel_endpoint_pool_mut();
+        let process_table = kernel_ipc_state::kernel_process_table_mut();
+        let receiver_cspace = process_table
+            .lookup_entry_mut(receiver_thread_identifier)
+            .expect("enqueue_thread_as_receiver: thread must be registered");
+        let receiver_thread =
+            kernel_ipc_state::kernel_thread_at_mut(receiver_thread_identifier as usize);
+        let receive_result = ipc_receive(
+            receiver_thread_identifier,
+            0xFF,
+            endpoint_index,
+            endpoint_pool,
+            receiver_thread,
+            receiver_cspace,
+            None,
+            CAPABILITY_TRANSFER_NONE_SENTINEL,
+            None,
+            false,
+            0,
+        );
+        assert!(
+            receive_result.is_ok(),
+            "enqueue_thread_as_receiver: ipc_receive must succeed when no sender present"
+        );
+    }
+
+    /// Verifies that IpcError discriminants encode as expected negative return codes.
+    ///
+    /// Enforces D-05: Timeout(0) -> -1, WouldDeadlock(1) -> -2, EndpointRevoked(2) -> -3.
+    #[test]
+    fn test_ipc_error_encoding_produces_correct_negative_codes() {
+        assert_eq!(
+            encode_ipc_error_as_return_code(IpcError::Timeout),
+            -1,
+            "Timeout must encode as -1"
+        );
+        assert_eq!(
+            encode_ipc_error_as_return_code(IpcError::WouldDeadlock),
+            -2,
+            "WouldDeadlock must encode as -2"
+        );
+        assert_eq!(
+            encode_ipc_error_as_return_code(IpcError::EndpointRevoked),
+            -3,
+            "EndpointRevoked must encode as -3"
+        );
+    }
+
+    /// Verifies that dispatch_ipc_send returns a negative error code when the calling
+    /// thread has no registered CSpace in the process table.
+    ///
+    /// Exercises the CSpace lookup failure path (lookup_entry_mut returns None -> EndpointRevoked).
+    #[test]
+    fn test_dispatch_ipc_send_returns_error_for_unregistered_thread() {
+        // SAFETY: Single-threaded test (--test-threads=1). No concurrent access.
+        unsafe { initialize_test_kernel_state() };
+        set_ipc_send_globals(0, 0xFF, 0, 0, 0, 0, 0xFF);
+        // Thread 99 is not registered in the process table.
+        let return_code = dispatch_ipc_send(99);
+        assert!(
+            return_code < 0,
+            "unregistered thread must return negative error code, got {}",
+            return_code
+        );
+    }
+
+    /// Verifies that dispatch_ipc_send returns 0 (success) when timeout=0 and no receiver.
+    ///
+    /// A timeout=0 send is a non-blocking try: returns immediately Ok(()) when no receiver
+    /// is present, per ipc_send semantics (handle_no_receiver_present returns Ok if timeout=0).
+    #[test]
+    fn test_dispatch_ipc_send_returns_success_for_nonblocking_try() {
+        // SAFETY: Single-threaded test (--test-threads=1). No concurrent access.
+        unsafe { initialize_test_kernel_state() };
+        // Register thread 0 with Endpoint capability at slot 0 pointing to endpoint 0.
+        unsafe { register_thread_with_endpoint_capability(0, 0) };
+        set_ipc_send_globals(0, 0xFF, 0, 0xDEAD, 0xBEEF, 0xCAFE, 0xFF);
+        // timeout=0 and no receiver -> non-blocking try returns Ok(()) -> 0.
+        let return_code = dispatch_ipc_send(0);
+        assert_eq!(
+            return_code, 0,
+            "non-blocking send with no receiver must return 0 (Ok), got {}",
+            return_code
+        );
+    }
+
+    /// Integration test: full IPC send->receive round-trip through the dispatch layer.
+    ///
+    /// Sets up two threads with CSpaces, enqueues thread 1 as receiver on endpoint 0,
+    /// then dispatches send from thread 0. Rendezvous with the waiting receiver must
+    /// succeed, returning 0.
+    ///
+    /// Exercises the full dispatch_ipc_send -> ipc_send -> rendezvous path.
+    /// Enforces INV-IPC-001: IPC is kernel-mediated end-to-end through dispatch.
+    /// Evidence for: perform_ipc_send SAFETY doc (INV-IPC-001).
+    #[test]
+    fn integration_ipc_round_trip_through_syscall_dispatch_layer() {
+        // SAFETY: Single-threaded test (--test-threads=1). No concurrent access.
+        unsafe { initialize_test_kernel_state() };
+        // Register thread 0 (sender) and thread 1 (receiver) each with Endpoint cap at slot 0.
+        unsafe { register_thread_with_endpoint_capability(0, 0) };
+        unsafe { register_thread_with_endpoint_capability(1, 0) };
+        // Enqueue thread 1 as receiver on endpoint 0 before the send.
+        unsafe { enqueue_thread_as_receiver_on_endpoint(1, 0) };
+        // Set send globals: endpoint_slot=0, cap_slot=0xFF, timeout=10, MR0-2 with test values.
+        set_ipc_send_globals(0, 0xFF, 10, 0xDEAD, 0xBEEF, 0xCAFE, 0xFF);
+        // Dispatch send from thread 0. Thread 1 is waiting -> rendezvous -> returns 0.
+        let return_code = dispatch_ipc_send(0);
+        assert_eq!(
+            return_code, 0,
+            "round-trip send with waiting receiver must return 0 (rendezvous success), got {}",
+            return_code
+        );
+    }
+}
