@@ -7,5 +7,8 @@ license.workspace = true
 [dependencies]
 brainix-libsyscall = { path = "../libsyscall" }
 
+[dev-dependencies]
+brainix-kernel = { path = "../../kernel" }
+
 [lints]
 workspace = true
