@@ -6,6 +6,14 @@
 //!
 //! Hardware-specific register save and restore lives in arch/ under the
 //! unsafe allowlist.
+//!
+//! `#[no_mangle]` on `CURRENT_THREAD_IDENTIFIER_VALUE` is grouped under the
+//! `unsafe_code` lint on nightly Rust. This file falls under the
+//! `src/kernel/src/arch/` (assembly stubs) allowlist entry — the scheduler
+//! writes the identifier that the assembly stub reads via RIP-relative addressing.
+#![allow(unsafe_code)]
+
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use super::budget_accounting::{check_budget_exhaustion, decrement_budget};
 use super::priority_inheritance::compute_effective_priority;
@@ -14,6 +22,28 @@ use super::time_partitioning::{
 };
 use super::{SchedulerAction, SchedulerState, MAXIMUM_THREADS};
 use crate::thread::{Thread, ThreadState};
+
+/// Scheduler-maintained current thread identifier, readable from the SYSCALL
+/// assembly entry stub via RIP-relative addressing.
+///
+/// Written by the scheduler before context switch (SYSRET).
+/// Read by syscall_entry_point assembly stub before `call dispatch_syscall`.
+/// AtomicU32 avoids static mut; Relaxed ordering sufficient for single-core
+/// (INV-SCHED-001).
+///
+/// `#[no_mangle]` required for assembly reference via symbol name.
+#[no_mangle]
+pub static CURRENT_THREAD_IDENTIFIER_VALUE: AtomicU32 = AtomicU32::new(0);
+
+/// Updates the current thread identifier before context switch.
+///
+/// Called by the scheduler immediately after setting current_thread_index.
+/// The assembly stub reads this value to pass thread identity to dispatch_syscall.
+///
+/// Enforces D-03: single write point for thread identity.
+pub fn set_current_thread_identifier(thread_identifier: u32) {
+    CURRENT_THREAD_IDENTIFIER_VALUE.store(thread_identifier, Ordering::Relaxed);
+}
 
 /// Combines a partition action and budget action into a single scheduler decision.
 ///
@@ -94,6 +124,18 @@ pub fn process_scheduler_tick(state: &mut SchedulerState) -> SchedulerAction {
     let partition_action = advance_partition_slot_if_expired(&mut state.major_frame_state);
     let budget_action = evaluate_current_thread_budget(state);
     combine_scheduler_actions(partition_action, budget_action)
+}
+
+/// Sets the current thread index and writes the thread identifier for assembly pickup.
+///
+/// This is the single write point for thread identity (D-03). The assembly stub
+/// reads CURRENT_THREAD_IDENTIFIER_VALUE via RIP-relative addressing to load
+/// thread identity into rsi before calling dispatch_syscall.
+///
+/// Enforces INV-SCHED-001: thread identity is always consistent with scheduler state.
+pub fn activate_thread_as_current(state: &mut SchedulerState, thread_index: u32) {
+    state.current_thread_index = Some(thread_index);
+    set_current_thread_identifier(thread_index);
 }
 
 /// Returns the thread index of the highest-effective-priority thread in the run queue.
@@ -214,5 +256,21 @@ mod tests {
         let state = SchedulerState::new();
         let selected = select_next_thread_to_run(&state);
         assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn test_activate_thread_as_current_sets_index_and_identifier() {
+        let mut state = SchedulerState::new();
+        activate_thread_as_current(&mut state, 5);
+        assert_eq!(state.current_thread_index, Some(5));
+        let stored = CURRENT_THREAD_IDENTIFIER_VALUE.load(Ordering::Relaxed);
+        assert_eq!(stored, 5);
+    }
+
+    #[test]
+    fn test_set_current_thread_identifier_stores_value() {
+        set_current_thread_identifier(7);
+        let stored = CURRENT_THREAD_IDENTIFIER_VALUE.load(Ordering::Relaxed);
+        assert_eq!(stored, 7);
     }
 }
