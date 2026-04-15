@@ -21,6 +21,23 @@ pub use ipv4::parse_ipv4_header;
 /// Enforces INV-DEV-002: server loops only on its assigned endpoint.
 pub fn network_server_main_loop() -> ! {
     loop {
+        // Phase 9: IPC receive from linkd endpoint
+        // Phase 9: parse_ipv4_header on received payload
+        // Phase 9: forward to transportd or reply to linkd
         core::hint::spin_loop();
     }
+}
+
+/// Forwards a parsed transport-layer payload to transportd via IPC.
+///
+/// Phase 9 stub — real IPC send to transportd endpoint wired in a later wave.
+pub fn forward_packet_to_transport_layer() {
+    todo!("Phase 9: IPC send to transportd")
+}
+
+/// Forwards a reply payload back to linkd via IPC.
+///
+/// Phase 9 stub — real IPC send to linkd endpoint wired in a later wave.
+pub fn forward_reply_to_link_layer() {
+    todo!("Phase 9: IPC send to linkd")
 }
