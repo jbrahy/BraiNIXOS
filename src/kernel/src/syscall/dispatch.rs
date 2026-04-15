@@ -116,6 +116,8 @@ fn handle_server_range_syscall(syscall_number: u64) -> Option<i64> {
 /// Called directly from the SYSCALL entry stub via C calling convention.
 /// `syscall_number` maps to rdi (first argument per SysV AMD64 ABI), which
 /// the entry stub loads from the saved rax on the kernel stack before the call.
+/// `thread_identifier` maps to rsi (second argument), loaded by the entry stub
+/// from CURRENT_THREAD_IDENTIFIER_VALUE via RIP-relative addressing (D-03).
 ///
 /// Enforces INV-IPC-001: all IPC operations route through this validated dispatch point.
 /// No IPC operation is reachable from userspace except through this table.
@@ -123,12 +125,15 @@ fn handle_server_range_syscall(syscall_number: u64) -> Option<i64> {
 /// # Safety
 ///
 /// Called from assembly (syscall_entry_point global_asm! stub). The caller
-/// guarantees `syscall_number` is the raw rax value from the SYSCALL instruction.
+/// guarantees `syscall_number` is the raw rax value from the SYSCALL instruction
+/// and `thread_identifier` is from kernel-only CURRENT_THREAD_IDENTIFIER_VALUE.
 /// - Precondition: Called only from ring 0 SYSCALL entry stub.
 /// - Invariant: INV-IPC-001 (all IPC through kernel-validated entry).
 /// - Evidence: test_dispatch_syscall_routes_all_six_syscall_numbers.
 #[no_mangle]
-pub unsafe extern "C" fn dispatch_syscall(syscall_number: u64) -> i64 {
+pub unsafe extern "C" fn dispatch_syscall(syscall_number: u64, thread_identifier: u32) -> i64 {
+    // Phase 10 Plan 04 wires CSpace lookup via this identifier.
+    let _thread_identifier = thread_identifier;
     handle_ipc_range_syscall(syscall_number)
         .or_else(|| handle_notify_range_syscall(syscall_number))
         .or_else(|| handle_process_lifecycle_syscall(syscall_number))

@@ -185,8 +185,12 @@ global_asm!(
     "call is_canonical_virtual_address",
     "test %rax, %rax",
     "jz .Liretq_fallback",
-    // Canonical RIP: load syscall number from stack and call dispatch.
+    // Canonical RIP: load syscall number and thread identifier, then dispatch.
+    // Thread identity comes from kernel memory (CURRENT_THREAD_IDENTIFIER_VALUE), not
+    // from any userspace-controlled register. Single read in assembly per D-03.
+    // T-10-03-01: userspace cannot write kernel BSS; T-10-03-02: single-core prevents TOCTOU.
     "mov 56(%rsp), %rdi",
+    "mov CURRENT_THREAD_IDENTIFIER_VALUE(%rip), %esi",
     "call dispatch_syscall",
     // rax now holds the return code from dispatch_syscall.
     // Save return code; restore non-return registers.
