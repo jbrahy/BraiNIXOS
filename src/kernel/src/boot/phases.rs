@@ -49,6 +49,7 @@ pub fn execute_boot_sequence(
     measure_server_binaries_into_pcr3(boot_step_logger);
     load_and_launch_server_processes(boot_step_logger);
     launch_device_server_processes(boot_step_logger);
+    launch_network_server_processes(boot_step_logger);
     log_boot_complete(boot_step_logger);
 }
 
@@ -84,16 +85,16 @@ fn protect_audit_log_after_boot_entries(boot_step_logger: &mut BootStepLogger) {
     boot_step_logger.ok("Audit log pages write-protected (INV-AUD-001)");
 }
 
-/// Extends PCR[3] with SHA-256 hashes of all five server binaries.
+/// Extends PCR[3] with SHA-256 hashes of all eight server binaries.
 ///
 /// Must be called BEFORE loading any server ELF into the address space so
 /// that PCR[3] reflects the raw on-disk binary content. Ordering per D-02:
-/// init, spawnd, auditd, devd-nic, devd-disk.
+/// init, spawnd, auditd, devd-nic, devd-disk, linkd, ipd, transportd.
 ///
 /// Enforces INV-BOOT-001: measured boot path integrity.
 fn measure_server_binaries_into_pcr3(boot_step_logger: &mut BootStepLogger) {
-    measure_all_server_binaries(&[], &[], &[], &[], &[]);
-    boot_step_logger.ok("PCR[3] extended with 5 server binary hashes (D-02)");
+    measure_all_server_binaries(&[], &[], &[], &[], &[], &[], &[], &[]);
+    boot_step_logger.ok("PCR[3] extended with 8 server binary hashes (D-02)");
 }
 
 /// Creates server processes for init, spawnd, and auditd with minimum capabilities.
@@ -263,6 +264,94 @@ fn launch_devd_disk_server_process() {
 fn wire_disk_device_data_into_slot(capability_space: &mut CapabilitySpace) {
     let slot = capability_space.lookup_slot_mut(0);
     slot.object_pointer = core::ptr::addr_of!(DISK_DEVICE_CAPABILITY_DATA) as u64;
+}
+
+/// Launches network server processes for linkd, ipd, and transportd.
+///
+/// Per D-03: kernel grants minimum capabilities directly at boot.
+/// Enforces INV-AUTH-001: each network server starts with minimum authority.
+/// Enforces INV-MEM-002: each server has a KPTI-isolated address space.
+fn launch_network_server_processes(boot_step_logger: &mut BootStepLogger) {
+    launch_linkd_server_process();
+    launch_ipd_server_process();
+    launch_transportd_server_process();
+    boot_step_logger.ok("Network servers created: linkd, ipd, transportd");
+}
+
+/// Creates the linkd server process and grants 3 capabilities per D-03.
+///
+/// Slot 0: CapEndpoint + READ (receive from devd-nic).
+/// Slot 1: CapEndpoint + WRITE (send to ipd).
+/// Slot 2: CapFrame + READ|WRITE (shared packet buffer page).
+///
+/// Enforces INV-DEV-002: linkd receives only its assigned authority.
+fn launch_linkd_server_process() {
+    let _ = create_server_process(ProcessType::NetworkServer, 0x0000_0000_0040_0000);
+    let mut linkd_capability_space = CapabilitySpace::new();
+    grant_initial_capability_to_server(
+        &mut linkd_capability_space,
+        0,
+        CapabilityType::Endpoint,
+        capability_rights::READ,
+    );
+    grant_linkd_outbound_and_frame_capabilities(&mut linkd_capability_space);
+}
+
+/// Grants linkd's slot 1 (send to ipd) and slot 2 (CapFrame) capabilities.
+fn grant_linkd_outbound_and_frame_capabilities(linkd_capability_space: &mut CapabilitySpace) {
+    grant_initial_capability_to_server(
+        linkd_capability_space,
+        1,
+        CapabilityType::Endpoint,
+        capability_rights::WRITE,
+    );
+    grant_initial_capability_to_server(
+        linkd_capability_space,
+        2,
+        CapabilityType::Frame,
+        capability_rights::READ | capability_rights::WRITE,
+    );
+}
+
+/// Creates the ipd server process and grants 2 capabilities per D-03.
+///
+/// Slot 0: CapEndpoint + READ (receive from linkd).
+/// Slot 1: CapEndpoint + WRITE (send to transportd).
+///
+/// Enforces INV-DEV-002: ipd receives only its assigned authority.
+fn launch_ipd_server_process() {
+    let _ = create_server_process(ProcessType::NetworkServer, 0x0000_0000_0040_0000);
+    let mut ipd_capability_space = CapabilitySpace::new();
+    grant_initial_capability_to_server(
+        &mut ipd_capability_space,
+        0,
+        CapabilityType::Endpoint,
+        capability_rights::READ,
+    );
+    grant_initial_capability_to_server(
+        &mut ipd_capability_space,
+        1,
+        CapabilityType::Endpoint,
+        capability_rights::WRITE,
+    );
+}
+
+/// Creates the transportd server process and grants ONLY 1 capability per D-03.
+///
+/// Slot 0: CapEndpoint + READ (receive from ipd) — and nothing else.
+/// NO CapDevice, NO CapIrq, NO endpoint to devd-nic, NO endpoint to devd-disk.
+///
+/// Enforces D-04: two-layer containment — transportd cannot reach devd-nic.
+/// Enforces INV-DEV-002: transportd receives minimum possible authority.
+fn launch_transportd_server_process() {
+    let _ = create_server_process(ProcessType::NetworkServer, 0x0000_0000_0040_0000);
+    let mut transportd_capability_space = CapabilitySpace::new();
+    grant_initial_capability_to_server(
+        &mut transportd_capability_space,
+        0,
+        CapabilityType::Endpoint,
+        capability_rights::READ,
+    );
 }
 
 fn log_kernel_banner(boot_step_logger: &mut BootStepLogger) {

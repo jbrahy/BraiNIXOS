@@ -36,12 +36,34 @@ pub fn measure_server_binary_into_pcr3(binary_bytes: &[u8]) -> Result<(), TpmErr
     extend_platform_configuration_register(PCR_INDEX_SERVER_BINARIES, &binary_hash)
 }
 
-/// Extends init, spawnd, auditd, devd-nic, and devd-disk binary hashes into PCR[3] in order.
+/// Extends all eight server binary hashes into PCR[3] in order.
 ///
-/// Five sequential extends into PCR[3] per D-02 ordering: init, spawnd, auditd,
-/// devd-nic, devd-disk. TPM errors are tolerated during development — swtpm may
-/// not be present on host. Any change to any server binary changes PCR[3].
+/// Eight sequential extends into PCR[3] per D-02 ordering: init, spawnd, auditd,
+/// devd-nic, devd-disk, linkd, ipd, transportd. TPM errors are tolerated during
+/// development — swtpm may not be present on host. Any change to any server
+/// binary changes PCR[3].
 pub fn measure_all_server_binaries(
+    init_binary: &[u8],
+    spawnd_binary: &[u8],
+    auditd_binary: &[u8],
+    devd_nic_binary: &[u8],
+    devd_disk_binary: &[u8],
+    linkd_binary: &[u8],
+    ipd_binary: &[u8],
+    transportd_binary: &[u8],
+) {
+    measure_original_five_server_binaries(
+        init_binary,
+        spawnd_binary,
+        auditd_binary,
+        devd_nic_binary,
+        devd_disk_binary,
+    );
+    measure_network_server_binaries(linkd_binary, ipd_binary, transportd_binary);
+}
+
+/// Extends the original five server binary hashes into PCR[3].
+fn measure_original_five_server_binaries(
     init_binary: &[u8],
     spawnd_binary: &[u8],
     auditd_binary: &[u8],
@@ -53,6 +75,17 @@ pub fn measure_all_server_binaries(
     let _ = measure_server_binary_into_pcr3(auditd_binary);
     let _ = measure_server_binary_into_pcr3(devd_nic_binary);
     let _ = measure_server_binary_into_pcr3(devd_disk_binary);
+}
+
+/// Extends the three network server binary hashes into PCR[3].
+fn measure_network_server_binaries(
+    linkd_binary: &[u8],
+    ipd_binary: &[u8],
+    transportd_binary: &[u8],
+) {
+    let _ = measure_server_binary_into_pcr3(linkd_binary);
+    let _ = measure_server_binary_into_pcr3(ipd_binary);
+    let _ = measure_server_binary_into_pcr3(transportd_binary);
 }
 
 #[cfg(test)]
