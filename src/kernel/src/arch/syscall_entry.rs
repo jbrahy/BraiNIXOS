@@ -14,6 +14,11 @@
 //! Phase 4 simplification: no GS-based stack switching. RSP remains on the
 //! kernel stack throughout Phase 4 (no real userspace process exists yet).
 //! Phase 5 replaces with proper per-thread kernel stack switching.
+//!
+//! Phase 11 addition: after the 10-register push sequence, all 7 IPC argument
+//! registers are stored to `KERNEL_SYSCALL_*_VALUE` AtomicU64 globals via
+//! RIP-relative stores. This makes the arguments available to IPC dispatch
+//! handlers without passing them through the assembly ABI (D-01).
 #![allow(unsafe_code)]
 
 use core::arch::global_asm;
@@ -176,6 +181,23 @@ global_asm!(
     "push %r9",
     "push %r10",
     "push %r12",
+    // Save IPC syscall argument registers to kernel globals (single-core, no TOCTOU).
+    // rax is safe to use as scratch — already saved at [rsp+56].
+    // Enforces D-01: argument propagation via #[no_mangle] AtomicU64 globals.
+    "mov 48(%rsp), %rax",
+    "mov %rax, KERNEL_SYSCALL_ENDPOINT_SLOT_VALUE(%rip)",
+    "mov 40(%rsp), %rax",
+    "mov %rax, KERNEL_SYSCALL_CAP_SLOT_VALUE(%rip)",
+    "mov 32(%rsp), %rax",
+    "mov %rax, KERNEL_SYSCALL_TIMEOUT_TICKS_VALUE(%rip)",
+    "mov 24(%rsp), %rax",
+    "mov %rax, KERNEL_SYSCALL_MESSAGE_REGISTER_ZERO_VALUE(%rip)",
+    "mov 16(%rsp), %rax",
+    "mov %rax, KERNEL_SYSCALL_MESSAGE_REGISTER_ONE_VALUE(%rip)",
+    "mov 8(%rsp), %rax",
+    "mov %rax, KERNEL_SYSCALL_MESSAGE_REGISTER_TWO_VALUE(%rip)",
+    "mov 0(%rsp), %rax",
+    "mov %rax, KERNEL_SYSCALL_CAPABILITY_REGISTER_VALUE(%rip)",
     // Validate return RIP (rcx) is canonical BEFORE dispatch_syscall.
     // rcx was saved to stack; reload it from the saved position (rsp+80 from current rsp).
     // rcx = return RIP (saved at rsp+64 from current rsp = 8 pushes * 8 bytes = 64 + 16 for r11/rcx = rsp+80).
