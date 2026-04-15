@@ -260,9 +260,17 @@ fn log_iommu_detection_status(
 ///
 /// Per D-01: kernel grants CapDevice directly to each device server.
 /// Enforces INV-DEV-002: each device service receives least privilege.
+///
+/// ORDERING CONSTRAINT: devd-nic must be launched before devd-disk.
+/// Both share entry point 0x0000_0000_0040_0000 and ProcessType::DeviceServer.
+/// Thread identity is distinguished only by the monotonic NEXT_THREAD_POOL_SLOT_INDEX
+/// counter. Reordering these calls silently swaps their thread identifiers and
+/// capability grants. This constraint will be eliminated when distinct
+/// ProcessType::DeviceServerNic and ProcessType::DeviceServerDisk variants
+/// are introduced in a future phase.
 fn launch_device_server_processes(boot_step_logger: &mut BootStepLogger) {
-    launch_devd_nic_server_process();
-    launch_devd_disk_server_process();
+    launch_devd_nic_server_process(); // Must come first — see ordering constraint above.
+    launch_devd_disk_server_process(); // Must come second — see ordering constraint above.
     boot_step_logger.ok("Device server processes created: devd-nic, devd-disk");
 }
 
