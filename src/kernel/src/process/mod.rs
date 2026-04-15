@@ -39,7 +39,6 @@ mod tests {
     use crate::capability::capability_rights;
     use crate::capability::capability_space::CapabilitySpace;
     use crate::capability::capability_type::CapabilityType;
-    use crate::ipc::MAXIMUM_THREADS;
     use crate::process::module_loader::validate_spawn_request;
     use crate::process::process_table::ProcessTable;
     use crate::process::server_launch::{
@@ -50,29 +49,11 @@ mod tests {
     use brainix_libsyscall::{ProcessType, SpawnError};
 
     /// Heap-allocates a ProcessTable to avoid stack overflow (~320 KiB struct).
+    ///
+    /// Delegates to the canonical allocator in `process_table` so the private
+    /// `entries` field is only accessed from within its defining module.
     fn allocate_process_table_on_heap() -> Box<ProcessTable> {
-        let layout = alloc::alloc::Layout::new::<ProcessTable>();
-        // SAFETY: layout is non-zero size; null check enforces non-null before dereference.
-        // - Precondition: layout has non-zero size for ProcessTable.
-        // - Invariant: null check below enforces non-null before any dereference.
-        // - Evidence: test_init_process_exits_after_handing_off_authority validates table use.
-        let raw_pointer = unsafe { alloc::alloc::alloc(layout) } as *mut ProcessTable;
-        assert!(!raw_pointer.is_null(), "ProcessTable heap allocation failed: allocator returned null");
-        for entry_index in 0..MAXIMUM_THREADS {
-            // SAFETY: raw_pointer is non-null (asserted above); entry_index < MAXIMUM_THREADS is in bounds.
-            // - Precondition: null check passed; entry_index bounded by MAXIMUM_THREADS.
-            // - Invariant: ptr::write sets Option<CapabilitySpace> discriminant to None.
-            // - Evidence: test_init_process_exits_after_handing_off_authority validates None state.
-            unsafe {
-                let entry_pointer = core::ptr::addr_of_mut!((*raw_pointer).entries[entry_index]);
-                core::ptr::write(entry_pointer, None);
-            }
-        }
-        // SAFETY: raw_pointer is non-null (asserted above) and all entries are initialized.
-        // - Precondition: null check passed; all entries written via ptr::write above.
-        // - Invariant: Box::from_raw requires non-null, fully initialized pointer.
-        // - Evidence: test_init_process_exits_after_handing_off_authority validates table use.
-        unsafe { Box::from_raw(raw_pointer) }
+        crate::process::process_table::allocate_process_table_on_heap_for_test()
     }
 
     /// Verifies that init process exit sequence revokes all authority and

@@ -34,7 +34,12 @@ pub enum ProcessTableError {
 /// Slot count is bounded by `MAXIMUM_THREADS` to prevent unbounded table growth.
 pub struct ProcessTable {
     /// Fixed-size array of optional CSpaces, one slot per possible thread.
-    pub entries: [Option<CapabilitySpace>; MAXIMUM_THREADS],
+    ///
+    /// Private: all access must go through `insert_entry`, `lookup_entry`,
+    /// `lookup_entry_mut`, and `remove_entry` to enforce INV-AUTH-005 bounds checks.
+    /// Test helpers access this field via raw pointer in unsafe blocks, which bypasses
+    /// field visibility intentionally for heap-allocation initialization only.
+    entries: [Option<CapabilitySpace>; MAXIMUM_THREADS],
 }
 
 impl Default for ProcessTable {
@@ -122,6 +127,54 @@ fn convert_identifier_to_slot_index(thread_identifier: ThreadIdentifier) -> Opti
 }
 
 #[cfg(test)]
+extern crate alloc;
+
+/// Test-only: heap-allocates a ProcessTable and returns it as a Box.
+///
+/// ProcessTable is ~320 KiB and overflows the test stack. This function performs
+/// the allocation and None-initialization within this module so callers in other
+/// modules do not need access to the private `entries` field.
+///
+/// Exported as `pub(crate)` so tests in `process::mod` and `syscall::process_exit`
+/// can call it without duplicating the raw-pointer initialization logic.
+///
+/// Unsafe allowlist: src/kernel/src/process/process_table.rs (test-only).
+#[cfg(test)]
+pub(crate) fn allocate_process_table_on_heap_for_test() -> alloc::boxed::Box<ProcessTable> {
+    let layout = alloc::alloc::Layout::new::<ProcessTable>();
+    // SAFETY: layout is non-zero size (ProcessTable is ~320 KiB).
+    // - Precondition: layout has non-zero size for ProcessTable.
+    // - Invariant: null check below enforces non-null before any dereference.
+    // - Evidence: test_process_table_new_creates_empty_table validates None state.
+    let raw_pointer = unsafe { alloc::alloc::alloc(layout) } as *mut ProcessTable;
+    assert!(!raw_pointer.is_null(), "ProcessTable heap allocation failed: allocator returned null");
+    initialize_entries_as_none_via_raw_pointer(raw_pointer);
+    // SAFETY: raw_pointer is non-null (asserted above); all entries initialized.
+    // - Precondition: null check passed; initialize_entries_as_none_via_raw_pointer ran.
+    // - Invariant: Box::from_raw requires non-null, fully initialized pointer.
+    // - Evidence: test_process_table_new_creates_empty_table validates None state.
+    unsafe { alloc::boxed::Box::from_raw(raw_pointer) }
+}
+
+/// Test-only: writes None into each entry of a heap-allocated ProcessTable.
+///
+/// Must be called from within this module so that the private `entries` field
+/// is accessible. Called only by `allocate_process_table_on_heap_for_test`.
+#[cfg(test)]
+fn initialize_entries_as_none_via_raw_pointer(raw_pointer: *mut ProcessTable) {
+    for entry_index in 0..MAXIMUM_THREADS {
+        // SAFETY: raw_pointer is non-null; entry_index < MAXIMUM_THREADS is in bounds.
+        // - Precondition: raw_pointer is non-null and allocated for ProcessTable.
+        // - Invariant: ptr::write sets Option<CapabilitySpace> discriminant to None.
+        // - Evidence: test_process_table_new_creates_empty_table validates None state.
+        unsafe {
+            let entry_pointer = core::ptr::addr_of_mut!((*raw_pointer).entries[entry_index]);
+            core::ptr::write(entry_pointer, None);
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     extern crate alloc;
     use alloc::boxed::Box;
@@ -130,41 +183,10 @@ mod tests {
 
     /// Heap-allocates a ProcessTable to avoid stack overflow (~320 KiB struct).
     ///
-    /// ProcessTable holds 32 Option<CapabilitySpace> entries (~10 KiB each).
-    /// Allocates raw memory then writes each entry as None to correctly initialize
-    /// the Option discriminants without constructing the full struct on the stack.
+    /// Delegates to the canonical module-level allocator so the allocation and
+    /// None-initialization logic is defined in one place (LO-02 deduplication).
     fn allocate_process_table_on_heap() -> Box<ProcessTable> {
-        let layout = alloc::alloc::Layout::new::<ProcessTable>();
-        // SAFETY: layout is non-zero size (ProcessTable is ~320 KiB).
-        // - Precondition: layout has non-zero size for ProcessTable.
-        // - Invariant: null check below enforces non-null before any dereference.
-        // - Evidence: test_process_table_new_creates_empty_table validates None state.
-        let raw_pointer = unsafe { alloc::alloc::alloc(layout) } as *mut ProcessTable;
-        assert!(!raw_pointer.is_null(), "ProcessTable heap allocation failed: allocator returned null");
-        initialize_process_table_entries_as_none(raw_pointer);
-        // SAFETY: raw_pointer is non-null (asserted above); all entries initialized.
-        // - Precondition: null check passed; initialize_process_table_entries_as_none ran.
-        // - Invariant: Box::from_raw requires non-null, fully initialized pointer.
-        // - Evidence: test_process_table_new_creates_empty_table validates None state.
-        unsafe { Box::from_raw(raw_pointer) }
-    }
-
-    /// Writes None into each entry of a heap-allocated ProcessTable via raw pointer.
-    ///
-    /// Required because ProcessTable::new() would overflow the stack at ~320 KiB.
-    /// Each entry is written independently to correctly set Option discriminants.
-    fn initialize_process_table_entries_as_none(raw_pointer: *mut ProcessTable) {
-        for entry_index in 0..MAXIMUM_THREADS {
-            // SAFETY: raw_pointer is non-null; entry_index < MAXIMUM_THREADS keeps
-            // the offset within the allocated ProcessTable memory region.
-            // - Precondition: raw_pointer allocated for ProcessTable by alloc.
-            // - Invariant: ptr::write sets Option<CapabilitySpace> discriminant to None.
-            // - Evidence: test_process_table_new_creates_empty_table validates None state.
-            unsafe {
-                let entry_pointer = core::ptr::addr_of_mut!((*raw_pointer).entries[entry_index]);
-                core::ptr::write(entry_pointer, None);
-            }
-        }
+        super::allocate_process_table_on_heap_for_test()
     }
 
     /// Heap-allocates a CapabilitySpace to avoid stack overflow (~10 KiB struct).

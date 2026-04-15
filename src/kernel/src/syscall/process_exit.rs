@@ -235,41 +235,15 @@ fn yield_to_next_runnable_thread() -> ! {
 #[cfg(test)]
 mod tests {
     extern crate alloc;
-    use alloc::boxed::Box;
 
     use super::*;
-    use crate::ipc::MAXIMUM_THREADS;
 
     /// Heap-allocates a ProcessTable to avoid stack overflow (~320 KiB struct).
     ///
-    /// Follows the established pattern from process_table.rs (physical_allocator pattern).
-    /// Unsafe allowlist: test-only heap allocation; no unsafe in production paths.
-    fn allocate_process_table_on_heap() -> Box<ProcessTable> {
-        let layout = alloc::alloc::Layout::new::<ProcessTable>();
-        // SAFETY: layout is non-zero size (ProcessTable is ~320 KiB).
-        // - Precondition: layout has non-zero size for ProcessTable.
-        // - Invariant: null check below enforces non-null before any dereference.
-        // - Evidence: test_process_exit_revokes_capability_space validates table use.
-        let raw_pointer = unsafe { alloc::alloc::alloc(layout) } as *mut ProcessTable;
-        assert!(!raw_pointer.is_null(), "ProcessTable heap allocation failed: allocator returned null");
-        initialize_process_table_entries_as_none(raw_pointer);
-        // SAFETY: raw_pointer is non-null (asserted above); all entries initialized.
-        // - Precondition: null check passed; initialize_process_table_entries_as_none ran.
-        // - Invariant: Box::from_raw requires non-null, fully initialized pointer.
-        // - Evidence: test_process_exit_revokes_capability_space validates table use.
-        unsafe { Box::from_raw(raw_pointer) }
-    }
-
-    /// Writes None into each entry of a heap-allocated ProcessTable via raw pointer.
-    fn initialize_process_table_entries_as_none(raw_pointer: *mut ProcessTable) {
-        for entry_index in 0..MAXIMUM_THREADS {
-            // SAFETY: raw_pointer is non-null; entry_index < MAXIMUM_THREADS keeps
-            // the offset within the allocated ProcessTable memory region.
-            unsafe {
-                let entry_pointer = core::ptr::addr_of_mut!((*raw_pointer).entries[entry_index]);
-                core::ptr::write(entry_pointer, None);
-            }
-        }
+    /// Delegates to the canonical allocator in `process_table` so the private
+    /// `entries` field is only accessed from within its defining module.
+    fn allocate_process_table_on_heap() -> alloc::boxed::Box<ProcessTable> {
+        crate::process::process_table::allocate_process_table_on_heap_for_test()
     }
 
     /// Verifies that process exit revokes the entire capability space.
