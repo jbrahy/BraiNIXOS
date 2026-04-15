@@ -164,7 +164,12 @@ fn build_parsed_icmp_message(
     message_bytes: &[u8],
 ) -> Result<ParsedIcmpMessage, IcmpParseError> {
     let sequence_number = extract_icmp_sequence_number(message_bytes);
-    Ok(ParsedIcmpMessage { icmp_type, icmp_code, identifier, sequence_number })
+    Ok(ParsedIcmpMessage {
+        icmp_type,
+        icmp_code,
+        identifier,
+        sequence_number,
+    })
 }
 
 /// Copies the request bytes into the reply buffer.
@@ -229,8 +234,8 @@ pub fn generate_icmp_echo_reply(
 #[cfg(test)]
 mod tests {
     use super::{
-        IcmpParseError, ParsedIcmpMessage, ICMP_HEADER_LENGTH, ICMP_TYPE_ECHO_REPLY,
-        ICMP_TYPE_ECHO_REQUEST, compute_icmp_checksum, generate_icmp_echo_reply, parse_icmp_message,
+        compute_icmp_checksum, generate_icmp_echo_reply, parse_icmp_message, IcmpParseError,
+        ParsedIcmpMessage, ICMP_HEADER_LENGTH, ICMP_TYPE_ECHO_REPLY, ICMP_TYPE_ECHO_REQUEST,
     };
 
     /// Builds a minimal valid ICMP echo request (8 bytes, no data).
@@ -321,7 +326,10 @@ mod tests {
         assert!(reply_result.is_ok());
         let reply_length = reply_result.unwrap();
         let expected_payload = [0xAA, 0xBB, 0xCC, 0xDD];
-        assert_eq!(&reply_buffer[ICMP_HEADER_LENGTH..reply_length], &expected_payload);
+        assert_eq!(
+            &reply_buffer[ICMP_HEADER_LENGTH..reply_length],
+            &expected_payload
+        );
     }
 
     #[test]

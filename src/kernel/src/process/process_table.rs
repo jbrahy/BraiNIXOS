@@ -147,7 +147,10 @@ pub(crate) fn allocate_process_table_on_heap_for_test() -> alloc::boxed::Box<Pro
     // - Invariant: null check below enforces non-null before any dereference.
     // - Evidence: test_process_table_new_creates_empty_table validates None state.
     let raw_pointer = unsafe { alloc::alloc::alloc(layout) } as *mut ProcessTable;
-    assert!(!raw_pointer.is_null(), "ProcessTable heap allocation failed: allocator returned null");
+    assert!(
+        !raw_pointer.is_null(),
+        "ProcessTable heap allocation failed: allocator returned null"
+    );
     initialize_entries_as_none_via_raw_pointer(raw_pointer);
     // SAFETY: raw_pointer is non-null (asserted above); all entries initialized.
     // - Precondition: null check passed; initialize_entries_as_none_via_raw_pointer ran.
@@ -200,7 +203,10 @@ mod tests {
         // - Invariant: null check below enforces non-null before any dereference.
         // - Evidence: allocate_capability_space_on_heap is test-only infrastructure.
         let raw_pointer = unsafe { alloc::alloc::alloc(layout) } as *mut CapabilitySpace;
-        assert!(!raw_pointer.is_null(), "CapabilitySpace heap allocation failed: allocator returned null");
+        assert!(
+            !raw_pointer.is_null(),
+            "CapabilitySpace heap allocation failed: allocator returned null"
+        );
         // SAFETY: raw_pointer is non-null (asserted above); ptr::write initializes fully.
         // - Precondition: null check passed; raw_pointer allocated for CapabilitySpace.
         // - Invariant: CapabilitySpace::new() produces all-null slots per INV-AUTH-001.

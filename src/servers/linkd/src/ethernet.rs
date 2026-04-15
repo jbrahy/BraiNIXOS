@@ -98,8 +98,8 @@ pub fn parse_ethernet_frame(frame_bytes: &[u8]) -> Result<ParsedEthernetFrame, E
 #[cfg(test)]
 mod tests {
     use super::{
-        EthernetParseError, ParsedEthernetFrame, ETHERNET_HEADER_LENGTH, ETHER_TYPE_IPV4,
-        parse_ethernet_frame,
+        parse_ethernet_frame, EthernetParseError, ParsedEthernetFrame, ETHERNET_HEADER_LENGTH,
+        ETHER_TYPE_IPV4,
     };
 
     /// Builds a minimal 14-byte Ethernet frame with EtherType 0x0800 (IPv4) and no payload.

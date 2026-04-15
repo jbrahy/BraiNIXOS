@@ -366,7 +366,12 @@ fn launch_network_server_processes(boot_step_logger: &mut BootStepLogger) {
 fn launch_linkd_server_process() {
     let (handle, mut linkd_capability_space) =
         create_server_process(ProcessType::NetworkServer, 0x0000_0000_0040_0000).unwrap();
-    grant_endpoint_capability_with_index(&mut linkd_capability_space, 0, capability_rights::READ, 0);
+    grant_endpoint_capability_with_index(
+        &mut linkd_capability_space,
+        0,
+        capability_rights::READ,
+        0,
+    );
     grant_linkd_outbound_and_frame_capabilities(&mut linkd_capability_space);
     insert_capability_space_into_global_process_table(
         handle.thread_identifier,
@@ -440,7 +445,12 @@ fn grant_endpoint_capability_with_index(
     rights: CapabilityRights,
     endpoint_index: u64,
 ) {
-    grant_initial_capability_to_server(capability_space, slot_index, CapabilityType::Endpoint, rights);
+    grant_initial_capability_to_server(
+        capability_space,
+        slot_index,
+        CapabilityType::Endpoint,
+        rights,
+    );
     let slot = capability_space.lookup_slot_mut(slot_index);
     slot.object_pointer = endpoint_index;
 }
@@ -461,7 +471,9 @@ fn insert_capability_space_into_global_process_table(
     // Invariant: INV-AUTH-001 (CSpace registered for thread).
     // Evidence: integration_server_holds_live_cspace_after_boot.
     let process_table = unsafe { kernel_ipc_state::kernel_process_table_mut() };
-    process_table.insert_entry(thread_identifier, capability_space).unwrap();
+    process_table
+        .insert_entry(thread_identifier, capability_space)
+        .unwrap();
 }
 
 fn log_kernel_banner(boot_step_logger: &mut BootStepLogger) {

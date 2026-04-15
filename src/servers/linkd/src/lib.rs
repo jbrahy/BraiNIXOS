@@ -58,7 +58,7 @@ mod tests {
         [
             0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // destination MAC
             0x01, 0x02, 0x03, 0x04, 0x05, 0x06, // source MAC
-            0x08, 0x00,                          // EtherType: IPv4
+            0x08, 0x00, // EtherType: IPv4
         ]
     }
 
@@ -69,10 +69,10 @@ mod tests {
     fn build_test_ipv4_header_with_checksum() -> [u8; 20] {
         let mut header = [
             0x45u8, 0x00, 0x00, 0x1C, // version/IHL, DSCP, total length=28
-            0x00, 0x01, 0x40, 0x00,   // identification=1, flags=DF, fragment offset=0
-            0x40, 0x01, 0x00, 0x00,   // TTL=64, protocol=ICMP, checksum=0 (placeholder)
-            0x0A, 0x00, 0x02, 0x02,   // source: 10.0.2.2
-            0x0A, 0x00, 0x02, 0x0F,   // destination: 10.0.2.15
+            0x00, 0x01, 0x40, 0x00, // identification=1, flags=DF, fragment offset=0
+            0x40, 0x01, 0x00, 0x00, // TTL=64, protocol=ICMP, checksum=0 (placeholder)
+            0x0A, 0x00, 0x02, 0x02, // source: 10.0.2.2
+            0x0A, 0x00, 0x02, 0x0F, // destination: 10.0.2.15
         ];
         let computed_checksum = brainix_ipd::ipv4::compute_ipv4_header_checksum(&header, 20);
         header[10] = (computed_checksum >> 8) as u8;
@@ -86,8 +86,8 @@ mod tests {
     fn build_test_icmp_echo_request_with_checksum() -> [u8; 8] {
         let mut icmp = [
             0x08u8, 0x00, 0x00, 0x00, // type=echo request, code=0, checksum=0 (placeholder)
-            0x00, 0x01,               // identifier=1
-            0x00, 0x01,               // sequence=1
+            0x00, 0x01, // identifier=1
+            0x00, 0x01, // sequence=1
         ];
         let computed_checksum = brainix_transportd::icmp::compute_icmp_checksum(&icmp);
         icmp[2] = (computed_checksum >> 8) as u8;
@@ -140,8 +140,7 @@ mod tests {
         let parsed_ipv4 = ipv4_result.unwrap();
         let icmp_start = ip_start + parsed_ipv4.payload_offset;
         let icmp_end = icmp_start + parsed_ipv4.payload_length;
-        let icmp_result =
-            brainix_transportd::parse_icmp_message(&frame_page[icmp_start..icmp_end]);
+        let icmp_result = brainix_transportd::parse_icmp_message(&frame_page[icmp_start..icmp_end]);
         assert!(icmp_result.is_ok(), "ICMP parse failed: {:?}", icmp_result);
         let parsed_icmp = icmp_result.unwrap();
         assert_eq!(parsed_icmp.icmp_type, 8);

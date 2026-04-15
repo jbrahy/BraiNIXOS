@@ -135,8 +135,8 @@ pub fn device_server_main_loop() -> ! {
 #[cfg(test)]
 mod tests {
     use super::{
-        VIRTIO_RECEIVE_RING_INDEX, VIRTIO_RING_CAPACITY, VIRTIO_TRANSMIT_RING_INDEX,
-        read_packet_from_receive_ring, write_packet_to_transmit_ring,
+        read_packet_from_receive_ring, write_packet_to_transmit_ring, VIRTIO_RECEIVE_RING_INDEX,
+        VIRTIO_RING_CAPACITY, VIRTIO_TRANSMIT_RING_INDEX,
     };
 
     #[test]

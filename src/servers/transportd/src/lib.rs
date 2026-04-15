@@ -73,8 +73,16 @@ mod tests {
             let slot_is_occupied = slot.is_valid();
             if slot_is_occupied {
                 let slot_type = slot.capability_type();
-                assert_ne!(slot_type, CapabilityType::Device, "transportd must not hold CapDevice");
-                assert_ne!(slot_type, CapabilityType::Irq, "transportd must not hold CapIrq");
+                assert_ne!(
+                    slot_type,
+                    CapabilityType::Device,
+                    "transportd must not hold CapDevice"
+                );
+                assert_ne!(
+                    slot_type,
+                    CapabilityType::Irq,
+                    "transportd must not hold CapIrq"
+                );
             }
         }
     }

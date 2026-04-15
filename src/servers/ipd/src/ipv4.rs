@@ -224,7 +224,7 @@ mod tests {
     fn valid_packet_with_non_icmp_protocol_returns_unsupported_protocol() {
         let mut tcp_packet = build_valid_icmp_ipv4_packet();
         tcp_packet[9] = 0x06; // TCP protocol number
-        // Recompute checksum with zero checksum field first
+                              // Recompute checksum with zero checksum field first
         tcp_packet[10] = 0x00;
         tcp_packet[11] = 0x00;
         let new_checksum = compute_ipv4_header_checksum(&tcp_packet, 20);
