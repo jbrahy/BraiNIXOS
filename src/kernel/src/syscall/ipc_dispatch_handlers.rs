@@ -122,6 +122,28 @@ fn resolve_endpoint_index_from_capability_space(
     Ok(slot.object_pointer as usize)
 }
 
+// --- Slot index validation ---
+
+/// Validates that a u64 register value fits in u8 (slot indices are 0-255).
+///
+/// Returns EndpointRevoked if the value exceeds u8::MAX, preventing silent
+/// truncation that could address a different slot than the caller named.
+fn validate_slot_index_fits_u8(raw_value: u64) -> Result<u8, IpcError> {
+    u8::try_from(raw_value).map_err(|_| IpcError::EndpointRevoked)
+}
+
+fn load_endpoint_slot_index_as_u8() -> Result<u8, IpcError> {
+    validate_slot_index_fits_u8(load_endpoint_slot_index())
+}
+
+fn load_capability_slot_index_as_u8() -> Result<u8, IpcError> {
+    validate_slot_index_fits_u8(load_capability_slot_index())
+}
+
+fn load_capability_register_as_u8() -> Result<u8, IpcError> {
+    validate_slot_index_fits_u8(load_capability_register())
+}
+
 // --- Argument bundles ---
 
 struct IpcSendArguments {
@@ -131,13 +153,13 @@ struct IpcSendArguments {
     timeout_ticks: u64,
 }
 
-fn load_ipc_send_arguments() -> IpcSendArguments {
-    IpcSendArguments {
-        endpoint_slot_index: load_endpoint_slot_index() as u8,
-        capability_slot_index: load_capability_slot_index() as u8,
-        receiver_capability_destination_slot: load_capability_register() as u8,
+fn load_ipc_send_arguments() -> Result<IpcSendArguments, IpcError> {
+    Ok(IpcSendArguments {
+        endpoint_slot_index: load_endpoint_slot_index_as_u8()?,
+        capability_slot_index: load_capability_slot_index_as_u8()?,
+        receiver_capability_destination_slot: load_capability_register_as_u8()?,
         timeout_ticks: load_timeout_ticks(),
-    }
+    })
 }
 
 struct IpcReceiveArguments {
@@ -145,11 +167,11 @@ struct IpcReceiveArguments {
     receiver_capability_destination_slot: u8,
 }
 
-fn load_ipc_receive_arguments() -> IpcReceiveArguments {
-    IpcReceiveArguments {
-        endpoint_slot_index: load_endpoint_slot_index() as u8,
-        receiver_capability_destination_slot: load_capability_register() as u8,
-    }
+fn load_ipc_receive_arguments() -> Result<IpcReceiveArguments, IpcError> {
+    Ok(IpcReceiveArguments {
+        endpoint_slot_index: load_endpoint_slot_index_as_u8()?,
+        receiver_capability_destination_slot: load_capability_register_as_u8()?,
+    })
 }
 
 struct IpcCallArguments {
@@ -159,13 +181,13 @@ struct IpcCallArguments {
     timeout_ticks: u64,
 }
 
-fn load_ipc_call_arguments() -> IpcCallArguments {
-    IpcCallArguments {
-        endpoint_slot_index: load_endpoint_slot_index() as u8,
-        capability_slot_index: load_capability_slot_index() as u8,
-        receiver_capability_destination_slot: load_capability_register() as u8,
+fn load_ipc_call_arguments() -> Result<IpcCallArguments, IpcError> {
+    Ok(IpcCallArguments {
+        endpoint_slot_index: load_endpoint_slot_index_as_u8()?,
+        capability_slot_index: load_capability_slot_index_as_u8()?,
+        receiver_capability_destination_slot: load_capability_register_as_u8()?,
         timeout_ticks: load_timeout_ticks(),
-    }
+    })
 }
 
 // --- dispatch_ipc_send ---
@@ -175,7 +197,10 @@ fn load_ipc_call_arguments() -> IpcCallArguments {
 /// Enforces INV-IPC-001: IPC is explicit and kernel-mediated.
 /// Enforces INV-AUTH-002: endpoint resolved via CSpace capability lookup.
 pub fn dispatch_ipc_send(thread_identifier: u32) -> i64 {
-    let arguments = load_ipc_send_arguments();
+    let arguments = match load_ipc_send_arguments() {
+        Ok(arguments) => arguments,
+        Err(error) => return encode_ipc_error_as_return_code(error),
+    };
     let message = build_ipc_message_from_syscall_registers();
     // SAFETY: Single-core dispatch. Globals initialized at boot. INV-IPC-001.
     let result = unsafe { perform_ipc_send(thread_identifier, &message, &arguments) };
@@ -249,7 +274,10 @@ unsafe fn call_ipc_send(
 /// Enforces INV-IPC-001: IPC is explicit and kernel-mediated.
 /// Enforces INV-AUTH-002: endpoint resolved via CSpace capability lookup.
 pub fn dispatch_ipc_receive(thread_identifier: u32) -> i64 {
-    let arguments = load_ipc_receive_arguments();
+    let arguments = match load_ipc_receive_arguments() {
+        Ok(arguments) => arguments,
+        Err(error) => return encode_ipc_error_as_return_code(error),
+    };
     // SAFETY: Single-core dispatch. Globals initialized at boot. INV-IPC-001.
     let result = unsafe { perform_ipc_receive(thread_identifier, &arguments) };
     encode_ipc_result_receive(result)
@@ -323,7 +351,10 @@ unsafe fn call_ipc_receive(
 /// Enforces INV-IPC-004: deadlock check runs inside ipc_call before blocking.
 /// Enforces INV-AUTH-002: endpoint resolved via CSpace capability lookup.
 pub fn dispatch_ipc_call(thread_identifier: u32) -> i64 {
-    let arguments = load_ipc_call_arguments();
+    let arguments = match load_ipc_call_arguments() {
+        Ok(arguments) => arguments,
+        Err(error) => return encode_ipc_error_as_return_code(error),
+    };
     let message = build_ipc_message_from_syscall_registers();
     // SAFETY: Single-core dispatch. Globals initialized at boot. INV-IPC-001, INV-IPC-004.
     let result = unsafe { perform_ipc_call(thread_identifier, &message, &arguments) };
