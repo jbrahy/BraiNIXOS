@@ -6,6 +6,10 @@
 //!
 //! Enforces INV-AUTH-001: new process starts with empty CSpace (no ambient authority).
 //! Enforces INV-MEM-002: user page table is KPTI-isolated (structurally empty of kernel mappings).
+//!
+//! Falls under `src/kernel/src/process/server_launch.rs` allowlist entry in
+//! `docs/security/UNSAFE_CODE_POLICY.md`.
+#![allow(unsafe_code)]
 
 use crate::capability::capability_rights::CapabilityRights;
 use crate::capability::capability_slot::{CapabilitySlot, CapabilitySlotState};
@@ -14,6 +18,7 @@ use crate::capability::capability_type::CapabilityType;
 use crate::ipc::endpoint::ThreadIdentifier;
 use crate::process::address_space::{build_process_address_space_layout, AddressSpaceError};
 use crate::process::ProcessType;
+use crate::syscall::kernel_ipc_state;
 use crate::thread::{Thread, ThreadState};
 
 /// A handle to a successfully created server process.
@@ -60,11 +65,12 @@ pub fn create_server_process(
 ) -> Result<(ServerProcessHandle, CapabilitySpace), ServerLaunchError> {
     let layout = build_layout_or_error(entry_point_address)?;
     let capability_space = CapabilitySpace::new();
-    let _thread = build_initial_thread(
+    let thread = build_initial_thread(
         layout.entry_point_virtual_address,
         layout.stack_top_virtual_address,
     );
     let thread_index = allocate_thread_pool_slot();
+    store_thread_in_kernel_pool(thread_index, thread);
     let thread_identifier = thread_index as ThreadIdentifier;
     Ok((
         ServerProcessHandle {
@@ -142,6 +148,23 @@ fn allocate_thread_pool_slot() -> usize {
 /// Increments the thread pool slot counter by one.
 fn increment_thread_pool_slot_counter() {
     NEXT_THREAD_POOL_SLOT_INDEX.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Stores the built thread into the kernel thread pool at the given index.
+///
+/// # Safety
+///
+/// Calls unsafe `kernel_thread_at_mut` accessor from `kernel_ipc_state`.
+/// Precondition: `thread_index < MAXIMUM_THREADS` (guaranteed by `allocate_thread_pool_slot`).
+/// Invariant: D-03 (thread stored, not dropped). Single-core boot, no concurrent access.
+/// Evidence: test_create_server_process_with_canonical_entry_point_returns_ok.
+fn store_thread_in_kernel_pool(thread_index: usize, thread: Thread) {
+    // SAFETY: Single-core boot. thread_index from monotonic counter < MAXIMUM_THREADS.
+    // Precondition: allocate_thread_pool_slot returns index < 32 (8 boot servers).
+    // Invariant: D-03 (thread stored, not dropped).
+    // Evidence: test_create_server_process_with_canonical_entry_point_returns_ok.
+    let pool_entry = unsafe { kernel_ipc_state::kernel_thread_at_mut(thread_index) };
+    *pool_entry = thread;
 }
 
 /// Places a capability of the given type and rights into the specified slot.
