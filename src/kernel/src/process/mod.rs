@@ -4,6 +4,12 @@
 //! processes. Server binaries are delivered as multiboot2 modules and loaded by
 //! the kernel into isolated address spaces before control is transferred to init.
 //!
+//! Unsafe allowlist: src/kernel/src/process/mod.rs
+//! Test-only heap allocation for ~320 KiB ProcessTable struct (alloc + Box::from_raw).
+//! Follows the established physical_allocator.rs and process_table.rs patterns.
+//! No unsafe in production code paths.
+#![allow(unsafe_code)]
+//!
 //! # Module structure
 //!
 //! - `elf_loader` -- Validates and parses ELF64 server binaries (PT_LOAD only)
@@ -24,19 +30,40 @@ pub use brainix_libsyscall::ProcessType;
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
+    use alloc::boxed::Box;
+
     use crate::capability::audit_event_type::AuditEventType;
     use crate::capability::audit_log::AuditRingBuffer;
     use crate::capability::audit_log_protection::protect_audit_log_pages;
     use crate::capability::capability_rights;
     use crate::capability::capability_space::CapabilitySpace;
     use crate::capability::capability_type::CapabilityType;
+    use crate::ipc::MAXIMUM_THREADS;
     use crate::process::module_loader::validate_spawn_request;
+    use crate::process::process_table::ProcessTable;
     use crate::process::server_launch::{
         create_server_process, grant_initial_capability_to_server,
     };
     use crate::syscall::audit_read::validate_audit_read_capability;
     use crate::syscall::process_exit::execute_process_exit_sequence;
     use brainix_libsyscall::{ProcessType, SpawnError};
+
+    /// Heap-allocates a ProcessTable to avoid stack overflow (~320 KiB struct).
+    fn allocate_process_table_on_heap() -> Box<ProcessTable> {
+        let layout = alloc::alloc::Layout::new::<ProcessTable>();
+        // SAFETY: layout is non-zero size; entries initialized before Box::from_raw.
+        let raw_pointer = unsafe { alloc::alloc::alloc(layout) } as *mut ProcessTable;
+        for entry_index in 0..MAXIMUM_THREADS {
+            // SAFETY: raw_pointer is non-null; entry_index < MAXIMUM_THREADS is in bounds.
+            unsafe {
+                let entry_pointer = core::ptr::addr_of_mut!((*raw_pointer).entries[entry_index]);
+                core::ptr::write(entry_pointer, None);
+            }
+        }
+        // SAFETY: raw_pointer is non-null and all entries are initialized.
+        unsafe { Box::from_raw(raw_pointer) }
+    }
 
     /// Verifies that init process exit sequence revokes all authority and
     /// records all four teardown steps as complete.
@@ -45,7 +72,12 @@ mod tests {
     /// Verified by: this test.
     #[test]
     fn test_init_process_exits_after_handing_off_authority() {
-        let exit_record = execute_process_exit_sequence();
+        let init_thread_identifier: u32 = 0;
+        let mut process_table = allocate_process_table_on_heap();
+        process_table
+            .insert_entry(init_thread_identifier, CapabilitySpace::new())
+            .unwrap();
+        let exit_record = execute_process_exit_sequence(&mut process_table, init_thread_identifier);
         assert!(
             exit_record.capability_space_revoked,
             "CSpace must be revoked on exit"
@@ -146,7 +178,12 @@ mod tests {
             init_result.is_ok(),
             "init process must be created successfully"
         );
-        let exit_record = execute_process_exit_sequence();
+        let init_thread_identifier: u32 = 0;
+        let mut process_table = allocate_process_table_on_heap();
+        process_table
+            .insert_entry(init_thread_identifier, CapabilitySpace::new())
+            .unwrap();
+        let exit_record = execute_process_exit_sequence(&mut process_table, init_thread_identifier);
         assert!(
             exit_record.capability_space_revoked,
             "init CSpace must be revoked after exit"

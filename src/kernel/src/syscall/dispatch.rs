@@ -59,10 +59,10 @@ fn handle_notify_range_syscall(syscall_number: u64) -> Option<i64> {
 ///
 /// The Spectre barrier prevents speculative dispatch on attacker-controlled numbers.
 /// Returns `Some(result)` for a recognized process lifecycle number, `None` otherwise.
-fn handle_process_lifecycle_syscall(syscall_number: u64) -> Option<i64> {
+fn handle_process_lifecycle_syscall(syscall_number: u64, thread_identifier: u32) -> Option<i64> {
     issue_speculative_load_barrier();
     match syscall_number {
-        SYSCALL_NUMBER_PROCESS_EXIT => handle_process_exit_dispatch(),
+        SYSCALL_NUMBER_PROCESS_EXIT => handle_process_exit_dispatch(thread_identifier),
         SYSCALL_NUMBER_AUDIT_READ => Some(super::audit_read::handle_audit_read_syscall()),
         _ => None,
     }
@@ -72,8 +72,9 @@ fn handle_process_lifecycle_syscall(syscall_number: u64) -> Option<i64> {
 ///
 /// handle_process_exit_syscall() never returns (-> !). This wrapper exists so the
 /// match arm in handle_process_lifecycle_syscall can return Option<i64>.
-fn handle_process_exit_dispatch() -> Option<i64> {
-    super::process_exit::handle_process_exit_syscall();
+/// Thread identity is passed explicitly per D-03 — no hidden global reads.
+fn handle_process_exit_dispatch(thread_identifier: u32) -> Option<i64> {
+    super::process_exit::handle_process_exit_syscall(thread_identifier);
 }
 
 /// Issues LFENCE then routes device syscall numbers (9-10) to their handlers.
@@ -132,11 +133,9 @@ fn handle_server_range_syscall(syscall_number: u64) -> Option<i64> {
 /// - Evidence: test_dispatch_syscall_routes_all_six_syscall_numbers.
 #[no_mangle]
 pub unsafe extern "C" fn dispatch_syscall(syscall_number: u64, thread_identifier: u32) -> i64 {
-    // Phase 10 Plan 04 wires CSpace lookup via this identifier.
-    let _thread_identifier = thread_identifier;
     handle_ipc_range_syscall(syscall_number)
         .or_else(|| handle_notify_range_syscall(syscall_number))
-        .or_else(|| handle_process_lifecycle_syscall(syscall_number))
+        .or_else(|| handle_process_lifecycle_syscall(syscall_number, thread_identifier))
         .or_else(|| handle_device_range_syscall(syscall_number))
         .or_else(|| handle_server_range_syscall(syscall_number))
         .unwrap_or(-1)
