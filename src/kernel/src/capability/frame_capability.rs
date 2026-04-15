@@ -6,7 +6,7 @@
 //!
 //! Enforces INV-MEM-005: memory ownership is explicit.
 
-use crate::capability::capability_rights::{CapabilityRights, READ};
+use crate::capability::capability_rights::CapabilityRights;
 
 /// Maximum number of pages a single FrameCapabilityData may cover.
 pub const MAXIMUM_FRAME_PAGES: usize = 8;

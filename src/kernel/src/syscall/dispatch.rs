@@ -20,8 +20,8 @@ use crate::ipc::{
     SYSCALL_NUMBER_NOTIFY_POLL, SYSCALL_NUMBER_NOTIFY_SIGNAL, SYSCALL_NUMBER_NOTIFY_WAIT,
 };
 use brainix_libsyscall::{
-    SYSCALL_NUMBER_AUDIT_READ, SYSCALL_NUMBER_DEVICE_MAP_MMIO, SYSCALL_NUMBER_IRQ_BIND,
-    SYSCALL_NUMBER_PROCESS_EXIT,
+    SYSCALL_NUMBER_AUDIT_READ, SYSCALL_NUMBER_DEVICE_MAP_MMIO, SYSCALL_NUMBER_FRAME_MAP,
+    SYSCALL_NUMBER_IRQ_BIND, SYSCALL_NUMBER_PROCESS_EXIT,
 };
 
 /// Issues LFENCE then routes IPC syscall numbers (1-3) to their handlers.
@@ -94,6 +94,20 @@ fn handle_device_range_syscall(syscall_number: u64) -> Option<i64> {
     }
 }
 
+/// Issues LFENCE then routes network server syscall numbers (11+) to their handlers.
+///
+/// The LFENCE barrier prevents speculative execution of network dispatch with an
+/// attacker-controlled syscall number. Follows the D-02 pattern.
+///
+/// Returns `Some(result)` for a recognized network server number, `None` otherwise.
+fn handle_server_range_syscall(syscall_number: u64) -> Option<i64> {
+    issue_speculative_load_barrier();
+    match syscall_number {
+        SYSCALL_NUMBER_FRAME_MAP => Some(super::frame_map::handle_frame_map_syscall()),
+        _ => None,
+    }
+}
+
 /// Routes a syscall to its handler based on `syscall_number` (passed from rax).
 ///
 /// Returns 0 for success, a negative discriminant for IpcError, or -1 for an
@@ -119,6 +133,7 @@ pub unsafe extern "C" fn dispatch_syscall(syscall_number: u64) -> i64 {
         .or_else(|| handle_notify_range_syscall(syscall_number))
         .or_else(|| handle_process_lifecycle_syscall(syscall_number))
         .or_else(|| handle_device_range_syscall(syscall_number))
+        .or_else(|| handle_server_range_syscall(syscall_number))
         .unwrap_or(-1)
 }
 
