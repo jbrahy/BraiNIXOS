@@ -16,6 +16,7 @@ pub mod derivation_record;
 pub mod derivation_tree;
 pub mod derive_capability;
 pub mod device_capability;
+pub mod frame_capability;
 pub mod irq_capability;
 pub mod revocation;
 pub mod temporal_validation;

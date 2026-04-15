@@ -33,4 +33,6 @@ pub enum CapabilityType {
     Spawn = 8,
     /// Authority to read (but not write) the kernel audit log.
     AuditRead = 9,
+    /// Authority over a shared physical memory frame for inter-server packet exchange.
+    Frame = 10,
 }

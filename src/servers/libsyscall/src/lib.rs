@@ -65,6 +65,67 @@ pub const SYSCALL_NUMBER_AUDIT_READ: u64 = 8;
 /// Requires a CapDevice capability with Write rights.
 pub const SYSCALL_NUMBER_DEVICE_MAP_MMIO: u64 = 9;
 
+/// Syscall number for sys_frame_map.
+///
+/// Maps a shared physical memory frame into a network server's address space.
+/// The kernel enforces FrameCapability bounds on every call — only frames
+/// explicitly granted to the calling process may be mapped (INV-MEM-005).
+/// Requires a CapFrame capability with Write rights.
+pub const SYSCALL_NUMBER_FRAME_MAP: u64 = 11;
+
+/// Maps a shared physical memory frame into the calling server's address space.
+///
+/// The kernel enforces FrameCapability bounds before mapping any frame region.
+/// Requires a CapFrame capability with Write rights (INV-MEM-005).
+///
+/// # Arguments
+///
+/// - `frame_capability_slot`: slot index of the CapFrame capability in the caller's CSpace
+/// - `virtual_address`: target virtual address in the server's address space
+/// - `physical_address`: physical address of the frame to map
+///
+/// Verified by: test_frame_capability_is_scoped_to_specific_physical_frame
+#[cfg(target_arch = "x86_64")]
+pub fn syscall_frame_map(
+    frame_capability_slot: u8,
+    virtual_address: u64,
+    physical_address: u64,
+) -> i64 {
+    // SAFETY: SYSCALL instruction transfers control to kernel.
+    // Kernel validates CapFrame bounds before mapping any frame region.
+    // - Precondition: frame_capability_slot holds a valid CapFrame with Write rights.
+    // - Invariant: INV-MEM-005 (memory ownership is explicit).
+    // - Evidence: test_frame_capability_is_scoped_to_specific_physical_frame.
+    let return_value: i64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") SYSCALL_NUMBER_FRAME_MAP,
+            in("rdi") frame_capability_slot as u64,
+            in("rsi") virtual_address,
+            in("rdx") physical_address,
+            lateout("rax") return_value,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack)
+        );
+    }
+    return_value
+}
+
+/// Host-target stub for syscall_frame_map.
+///
+/// Returns 0 when invoked outside x86_64.
+/// Used for host-side unit test compilation only.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn syscall_frame_map(
+    _frame_capability_slot: u8,
+    _virtual_address: u64,
+    _physical_address: u64,
+) -> i64 {
+    0
+}
+
 /// Syscall number for sys_irq_bind.
 ///
 /// Binds a device IRQ line to an IPC endpoint for interrupt delivery.

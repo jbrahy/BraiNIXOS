@@ -5,5 +5,6 @@ pub mod dispatch;
 
 pub mod audit_read;
 pub mod device_map_mmio;
+pub mod frame_map;
 pub mod irq_bind;
 pub mod process_exit;

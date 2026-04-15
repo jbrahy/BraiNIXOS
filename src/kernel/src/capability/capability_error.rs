@@ -35,4 +35,8 @@ pub enum CapabilityError {
     ReadRightNotGranted,
     /// The Grant right is not present in the capability's rights bitmask.
     GrantRightNotGranted,
+    /// The target IPC endpoint capability is not present in the caller's CSpace.
+    EndpointNotInCSpace,
+    /// The requested frame access exceeds the bounds of the frame capability.
+    OutOfBoundsFrameAccess,
 }

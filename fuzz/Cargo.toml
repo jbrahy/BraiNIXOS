@@ -15,6 +15,9 @@ libfuzzer-sys = "0.4"
 brainix-bootloader-verify = { path = "../src/bootloader-verify" }
 brainix-kernel = { path = "../src/kernel" }
 brainix-devd-nic = { path = "../src/servers/devd-nic" }
+brainix-linkd = { path = "../src/servers/linkd" }
+brainix-ipd = { path = "../src/servers/ipd" }
+brainix-transportd = { path = "../src/servers/transportd" }
 
 [[bin]]
 name = "fuzz_bootloader_multiboot2_info_struct_parsing"
@@ -29,4 +32,19 @@ doc = false
 [[bin]]
 name = "fuzz_devd_nic_ipc_boundary_cannot_reach_kernel_memory"
 path = "fuzz_targets/fuzz_devd_nic_ipc_boundary_cannot_reach_kernel_memory.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_linkd_ingress_with_adversarial_ethernet_frames"
+path = "fuzz_targets/fuzz_linkd_ingress_with_adversarial_ethernet_frames.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_ipd_ingress_with_adversarial_ip_packets"
+path = "fuzz_targets/fuzz_ipd_ingress_with_adversarial_ip_packets.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_transportd_ingress_with_adversarial_transport_segments"
+path = "fuzz_targets/fuzz_transportd_ingress_with_adversarial_transport_segments.rs"
 doc = false
