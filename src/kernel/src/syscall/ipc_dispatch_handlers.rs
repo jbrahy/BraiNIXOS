@@ -11,6 +11,7 @@ use core::sync::atomic::Ordering;
 
 use crate::capability::capability_error::CapabilityError;
 use crate::capability::capability_space::CapabilitySpace;
+use crate::capability::capability_type::CapabilityType;
 use crate::ipc::call::ipc_call;
 use crate::ipc::receive::ipc_receive;
 use crate::ipc::send::ipc_send;
@@ -105,7 +106,9 @@ fn map_capability_error_to_ipc_error(_error: CapabilityError) -> IpcError {
 
 /// Resolves the endpoint pool index from a CSlot's object_pointer.
 ///
-/// Enforces INV-AUTH-002: capability type checked at lookup_slot (Valid state required).
+/// Enforces INV-AUTH-002: capability must be Endpoint-typed. Any non-Endpoint
+/// slot index (CapFrame, CapDevice, CapSpawn, etc.) returns EndpointRevoked,
+/// preventing type confusion on the endpoint pool index.
 fn resolve_endpoint_index_from_capability_space(
     capability_space: &CapabilitySpace,
     endpoint_slot_index: u8,
@@ -113,6 +116,9 @@ fn resolve_endpoint_index_from_capability_space(
     let slot = capability_space
         .lookup_slot(endpoint_slot_index)
         .map_err(map_capability_error_to_ipc_error)?;
+    if slot.capability_type() != CapabilityType::Endpoint {
+        return Err(IpcError::EndpointRevoked);
+    }
     Ok(slot.object_pointer as usize)
 }
 
