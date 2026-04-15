@@ -11,6 +11,7 @@ use crate::capability::capability_rights::CapabilityRights;
 use crate::capability::capability_slot::{CapabilitySlot, CapabilitySlotState};
 use crate::capability::capability_space::CapabilitySpace;
 use crate::capability::capability_type::CapabilityType;
+use crate::ipc::endpoint::ThreadIdentifier;
 use crate::process::address_space::{build_process_address_space_layout, AddressSpaceError};
 use crate::process::ProcessType;
 use crate::thread::{Thread, ThreadState};
@@ -22,6 +23,11 @@ pub struct ServerProcessHandle {
     pub process_type: ProcessType,
     /// Index into the kernel thread pool slot allocated for this process.
     pub thread_index: usize,
+    /// Canonical thread identifier used as key in the ProcessTable.
+    ///
+    /// Derived from thread_index by cast to u32 (ThreadIdentifier = u32).
+    /// Used by boot/phases.rs to call process_table.insert_entry after capability grant.
+    pub thread_identifier: ThreadIdentifier,
 }
 
 /// Errors that can occur when creating a server process at boot.
@@ -42,7 +48,8 @@ pub enum ServerLaunchError {
 /// 2. Builds the virtual address layout (code base, stack top, guard page).
 /// 3. Creates a new CapabilitySpace with all 256 slots null (empty authority).
 /// 4. Creates a Thread with rcx = entry point, rsp = stack top, state = Ready.
-/// 5. Returns a ServerProcessHandle binding the process type to its thread slot.
+/// 5. Returns a (ServerProcessHandle, CapabilitySpace) tuple — caller grants
+///    capabilities then moves the CSpace into the ProcessTable (grant-then-move pattern).
 ///
 /// Enforces INV-AUTH-001: new process starts with empty CSpace.
 /// Enforces INV-MEM-002: user page table is KPTI-isolated.
@@ -50,18 +57,23 @@ pub enum ServerLaunchError {
 pub fn create_server_process(
     process_type: ProcessType,
     entry_point_address: u64,
-) -> Result<ServerProcessHandle, ServerLaunchError> {
+) -> Result<(ServerProcessHandle, CapabilitySpace), ServerLaunchError> {
     let layout = build_layout_or_error(entry_point_address)?;
-    let _capability_space = CapabilitySpace::new();
+    let capability_space = CapabilitySpace::new();
     let _thread = build_initial_thread(
         layout.entry_point_virtual_address,
         layout.stack_top_virtual_address,
     );
     let thread_index = allocate_thread_pool_slot();
-    Ok(ServerProcessHandle {
-        process_type,
-        thread_index,
-    })
+    let thread_identifier = thread_index as ThreadIdentifier;
+    Ok((
+        ServerProcessHandle {
+            process_type,
+            thread_index,
+            thread_identifier,
+        },
+        capability_space,
+    ))
 }
 
 /// Builds the process address space layout or maps the error to ServerLaunchError.
@@ -174,7 +186,7 @@ mod tests {
     fn test_create_server_process_with_canonical_entry_point_returns_ok() {
         let result = create_server_process(ProcessType::Init, 0x0000_0000_0040_0000);
         assert!(result.is_ok(), "canonical entry point must succeed");
-        let handle = result.unwrap();
+        let (handle, _capability_space) = result.unwrap();
         assert_eq!(handle.process_type, ProcessType::Init);
     }
 
@@ -182,14 +194,16 @@ mod tests {
     #[test]
     fn test_create_server_process_with_null_entry_point_returns_error() {
         let result = create_server_process(ProcessType::Init, 0);
-        assert_eq!(result, Err(ServerLaunchError::EntryPointNotCanonical));
+        let error = result.err();
+        assert_eq!(error, Some(ServerLaunchError::EntryPointNotCanonical));
     }
 
     /// Verifies that a kernel-space entry point is rejected as non-canonical.
     #[test]
     fn test_create_server_process_with_kernel_entry_point_returns_error() {
         let result = create_server_process(ProcessType::Init, 0xFFFF_8000_0000_0000);
-        assert_eq!(result, Err(ServerLaunchError::EntryPointNotCanonical));
+        let error = result.err();
+        assert_eq!(error, Some(ServerLaunchError::EntryPointNotCanonical));
     }
 
     /// Verifies that grant_initial_capability_to_server places a Valid slot.
