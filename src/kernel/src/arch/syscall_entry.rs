@@ -236,35 +236,11 @@ global_asm!(
     // SYSRET restores RIP from rcx and RFLAGS from r11 (both pre-verified canonical).
     "sysretq",
     ".Liretq_fallback:",
-    // Non-canonical return RIP: use IRETQ to safely return to userspace.
-    // IRETQ frame on stack: RIP, CS, RFLAGS, RSP, SS (5 * 8 = 40 bytes, pushed in order).
-    // The saved rcx (return RIP) and r11 (RFLAGS) are already on the stack.
-    // We restore the argument registers, then build the IRETQ frame manually.
-    "pop %r12",
-    "pop %r10",
-    "pop %r9",
-    "pop %r8",
-    "pop %rdx",
-    "pop %rsi",
-    "pop %rdi",
-    "add $8, %rsp",
-    // Stack now has: r11 at [rsp+0], rcx at [rsp+8].
-    // Pop r11 and rcx for IRETQ frame construction.
-    "pop %r11",
-    "pop %rcx",
-    // Build IRETQ frame: SS, RSP, RFLAGS, CS, RIP (pushed in reverse order).
-    "push $0x20",
-    "push %rsp",
-    "push %r11",
-    "push $0x18",
-    "push %rcx",
-    // Zero non-return registers before IRETQ for symmetry with SYSRET path.
-    "xor %rbx, %rbx",
-    "xor %rbp, %rbp",
-    "xor %r13, %r13",
-    "xor %r14, %r14",
-    "xor %r15, %r15",
-    "iretq",
+    // Phase 4: no real userspace exists. A non-canonical return RIP cannot occur
+    // in normal operation. If this path is reached, halt rather than attempt IRETQ
+    // frame construction without a saved user RSP (Phase 5 adds GS-based stack
+    // switching and will implement this path correctly).
+    "hlt",
 );
 
 extern "C" {
