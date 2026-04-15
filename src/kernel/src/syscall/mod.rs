@@ -7,5 +7,6 @@ pub mod audit_read;
 pub mod device_map_mmio;
 pub mod frame_map;
 pub mod irq_bind;
+pub mod kernel_ipc_state;
 pub mod kernel_syscall_registers;
 pub mod process_exit;

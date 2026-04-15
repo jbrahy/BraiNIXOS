@@ -49,7 +49,9 @@ pub struct RegisterSaveArea {
 ///
 /// Phase 4 defines this struct; Phase 5 adds scheduling logic on top
 /// without changing the shape, avoiding a two-phase struct migration.
-#[derive(Debug)]
+///
+/// Derives Copy to enable const array initialization for the kernel thread pool (Phase 11, D-02).
+#[derive(Debug, Clone, Copy)]
 pub struct Thread {
     /// Saved register state during SYSCALL trap.
     pub register_save_area: RegisterSaveArea,
