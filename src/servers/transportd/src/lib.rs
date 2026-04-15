@@ -11,6 +11,7 @@
 
 pub mod icmp;
 
+pub use icmp::generate_icmp_echo_reply;
 pub use icmp::parse_icmp_message;
 
 /// Transport-layer server main loop: receives IPC messages and dispatches to handlers.
@@ -19,6 +20,8 @@ pub use icmp::parse_icmp_message;
 /// ICMP message handling with echo reply generation.
 ///
 /// Enforces INV-DEV-002: server loops only on its assigned endpoint.
+///
+/// transportd has ONLY CapEndpoint to ipd — no CapDevice, no CapIrq (D-03).
 pub fn transport_server_main_loop() -> ! {
     loop {
         core::hint::spin_loop();
