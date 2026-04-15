@@ -97,7 +97,10 @@ version = "0.1.0"
 name = "brainix-linkd"
 version = "0.1.0"
 dependencies = [
+ "brainix-devd-nic",
+ "brainix-ipd",
  "brainix-libsyscall",
+ "brainix-transportd",
 ]
 
 [[package]]
@@ -111,6 +114,7 @@ dependencies = [
 name = "brainix-transportd"
 version = "0.1.0"
 dependencies = [
+ "brainix-kernel",
  "brainix-libsyscall",
 ]
 

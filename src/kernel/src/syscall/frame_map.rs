@@ -5,8 +5,8 @@
 //!
 //! Enforces INV-MEM-005: memory ownership is explicit.
 
-use crate::capability::frame_capability::{FrameCapabilityData, FRAME_MAP_VIRTUAL_ADDRESS};
 use crate::capability::capability_rights::READ;
+use crate::capability::frame_capability::{FrameCapabilityData, FRAME_MAP_VIRTUAL_ADDRESS};
 
 /// Checks that the requested capability slot contains a Frame-type capability.
 ///

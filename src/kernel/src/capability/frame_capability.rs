@@ -38,7 +38,10 @@ impl FrameCapabilityData {
     /// Enforces INV-MEM-005: memory ownership is explicit.
     /// Verified by: test_frame_capability_data_stores_physical_address
     pub fn new(frame_physical_address: u64, frame_rights: CapabilityRights) -> Self {
-        Self { frame_physical_address, frame_rights }
+        Self {
+            frame_physical_address,
+            frame_rights,
+        }
     }
 
     /// Validates that the frame physical address is page-aligned (4KiB).
@@ -52,9 +55,7 @@ impl FrameCapabilityData {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        FrameCapabilityData, FRAME_MAP_VIRTUAL_ADDRESS, MAXIMUM_FRAME_PAGES,
-    };
+    use super::{FrameCapabilityData, FRAME_MAP_VIRTUAL_ADDRESS, MAXIMUM_FRAME_PAGES};
     use crate::capability::capability_rights::READ;
 
     /// Verifies that FrameCapabilityData stores the physical address and rights.
