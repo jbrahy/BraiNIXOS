@@ -76,16 +76,18 @@ pub unsafe fn kernel_wait_for_graph_mut() -> &'static mut WaitForGraph {
     &mut *core::ptr::addr_of_mut!(KERNEL_WAIT_FOR_GRAPH)
 }
 
-/// Returns a mutable reference to the Thread at `thread_index`.
+/// Returns a mutable reference to the Thread at `thread_index`, or None if out of bounds.
 ///
 /// # Safety
 ///
 /// Called only from single-core SYSCALL dispatch path.
-/// Precondition: `thread_index < MAXIMUM_THREADS`.
-/// Invariant: INV-AUTH-005 (bounds check required before call).
-pub unsafe fn kernel_thread_at_mut(thread_index: usize) -> &'static mut Thread {
+/// Invariant: INV-AUTH-005 (bounds check performed inside this accessor).
+pub unsafe fn kernel_thread_at_mut(thread_index: usize) -> Option<&'static mut Thread> {
+    if thread_index >= MAXIMUM_THREADS {
+        return None;
+    }
     let pool_pointer = core::ptr::addr_of_mut!(KERNEL_THREAD_POOL);
-    &mut (*pool_pointer)[thread_index]
+    Some(&mut (*pool_pointer)[thread_index])
 }
 
 /// Returns a mutable reference to the kernel process table.

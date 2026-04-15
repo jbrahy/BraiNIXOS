@@ -163,7 +163,8 @@ fn store_thread_in_kernel_pool(thread_index: usize, thread: Thread) {
     // Precondition: allocate_thread_pool_slot returns index < 32 (8 boot servers).
     // Invariant: D-03 (thread stored, not dropped).
     // Evidence: test_create_server_process_with_canonical_entry_point_returns_ok.
-    let pool_entry = unsafe { kernel_ipc_state::kernel_thread_at_mut(thread_index) };
+    let pool_entry = unsafe { kernel_ipc_state::kernel_thread_at_mut(thread_index) }
+        .expect("store_thread_in_kernel_pool: thread_index must be < MAXIMUM_THREADS");
     *pool_entry = thread;
 }
 

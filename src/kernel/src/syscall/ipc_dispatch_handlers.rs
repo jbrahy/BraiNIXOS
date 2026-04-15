@@ -226,7 +226,8 @@ unsafe fn call_ipc_send(
     endpoint_pool: &mut crate::ipc::endpoint::EndpointPool,
     caller_cspace: &mut CapabilitySpace,
 ) -> Result<(), IpcError> {
-    let sender_thread = kernel_ipc_state::kernel_thread_at_mut(thread_identifier as usize);
+    let sender_thread = kernel_ipc_state::kernel_thread_at_mut(thread_identifier as usize)
+        .ok_or(IpcError::EndpointRevoked)?;
     ipc_send(
         thread_identifier,
         message,
@@ -297,7 +298,8 @@ unsafe fn call_ipc_receive(
     endpoint_pool: &mut crate::ipc::endpoint::EndpointPool,
     receiver_cspace: &mut CapabilitySpace,
 ) -> Result<IpcMessage, IpcError> {
-    let receiver_thread = kernel_ipc_state::kernel_thread_at_mut(thread_identifier as usize);
+    let receiver_thread = kernel_ipc_state::kernel_thread_at_mut(thread_identifier as usize)
+        .ok_or(IpcError::EndpointRevoked)?;
     ipc_receive(
         thread_identifier,
         arguments.receiver_capability_destination_slot,
@@ -372,7 +374,8 @@ unsafe fn call_ipc_call(
     endpoint_pool: &mut crate::ipc::endpoint::EndpointPool,
     caller_cspace: &mut CapabilitySpace,
 ) -> Result<(), IpcError> {
-    let caller_thread = kernel_ipc_state::kernel_thread_at_mut(thread_identifier as usize);
+    let caller_thread = kernel_ipc_state::kernel_thread_at_mut(thread_identifier as usize)
+        .ok_or(IpcError::EndpointRevoked)?;
     let wait_for_graph = kernel_ipc_state::kernel_wait_for_graph_mut();
     ipc_call(
         thread_identifier,
@@ -486,7 +489,8 @@ mod tests {
             .lookup_entry_mut(receiver_thread_identifier)
             .expect("enqueue_thread_as_receiver: thread must be registered");
         let receiver_thread =
-            kernel_ipc_state::kernel_thread_at_mut(receiver_thread_identifier as usize);
+            kernel_ipc_state::kernel_thread_at_mut(receiver_thread_identifier as usize)
+                .expect("enqueue_thread_as_receiver: thread_index must be in bounds");
         let receive_result = ipc_receive(
             receiver_thread_identifier,
             0xFF,
