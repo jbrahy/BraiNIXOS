@@ -69,7 +69,8 @@ pub fn create_server_process(
         layout.entry_point_virtual_address,
         layout.stack_top_virtual_address,
     );
-    let thread_index = allocate_thread_pool_slot();
+    let thread_index = allocate_thread_pool_slot()
+        .ok_or(ServerLaunchError::ThreadPoolExhausted)?;
     store_thread_in_kernel_pool(thread_index, thread);
     let thread_identifier = thread_index as ThreadIdentifier;
     Ok((
@@ -132,17 +133,22 @@ fn build_initial_thread(
 static NEXT_THREAD_POOL_SLOT_INDEX: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
 
-/// Returns the next available thread pool slot index for a newly created process.
+/// Returns the next available thread pool slot index, or None if the pool is exhausted.
 ///
 /// Uses a monotonically incrementing atomic counter to ensure each successive
-/// call returns a distinct index. This is correct for Phase 8 single-core
-/// boot-time-only server creation (T-DEV-016 mitigation).
+/// call returns a distinct index. Returns None when the counter reaches
+/// MAXIMUM_THREADS, preventing silent out-of-bounds writes to the thread pool.
+/// This is correct for Phase 8 single-core boot-time-only server creation
+/// (T-DEV-016 mitigation).
 ///
 /// Verified by: tests::test_allocate_thread_pool_slot_returns_distinct_indices
-fn allocate_thread_pool_slot() -> usize {
+fn allocate_thread_pool_slot() -> Option<usize> {
     let slot_index = NEXT_THREAD_POOL_SLOT_INDEX.load(core::sync::atomic::Ordering::Relaxed);
+    if slot_index >= crate::ipc::MAXIMUM_THREADS {
+        return None;
+    }
     increment_thread_pool_slot_counter();
-    slot_index
+    Some(slot_index)
 }
 
 /// Increments the thread pool slot counter by one.
@@ -277,8 +283,10 @@ mod tests {
     /// multiple device servers receive non-overlapping thread pool slots (T-DEV-016).
     #[test]
     fn test_allocate_thread_pool_slot_returns_distinct_indices() {
-        let first_slot_index = allocate_thread_pool_slot();
-        let second_slot_index = allocate_thread_pool_slot();
+        let first_slot_index = allocate_thread_pool_slot()
+            .expect("test_allocate_thread_pool_slot: pool must not be exhausted");
+        let second_slot_index = allocate_thread_pool_slot()
+            .expect("test_allocate_thread_pool_slot: pool must not be exhausted");
         assert_eq!(
             second_slot_index,
             first_slot_index.wrapping_add(1),
