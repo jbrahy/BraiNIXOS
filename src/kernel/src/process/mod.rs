@@ -13,6 +13,7 @@
 pub mod address_space;
 pub mod elf_loader;
 pub mod module_loader;
+pub mod process_table;
 pub mod server_launch;
 
 /// Re-export ProcessType so kernel code can reference it as `process::ProcessType`.
