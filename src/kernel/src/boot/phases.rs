@@ -255,6 +255,15 @@ fn launch_device_server_processes(
 /// Mitigates T-DEV-018: object_pointer holds the NIC DeviceCapabilityData address.
 /// Enforces INV-DEV-002: NIC server receives only NIC-scoped authority.
 /// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+///
+/// Entry point 0x0000_0000_0040_0000 is a boot-phase placeholder shared with devd-disk.
+/// The two servers are distinguished solely by the object_pointer written into slot 0
+/// (NIC_DEVICE_CAPABILITY_DATA vs DISK_DEVICE_CAPABILITY_DATA). The ProcessTable key
+/// is the thread_identifier, which is unique because NEXT_THREAD_POOL_SLOT_INDEX
+/// increments between calls. ORDERING CONSTRAINT: devd-nic must be launched before
+/// devd-disk (launch_device_server_processes enforces this order). If this order
+/// changes, the slot assignments swap silently — this is a known structural gap
+/// to be resolved when distinct ProcessType variants are introduced in a future phase.
 fn launch_devd_nic_server_process(process_table: &mut ProcessTable) {
     let (handle, mut capability_space) =
         create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000).unwrap();
@@ -287,6 +296,15 @@ fn wire_nic_device_data_into_slot(capability_space: &mut CapabilitySpace) {
 /// Mitigates T-DEV-018: object_pointer holds the disk DeviceCapabilityData address.
 /// Enforces INV-DEV-002: disk server receives only disk-scoped authority.
 /// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+///
+/// Entry point 0x0000_0000_0040_0000 is a boot-phase placeholder shared with devd-nic.
+/// The two servers are distinguished solely by the object_pointer written into slot 0
+/// (DISK_DEVICE_CAPABILITY_DATA vs NIC_DEVICE_CAPABILITY_DATA). The ProcessTable key
+/// is the thread_identifier, which is unique because NEXT_THREAD_POOL_SLOT_INDEX
+/// increments between calls. ORDERING CONSTRAINT: devd-disk must be launched after
+/// devd-nic (launch_device_server_processes enforces this order). If this order
+/// changes, the slot assignments swap silently — this is a known structural gap
+/// to be resolved when distinct ProcessType variants are introduced in a future phase.
 fn launch_devd_disk_server_process(process_table: &mut ProcessTable) {
     let (handle, mut capability_space) =
         create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000).unwrap();
