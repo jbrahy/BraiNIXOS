@@ -269,8 +269,13 @@ fn log_iommu_detection_status(
 /// ProcessType::DeviceServerNic and ProcessType::DeviceServerDisk variants
 /// are introduced in a future phase.
 fn launch_device_server_processes(boot_step_logger: &mut BootStepLogger) {
-    launch_devd_nic_server_process(); // Must come first — see ordering constraint above.
-    launch_devd_disk_server_process(); // Must come second — see ordering constraint above.
+    // ORDERING CONSTRAINT: devd-nic MUST be launched before devd-disk.
+    // Both use ProcessType::DeviceServer and the same entry point. Thread identity is
+    // assigned by NEXT_THREAD_POOL_SLOT_INDEX. Reordering silently swaps capability grants.
+    // This constraint is eliminated when distinct ProcessType::DeviceServerNic/Disk variants
+    // are introduced in a future phase.
+    launch_devd_nic_server_process();
+    launch_devd_disk_server_process();
     boot_step_logger.ok("Device server processes created: devd-nic, devd-disk");
 }
 
