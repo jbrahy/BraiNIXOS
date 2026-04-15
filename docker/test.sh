@@ -12,6 +12,12 @@ set -euo pipefail
 REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPOSITORY_ROOT}"
 
+# Non-interactive SSH sessions (e.g. ssh host "cmd") do not source ~/.bashrc or
+# ~/.profile, so ~/.cargo/bin is absent from PATH. Add it explicitly if it exists.
+if [[ -d "${HOME}/.cargo/bin" ]]; then
+    export PATH="${HOME}/.cargo/bin:${PATH}"
+fi
+
 # Ensure the nightly Rust toolchain (pinned in rust-toolchain.toml) takes
 # precedence over any system cargo/rustc (e.g. Homebrew on macOS). The
 # toolchain is discovered from rust-toolchain.toml; if rustup is not on PATH
@@ -50,15 +56,21 @@ echo "[test.sh] Building GRUB2 ISO with grub-mkrescue..."
 grub-mkrescue -o brainix.iso iso/
 
 echo "[test.sh] Provisioning swtpm for Phase 6 attestation test..."
+rm -rf /tmp/brainix-tpm
 mkdir -p /tmp/brainix-tpm
-swtpm_setup \
+SWTPM_READY=0
+if timeout 10 swtpm_setup \
     --tpmstate /tmp/brainix-tpm \
     --tpm2 \
     --createek \
     --overwrite \
-    2>/dev/null || echo "[test.sh] WARN: swtpm_setup failed (swtpm not installed; attestation skipped)"
+    2>/dev/null; then
+    SWTPM_READY=1
+else
+    echo "[test.sh] WARN: swtpm_setup failed (swtpm not installed; attestation skipped)"
+fi
 
-if command -v swtpm &>/dev/null && [ -f /tmp/brainix-tpm/tpm2-00.permall ]; then
+if [ "${SWTPM_READY}" -eq 1 ] && command -v swtpm &>/dev/null; then
     swtpm socket \
         --tpmstate dir=/tmp/brainix-tpm \
         --ctrl type=unixio,path=/tmp/brainix-tpm/swtpm.sock \
@@ -83,12 +95,50 @@ else
     echo "[test.sh] swtpm not available; running without TPM device"
 fi
 
-echo "[test.sh] Booting GRUB2 ISO in QEMU (30s timeout)..."
+echo "[test.sh] Creating GRUB2 memdisk boot image..."
+# Embed the bootloader binary directly into the GRUB2 core image as a memdisk
+# (tar archive served from RAM). This avoids all BIOS CD-ROM disk reads after
+# core.img loads — GRUB finds grub.cfg and the bootloader in RAM instantly.
+# Required because TCG+Rosetta makes BIOS INT 13h CD-ROM reads prohibitively slow.
+MEMDISK_DIR=/tmp/brainix-memdisk
+rm -rf "${MEMDISK_DIR}"
+mkdir -p "${MEMDISK_DIR}/boot/grub"
+cp target/x86_64-unknown-none/release/brainix-bootloader "${MEMDISK_DIR}/boot/"
+cat > "${MEMDISK_DIR}/boot/grub/grub.cfg" << 'GRUBCFGEOF'
+set timeout=0
+menuentry "BraiNIX" {
+    multiboot2 (memdisk)/boot/brainix-bootloader
+    boot
+}
+GRUBCFGEOF
+
+tar -C "${MEMDISK_DIR}" -cf /tmp/brainix-memdisk.tar .
+
+GRUB_LIB=/usr/lib/grub/i386-pc
+grub-mkimage \
+    --directory="${GRUB_LIB}" \
+    --format=i386-pc \
+    --output=/tmp/brainix-core.img \
+    --prefix='(memdisk)/boot/grub' \
+    --memdisk=/tmp/brainix-memdisk.tar \
+    memdisk tar biosdisk multiboot2 normal echo
+
+# Assemble bootable disk: boot.img (MBR) at sector 0, core.img at sector 1.
+# boot.img's core.img sector reference lives at byte offset 92 (little-endian u32).
+dd if=/dev/zero of=brainix-boot.img bs=512 count=16384 2>/dev/null
+dd if="${GRUB_LIB}/boot.img" of=brainix-boot.img bs=512 count=1 conv=notrunc 2>/dev/null
+printf '\x01\x00\x00\x00' | dd of=brainix-boot.img bs=1 seek=92 count=4 conv=notrunc 2>/dev/null
+dd if=/tmp/brainix-core.img of=brainix-boot.img bs=512 seek=1 conv=notrunc 2>/dev/null
+
+echo "[test.sh] Booting BraiNIX via hybrid ISO as hard disk in QEMU (300s timeout)..."
+# brainix.iso is a hybrid image (boot_hybrid.img MBR) — bootable as hard disk too.
+# Presenting it as an IDE hard drive avoids the slow CD-ROM emulation path; the
+# embedded MBR boots GRUB2 the same way a real hybrid USB drive would.
 # shellcheck disable=SC2086
-timeout 30 qemu-system-x86_64 \
-    -cdrom brainix.iso \
+timeout 300 qemu-system-x86_64 \
+    -drive file=brainix.iso,format=raw,if=ide \
+    -boot order=c \
     -nographic \
-    -serial stdio \
     -machine q35,accel=tcg \
     -cpu qemu64,+smep,+smap \
     -m 512M \

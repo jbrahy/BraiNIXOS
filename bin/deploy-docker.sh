@@ -67,6 +67,7 @@ fi
 if [[ "$REBUILD" == true ]] || ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
     printf "${BOLD}Building Docker image...${NC}\n"
     docker build \
+        --platform linux/amd64 \
         -f "${REPO_ROOT}/docker/Dockerfile.dev" \
         -t "$IMAGE_NAME" \
         "$REPO_ROOT"
@@ -77,8 +78,10 @@ docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
 printf "${BOLD}Starting container...${NC}\n"
 docker run -d \
+    --platform linux/amd64 \
     --name "$CONTAINER_NAME" \
     --hostname brainix-dev \
+    --security-opt seccomp=unconfined \
     -p "${SSH_PORT}:22" \
     -p "${SERIAL_PORT}:4444" \
     -v "${REPO_ROOT}:/home/dev/brainix" \

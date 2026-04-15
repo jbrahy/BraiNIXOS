@@ -1,9 +1,24 @@
-[1m=== Brainix Test Suite ===[0m
+[1m=== BraiNIX Test Suite ===[0m
 Toolchain: nightly-2025-12-01
 Host target: aarch64-apple-darwin
 
 [1m--- Unit tests (host: aarch64-apple-darwin) ---[0m
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+   Compiling brainix-libsyscall v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/libsyscall)
+   Compiling typenum v1.19.0
+   Compiling libc v0.2.185
+   Compiling generic-array v0.14.7
+   Compiling cpufeatures v0.2.17
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling inout v0.1.4
+   Compiling cipher v0.4.4
+   Compiling digest v0.10.7
+   Compiling curve25519-dalek v4.1.3
+   Compiling sha2 v0.10.9
+   Compiling chacha20 v0.9.1
+   Compiling ed25519-dalek v2.2.0
+   Compiling brainix-kernel v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.61s
      Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/brainix_kernel-02a62d7e2a9f8567)
 
 running 296 tests
@@ -304,27 +319,65 @@ test syscall::audit_read::tests::test_validate_audit_read_capability_with_wrong_
 test syscall::audit_read::tests::test_validate_audit_read_capability_without_read_right_returns_error ... ok
 test syscall::process_exit::tests::test_process_exit_revokes_capability_space ... ok
 
-test result: ok. 295 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 295 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.03s
 
 [0;32mPASS[0m  unit tests (295+ expected)
 
 [1m--- cargo check (x86_64-unknown-none) ---[0m
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+   Compiling typenum v1.19.0
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling thiserror v2.0.18
+   Compiling const_fn v0.4.12
+   Compiling rustversion v1.0.22
+    Checking brainix-libsyscall v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/libsyscall)
+    Checking generic-array v0.14.7
+    Checking crypto-common v0.1.7
+    Checking block-buffer v0.10.4
+    Checking inout v0.1.4
+    Checking cipher v0.4.4
+    Checking digest v0.10.7
+    Checking curve25519-dalek v4.1.3
+    Checking sha2 v0.10.9
+    Checking chacha20 v0.9.1
+    Checking ed25519-dalek v2.2.0
+    Checking x86_64 v0.15.4
+   Compiling syn v2.0.117
+   Compiling ptr_meta_derive v0.3.1
+   Compiling thiserror-impl v2.0.18
+    Checking ptr_meta v0.3.1
+    Checking multiboot2-common v0.3.0
+    Checking multiboot2 v0.24.1
+    Checking brainix-kernel v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.06s
 [0;32mPASS[0m  bare-metal cargo check
 
 [1m--- cargo fmt ---[0m
 [0;32mPASS[0m  cargo fmt --check
 
 [1m--- cargo clippy (bare-metal) ---[0m
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+   Compiling brainix-bootloader v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/bootloader)
+    Checking brainix-libsyscall v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/libsyscall)
+    Checking brainix-kernel v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.49s
 [0;32mPASS[0m  cargo clippy bare-metal
 
 [1m--- cargo clippy (host) ---[0m
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s
+    Checking brainix-init v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/init)
+    Checking brainix-auditd v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/auditd)
+    Checking brainix-spawnd v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/spawnd)
+    Checking brainix-devd-disk v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/devd-disk)
+    Checking brainix-ipd v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/ipd)
+    Checking brainix-linkd v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/linkd)
+    Checking brainix-devd-nic v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/devd-nic)
+    Checking brainix-transportd v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/transportd)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
 [0;32mPASS[0m  cargo clippy host
 
 [1m--- Device server crates (brainix-devd-nic, brainix-devd-disk) ---[0m
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
+    Checking brainix-devd-disk v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/devd-disk)
+    Checking brainix-devd-nic v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/devd-nic)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
 [0;32mPASS[0m  device server crates compile
 
 [1m--- Fuzz target registration ---[0m

@@ -125,7 +125,8 @@ unsafe fn write_sfmask_msr_to_clear_interrupt_flag() {
 /// (Intel errata D-11 — SYSRET to non-canonical RIP is fatal in kernel mode).
 ///
 /// Enforces D-11: return RIP must be canonical before SYSRET.
-pub fn is_canonical_virtual_address(address: u64) -> bool {
+#[no_mangle]
+pub extern "C" fn is_canonical_virtual_address(address: u64) -> bool {
     let sign_extended_bits = ((address as i64) >> 47) as u64;
     sign_extended_bits == 0 || sign_extended_bits == 0xFFFF_FFFF_FFFF_FFFFu64
 }
