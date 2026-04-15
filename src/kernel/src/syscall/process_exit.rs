@@ -110,16 +110,26 @@ pub fn revoke_and_remove_cspace_from_table(
 
 /// Production entry: revokes and removes CSpace from the kernel process table.
 ///
-/// Structural approximation for the production diverging path. A global
-/// ProcessTable accessor will be wired in a future phase when the boot
-/// sequence is extended to hold a static process table reference.
+/// KNOWN GAP (D-04): This function is a structural stub. The production diverging
+/// path (handle_process_exit_syscall) calls this function, but it does NOT revoke
+/// the CSpace because no kernel-global ProcessTable accessor exists yet. The
+/// ProcessTable is created on the execute_boot_sequence stack and is dropped when
+/// that function returns, leaving no live table accessible from the syscall path.
 ///
-/// Enforces INV-AUTH-001: authority cannot survive process exit.
-/// Enforces D-04: CSpace removed from ProcessTable on exit.
+/// Consequence: if a real userspace process calls sys_process_exit (syscall 7),
+/// its CSpace will NOT be removed from the ProcessTable. INV-AUTH-001 and D-04
+/// are not enforced in the production diverging path at this phase.
+///
+/// This is safe only while no real userspace threads can reach sys_process_exit.
+/// When the global ProcessTable accessor is implemented in a future phase, replace
+/// this stub with a call to revoke_and_remove_cspace_from_table against the global.
+///
+/// TODO(future-phase): wire global ProcessTable accessor and replace this stub.
+/// Tracking: D-04 gap documented in docs/security/SECURITY_INVARIANTS.md.
 fn perform_process_capability_space_teardown(thread_identifier: ThreadIdentifier) {
-    // Structural approximation: production path uses a local zero-capacity table.
-    // Full wiring requires a kernel-global ProcessTable accessor (future phase).
-    // The thread_identifier parameter is accepted so the call chain is correct (D-03).
+    // Intentionally not a todo!() or panic: handle_process_exit_syscall is -> ! and
+    // must not panic during boot-time structural initialization. The gap is documented
+    // above and in SECURITY_INVARIANTS.md so it cannot be missed in future phase review.
     let _ = thread_identifier;
 }
 

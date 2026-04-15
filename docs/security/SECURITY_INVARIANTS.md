@@ -106,6 +106,8 @@ Once revocation completes for a capability lineage, the revoked authority must n
 - no hidden alias paths that bypass revocation
 - clear definition of revocation completion
 
+**Known gap (Phase 10, D-04):** The testable path `execute_process_exit_sequence` correctly calls `revoke_and_remove_cspace_from_table`, which zeroes all valid/revoking slots and removes the ProcessTable entry. However, the production diverging path `handle_process_exit_syscall` calls `perform_process_capability_space_teardown`, which is a stub that does nothing. This is because the ProcessTable is created on the `execute_boot_sequence` stack and is dropped when that function returns — no kernel-global ProcessTable accessor exists yet. Consequence: if a real userspace process calls sys_process_exit (syscall 7), its CSpace will not be removed. This gap is acceptable only while no real userspace threads can reach sys_process_exit. Resolution: wire the global ProcessTable accessor in the next phase and replace the stub.
+
 ---
 
 ## INV-AUTH-005 — Capabilities cannot be forged from userspace
