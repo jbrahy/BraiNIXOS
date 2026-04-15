@@ -187,12 +187,38 @@ mod tests {
         }
     }
 
-    /// Verifies that a running server holds a live CSpace binding after kernel boot.
+    /// Verifies that a server launched via boot sequence holds a live CSpace in the ProcessTable.
     ///
-    /// Integration test stub — to be implemented in Plan 02.
+    /// Simulates the boot sequence grant-then-move pattern: create process, grant capability,
+    /// insert CSpace into table, verify lookup returns Some.
+    ///
+    /// Enforces INV-AUTH-001: authority only exists after explicit ProcessTable insertion.
+    /// Enforces T-10-02-01: CSpace is not dropped — it survives in the ProcessTable.
     #[test]
     fn integration_server_holds_live_cspace_after_boot() {
-        todo!()
+        use crate::capability::capability_rights;
+        use crate::capability::capability_type::CapabilityType;
+        use crate::process::server_launch::{
+            create_server_process, grant_initial_capability_to_server,
+        };
+        use crate::process::ProcessType;
+        let mut process_table = allocate_process_table_on_heap();
+        let (handle, mut capability_space) =
+            create_server_process(ProcessType::Init, 0x0000_0000_0040_0000).unwrap();
+        grant_initial_capability_to_server(
+            &mut capability_space,
+            0,
+            CapabilityType::Spawn,
+            capability_rights::GRANT,
+        );
+        process_table
+            .insert_entry(handle.thread_identifier, capability_space)
+            .unwrap();
+        let lookup_result = process_table.lookup_entry(handle.thread_identifier);
+        assert!(
+            lookup_result.is_some(),
+            "server CSpace must be live in ProcessTable after boot launch"
+        );
     }
 
     /// Verifies that runtime capability enforcement is active for all live processes.

@@ -22,6 +22,8 @@ use crate::capability::capability_type::CapabilityType;
 use crate::hardware_security::iommu_detection::IommuDetectionResult;
 use crate::hardware_security::iommu_detection::{detect_iommu_presence, enforce_iommu_policy};
 use crate::hardware_security::server_measurement::measure_all_server_binaries;
+use crate::ipc::endpoint::ThreadIdentifier;
+use crate::process::process_table::ProcessTable;
 use crate::process::server_launch::{create_server_process, grant_initial_capability_to_server};
 use crate::process::ProcessType;
 
@@ -47,9 +49,10 @@ pub fn execute_boot_sequence(
     protect_audit_log_after_boot_entries(boot_step_logger);
     detect_and_enforce_iommu_policy(boot_step_logger);
     measure_server_binaries_into_pcr3(boot_step_logger);
-    load_and_launch_server_processes(boot_step_logger);
-    launch_device_server_processes(boot_step_logger);
-    launch_network_server_processes(boot_step_logger);
+    let mut process_table = ProcessTable::new();
+    load_and_launch_server_processes(boot_step_logger, &mut process_table);
+    launch_device_server_processes(boot_step_logger, &mut process_table);
+    launch_network_server_processes(boot_step_logger, &mut process_table);
     log_boot_complete(boot_step_logger);
 }
 
@@ -106,25 +109,40 @@ fn measure_server_binaries_into_pcr3(boot_step_logger: &mut BootStepLogger) {
 ///
 /// Enforces INV-AUTH-001: each server starts with minimum authority.
 /// Enforces INV-MEM-002: each server has a KPTI-isolated address space.
-fn load_and_launch_server_processes(boot_step_logger: &mut BootStepLogger) {
-    launch_init_server_process();
-    launch_spawnd_server_process();
-    launch_auditd_server_process();
+fn load_and_launch_server_processes(
+    boot_step_logger: &mut BootStepLogger,
+    process_table: &mut ProcessTable,
+) {
+    launch_init_server_process(process_table);
+    launch_spawnd_server_process(process_table);
+    launch_auditd_server_process(process_table);
     boot_step_logger.ok("Server processes created: init, spawnd, auditd");
 }
 
 /// Creates the init server process and grants CapSpawn + CapAuditRead.
-fn launch_init_server_process() {
-    let _ = create_server_process(ProcessType::Init, 0x0000_0000_0040_0000);
-    let mut init_capability_space = CapabilitySpace::new();
+///
+/// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+fn launch_init_server_process(process_table: &mut ProcessTable) {
+    let (handle, mut capability_space) =
+        create_server_process(ProcessType::Init, 0x0000_0000_0040_0000).unwrap();
     grant_initial_capability_to_server(
-        &mut init_capability_space,
+        &mut capability_space,
         0,
         CapabilityType::Spawn,
         capability_rights::GRANT,
     );
+    grant_init_audit_read_capability(&mut capability_space);
+    insert_capability_space_into_process_table(
+        process_table,
+        handle.thread_identifier,
+        capability_space,
+    );
+}
+
+/// Grants CapAuditRead (read-only) into init's slot 1.
+fn grant_init_audit_read_capability(capability_space: &mut CapabilitySpace) {
     grant_initial_capability_to_server(
-        &mut init_capability_space,
+        capability_space,
         1,
         CapabilityType::AuditRead,
         capability_rights::READ,
@@ -132,26 +150,40 @@ fn launch_init_server_process() {
 }
 
 /// Creates the spawnd server process and grants CapSpawn only.
-fn launch_spawnd_server_process() {
-    let _ = create_server_process(ProcessType::Spawnd, 0x0000_0000_0040_0000);
-    let mut spawnd_capability_space = CapabilitySpace::new();
+///
+/// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+fn launch_spawnd_server_process(process_table: &mut ProcessTable) {
+    let (handle, mut capability_space) =
+        create_server_process(ProcessType::Spawnd, 0x0000_0000_0040_0000).unwrap();
     grant_initial_capability_to_server(
-        &mut spawnd_capability_space,
+        &mut capability_space,
         0,
         CapabilityType::Spawn,
         capability_rights::GRANT,
     );
+    insert_capability_space_into_process_table(
+        process_table,
+        handle.thread_identifier,
+        capability_space,
+    );
 }
 
 /// Creates the auditd server process and grants CapAuditRead (read-only) only.
-fn launch_auditd_server_process() {
-    let _ = create_server_process(ProcessType::Auditd, 0x0000_0000_0040_0000);
-    let mut auditd_capability_space = CapabilitySpace::new();
+///
+/// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+fn launch_auditd_server_process(process_table: &mut ProcessTable) {
+    let (handle, mut capability_space) =
+        create_server_process(ProcessType::Auditd, 0x0000_0000_0040_0000).unwrap();
     grant_initial_capability_to_server(
-        &mut auditd_capability_space,
+        &mut capability_space,
         0,
         CapabilityType::AuditRead,
         capability_rights::READ,
+    );
+    insert_capability_space_into_process_table(
+        process_table,
+        handle.thread_identifier,
+        capability_space,
     );
 }
 
@@ -208,9 +240,12 @@ fn log_iommu_detection_status(
 ///
 /// Per D-01: kernel grants CapDevice directly to each device server.
 /// Enforces INV-DEV-002: each device service receives least privilege.
-fn launch_device_server_processes(boot_step_logger: &mut BootStepLogger) {
-    launch_devd_nic_server_process();
-    launch_devd_disk_server_process();
+fn launch_device_server_processes(
+    boot_step_logger: &mut BootStepLogger,
+    process_table: &mut ProcessTable,
+) {
+    launch_devd_nic_server_process(process_table);
+    launch_devd_disk_server_process(process_table);
     boot_step_logger.ok("Device server processes created: devd-nic, devd-disk");
 }
 
@@ -219,9 +254,10 @@ fn launch_device_server_processes(boot_step_logger: &mut BootStepLogger) {
 /// Per D-01: kernel grants CapDevice directly — no spawnd involvement.
 /// Mitigates T-DEV-018: object_pointer holds the NIC DeviceCapabilityData address.
 /// Enforces INV-DEV-002: NIC server receives only NIC-scoped authority.
-fn launch_devd_nic_server_process() {
-    let _ = create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000);
-    let mut capability_space = CapabilitySpace::new();
+/// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+fn launch_devd_nic_server_process(process_table: &mut ProcessTable) {
+    let (handle, mut capability_space) =
+        create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000).unwrap();
     grant_initial_capability_to_server(
         &mut capability_space,
         0,
@@ -229,6 +265,11 @@ fn launch_devd_nic_server_process() {
         capability_rights::READ | capability_rights::WRITE,
     );
     wire_nic_device_data_into_slot(&mut capability_space);
+    insert_capability_space_into_process_table(
+        process_table,
+        handle.thread_identifier,
+        capability_space,
+    );
 }
 
 /// Sets the NIC DeviceCapabilityData address in slot 0's object_pointer.
@@ -245,9 +286,10 @@ fn wire_nic_device_data_into_slot(capability_space: &mut CapabilitySpace) {
 /// Per D-01: kernel grants CapDevice directly — no spawnd involvement.
 /// Mitigates T-DEV-018: object_pointer holds the disk DeviceCapabilityData address.
 /// Enforces INV-DEV-002: disk server receives only disk-scoped authority.
-fn launch_devd_disk_server_process() {
-    let _ = create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000);
-    let mut capability_space = CapabilitySpace::new();
+/// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+fn launch_devd_disk_server_process(process_table: &mut ProcessTable) {
+    let (handle, mut capability_space) =
+        create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000).unwrap();
     grant_initial_capability_to_server(
         &mut capability_space,
         0,
@@ -255,6 +297,11 @@ fn launch_devd_disk_server_process() {
         capability_rights::READ | capability_rights::WRITE,
     );
     wire_disk_device_data_into_slot(&mut capability_space);
+    insert_capability_space_into_process_table(
+        process_table,
+        handle.thread_identifier,
+        capability_space,
+    );
 }
 
 /// Sets the disk DeviceCapabilityData address in slot 0's object_pointer.
@@ -271,10 +318,13 @@ fn wire_disk_device_data_into_slot(capability_space: &mut CapabilitySpace) {
 /// Per D-03: kernel grants minimum capabilities directly at boot.
 /// Enforces INV-AUTH-001: each network server starts with minimum authority.
 /// Enforces INV-MEM-002: each server has a KPTI-isolated address space.
-fn launch_network_server_processes(boot_step_logger: &mut BootStepLogger) {
-    launch_linkd_server_process();
-    launch_ipd_server_process();
-    launch_transportd_server_process();
+fn launch_network_server_processes(
+    boot_step_logger: &mut BootStepLogger,
+    process_table: &mut ProcessTable,
+) {
+    launch_linkd_server_process(process_table);
+    launch_ipd_server_process(process_table);
+    launch_transportd_server_process(process_table);
     boot_step_logger.ok("Network servers created: linkd, ipd, transportd");
 }
 
@@ -285,9 +335,10 @@ fn launch_network_server_processes(boot_step_logger: &mut BootStepLogger) {
 /// Slot 2: CapFrame + READ|WRITE (shared packet buffer page).
 ///
 /// Enforces INV-DEV-002: linkd receives only its assigned authority.
-fn launch_linkd_server_process() {
-    let _ = create_server_process(ProcessType::NetworkServer, 0x0000_0000_0040_0000);
-    let mut linkd_capability_space = CapabilitySpace::new();
+/// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+fn launch_linkd_server_process(process_table: &mut ProcessTable) {
+    let (handle, mut linkd_capability_space) =
+        create_server_process(ProcessType::NetworkServer, 0x0000_0000_0040_0000).unwrap();
     grant_initial_capability_to_server(
         &mut linkd_capability_space,
         0,
@@ -295,6 +346,11 @@ fn launch_linkd_server_process() {
         capability_rights::READ,
     );
     grant_linkd_outbound_and_frame_capabilities(&mut linkd_capability_space);
+    insert_capability_space_into_process_table(
+        process_table,
+        handle.thread_identifier,
+        linkd_capability_space,
+    );
 }
 
 /// Grants linkd's slot 1 (send to ipd) and slot 2 (CapFrame) capabilities.
@@ -319,17 +375,28 @@ fn grant_linkd_outbound_and_frame_capabilities(linkd_capability_space: &mut Capa
 /// Slot 1: CapEndpoint + WRITE (send to transportd).
 ///
 /// Enforces INV-DEV-002: ipd receives only its assigned authority.
-fn launch_ipd_server_process() {
-    let _ = create_server_process(ProcessType::NetworkServer, 0x0000_0000_0040_0000);
-    let mut ipd_capability_space = CapabilitySpace::new();
+/// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+fn launch_ipd_server_process(process_table: &mut ProcessTable) {
+    let (handle, mut ipd_capability_space) =
+        create_server_process(ProcessType::NetworkServer, 0x0000_0000_0040_0000).unwrap();
     grant_initial_capability_to_server(
         &mut ipd_capability_space,
         0,
         CapabilityType::Endpoint,
         capability_rights::READ,
     );
+    grant_ipd_outbound_capability(&mut ipd_capability_space);
+    insert_capability_space_into_process_table(
+        process_table,
+        handle.thread_identifier,
+        ipd_capability_space,
+    );
+}
+
+/// Grants ipd's slot 1 (send to transportd) capability.
+fn grant_ipd_outbound_capability(ipd_capability_space: &mut CapabilitySpace) {
     grant_initial_capability_to_server(
-        &mut ipd_capability_space,
+        ipd_capability_space,
         1,
         CapabilityType::Endpoint,
         capability_rights::WRITE,
@@ -343,15 +410,38 @@ fn launch_ipd_server_process() {
 ///
 /// Enforces D-04: two-layer containment — transportd cannot reach devd-nic.
 /// Enforces INV-DEV-002: transportd receives minimum possible authority.
-fn launch_transportd_server_process() {
-    let _ = create_server_process(ProcessType::NetworkServer, 0x0000_0000_0040_0000);
-    let mut transportd_capability_space = CapabilitySpace::new();
+/// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+fn launch_transportd_server_process(process_table: &mut ProcessTable) {
+    let (handle, mut transportd_capability_space) =
+        create_server_process(ProcessType::NetworkServer, 0x0000_0000_0040_0000).unwrap();
     grant_initial_capability_to_server(
         &mut transportd_capability_space,
         0,
         CapabilityType::Endpoint,
         capability_rights::READ,
     );
+    insert_capability_space_into_process_table(
+        process_table,
+        handle.thread_identifier,
+        transportd_capability_space,
+    );
+}
+
+/// Inserts a capability space into the process table for the given thread.
+///
+/// Boot-time panics on insert failure: MAXIMUM_THREADS=32 > 8 servers ensures
+/// this cannot fail in practice. Panicking here is safer than silently dropping a CSpace.
+///
+/// Enforces T-10-02-01: every server launch ends with CSpace in the ProcessTable.
+/// Enforces INV-AUTH-001: no authority exists without explicit table registration.
+fn insert_capability_space_into_process_table(
+    process_table: &mut ProcessTable,
+    thread_identifier: ThreadIdentifier,
+    capability_space: CapabilitySpace,
+) {
+    process_table
+        .insert_entry(thread_identifier, capability_space)
+        .unwrap();
 }
 
 fn log_kernel_banner(boot_step_logger: &mut BootStepLogger) {
