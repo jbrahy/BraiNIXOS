@@ -45,6 +45,13 @@ fn encode_ipc_result_send(result: Result<(), IpcError>) -> i64 {
 }
 
 /// Encodes a receive Result as a syscall return code.
+///
+/// The IpcMessage payload is intentionally discarded here. In Phase 11,
+/// message data is conveyed to userspace through the receiver Thread's
+/// register_save_area (written by ipc_receive before returning Ok), not
+/// through this return code. The return code signals success (0) or
+/// an IpcError discriminant only. Phase 12 will wire register_save_area
+/// back into the SYSRET path so the values reach userspace registers.
 fn encode_ipc_result_receive(result: Result<IpcMessage, IpcError>) -> i64 {
     match result {
         Ok(_) => 0,
