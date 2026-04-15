@@ -221,12 +221,57 @@ mod tests {
         );
     }
 
-    /// Verifies that runtime capability enforcement is active for all live processes.
+    /// Verifies that runtime capability enforcement is active: CSpace accessible while
+    /// live, then None after process exit (remove_entry).
     ///
-    /// Integration test stub — to be implemented in Plan 03.
+    /// Enforces INV-AUTH-001: authority cannot survive process exit (D-04).
+    /// Enforces T-10-04-01: no stale CSpace entries after exit.
     #[test]
     fn integration_runtime_capability_enforcement_is_active() {
-        todo!()
+        use crate::capability::capability_rights;
+        use crate::capability::capability_type::CapabilityType;
+        use crate::process::server_launch::{
+            create_server_process, grant_initial_capability_to_server,
+        };
+        use crate::process::ProcessType;
+        let mut process_table = allocate_process_table_on_heap();
+        let (handle, mut capability_space) =
+            create_server_process(ProcessType::Spawnd, 0x0000_0000_0040_0000).unwrap();
+        grant_initial_capability_to_server(
+            &mut capability_space,
+            0,
+            CapabilityType::Spawn,
+            capability_rights::GRANT,
+        );
+        process_table
+            .insert_entry(handle.thread_identifier, capability_space)
+            .unwrap();
+        verify_live_cspace_is_accessible(&process_table, handle.thread_identifier);
+        process_table
+            .remove_entry(handle.thread_identifier)
+            .unwrap();
+        let lookup_after_exit = process_table.lookup_entry(handle.thread_identifier);
+        assert!(
+            lookup_after_exit.is_none(),
+            "authority must be revoked after process exit: lookup must return None"
+        );
+    }
+
+    /// Asserts that the ProcessTable entry for `thread_identifier` is Some with a valid slot 0.
+    fn verify_live_cspace_is_accessible(
+        process_table: &ProcessTable,
+        thread_identifier: ThreadIdentifier,
+    ) {
+        let live_cspace = process_table.lookup_entry(thread_identifier);
+        assert!(
+            live_cspace.is_some(),
+            "runtime enforcement requires live CSpace to be accessible"
+        );
+        let slot_result = live_cspace.unwrap().lookup_slot(0);
+        assert!(
+            slot_result.is_ok(),
+            "slot 0 must hold the granted capability"
+        );
     }
 
     /// Verifies that a newly constructed ProcessTable has all entries set to None.
