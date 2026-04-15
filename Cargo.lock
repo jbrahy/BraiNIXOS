@@ -73,6 +73,9 @@ version = "0.1.0"
 [[package]]
 name = "brainix-ipd"
 version = "0.1.0"
+dependencies = [
+ "brainix-libsyscall",
+]
 
 [[package]]
 name = "brainix-kernel"
@@ -93,6 +96,9 @@ version = "0.1.0"
 [[package]]
 name = "brainix-linkd"
 version = "0.1.0"
+dependencies = [
+ "brainix-libsyscall",
+]
 
 [[package]]
 name = "brainix-spawnd"
@@ -104,6 +110,9 @@ dependencies = [
 [[package]]
 name = "brainix-transportd"
 version = "0.1.0"
+dependencies = [
+ "brainix-libsyscall",
+]
 
 [[package]]
 name = "cfg-if"

@@ -9,6 +9,8 @@ cargo-fuzz = true
 
 # The fuzz/ directory is NOT a workspace member. cargo-fuzz manages it
 # as a separate crate. Do not add fuzz/ to the workspace Cargo.toml members.
+# The empty [workspace] table below declares this as a standalone package.
+[workspace]
 
 [dependencies]
 libfuzzer-sys = "0.4"
