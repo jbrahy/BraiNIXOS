@@ -1,0 +1,73 @@
+# bin/dependencies/activate/000-base
+#
+# Always-required toolchain setup for BraiNIX builds.
+# Loaded first (000- prefix forces lexical sort order).
+#
+# Purpose: resolve the rust toolchain pinned by rust-toolchain.toml via rustup,
+# and prepend its bin directory to PATH so that `cargo`, `rustc`, `rustfmt`,
+# `clippy`, etc. come from that exact toolchain and not from any
+# system-wide Homebrew install or stray installation on PATH.
+#
+# Environment expected on entry:
+#   - PATH has been reset to /usr/bin:/bin:/usr/sbin:/sbin by bin/activate.
+#   - BRAINIX_REPO_ROOT is set.
+#
+# This file is sourced inside the hermetic shell. It may `return` on error
+# (never `exit`, which would kill the subshell before the user sees the
+# problem).
+
+set +e
+
+if [[ -z "${BRAINIX_REPO_ROOT:-}" ]]; then
+    echo "fatal: BRAINIX_REPO_ROOT not set; bin/dependencies/activate/000-base must be sourced by bin/activate" >&2
+    return 1 2>/dev/null || true
+fi
+
+RUST_TOOLCHAIN_FILE="${BRAINIX_REPO_ROOT}/rust-toolchain.toml"
+if [[ ! -f "$RUST_TOOLCHAIN_FILE" ]]; then
+    echo "fatal: rust-toolchain.toml not found at $RUST_TOOLCHAIN_FILE" >&2
+    return 1 2>/dev/null || true
+fi
+
+# Parse the pinned channel from rust-toolchain.toml (first `channel = "..."` line).
+PINNED_TOOLCHAIN_CHANNEL="$(awk -F'"' '/^[[:space:]]*channel[[:space:]]*=/ {print $2; exit}' "$RUST_TOOLCHAIN_FILE")"
+if [[ -z "$PINNED_TOOLCHAIN_CHANNEL" ]]; then
+    echo "fatal: could not parse channel from $RUST_TOOLCHAIN_FILE" >&2
+    return 1 2>/dev/null || true
+fi
+
+# Locate rustup. On this machine it is installed via Homebrew, but we probe
+# several common locations rather than hardcoding so this works across
+# developer setups.
+RUSTUP_BINARY=""
+for candidate_path in \
+    "/opt/homebrew/bin/rustup" \
+    "/usr/local/bin/rustup" \
+    "${HOME}/.cargo/bin/rustup" \
+    "/usr/bin/rustup"; do
+    if [[ -x "$candidate_path" ]]; then
+        RUSTUP_BINARY="$candidate_path"
+        break
+    fi
+done
+
+if [[ -z "$RUSTUP_BINARY" ]]; then
+    echo "fatal: rustup not found in any known location" >&2
+    return 1 2>/dev/null || true
+fi
+
+# Ask rustup where the pinned toolchain's cargo lives, then prepend that dir.
+TOOLCHAIN_CARGO_PATH="$("$RUSTUP_BINARY" which --toolchain "$PINNED_TOOLCHAIN_CHANNEL" cargo 2>/dev/null || true)"
+if [[ -z "$TOOLCHAIN_CARGO_PATH" ]] || [[ ! -x "$TOOLCHAIN_CARGO_PATH" ]]; then
+    echo "fatal: rustup could not resolve cargo for toolchain '$PINNED_TOOLCHAIN_CHANNEL'" >&2
+    echo "       try: $RUSTUP_BINARY toolchain install $PINNED_TOOLCHAIN_CHANNEL" >&2
+    return 1 2>/dev/null || true
+fi
+
+TOOLCHAIN_BIN_DIRECTORY="$(dirname "$TOOLCHAIN_CARGO_PATH")"
+
+export PATH="${TOOLCHAIN_BIN_DIRECTORY}:${PATH}"
+export CARGO_HOME="${HOME}/.cargo"
+export RUSTUP_HOME="${HOME}/.rustup"
+export BRAINIX_TOOLCHAIN_CHANNEL="$PINNED_TOOLCHAIN_CHANNEL"
+export BRAINIX_TOOLCHAIN_BIN_DIRECTORY="$TOOLCHAIN_BIN_DIRECTORY"
