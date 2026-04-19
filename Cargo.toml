@@ -6,6 +6,7 @@ members = [
     "src/servers/*",
     "src/capability-verify",
     "src/brainix-ipc-core",
+    "userland/shell/0.01",
 ]
 resolver = "2"
 
