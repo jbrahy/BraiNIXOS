@@ -103,10 +103,12 @@ fn handle_device_range_syscall(syscall_number: u64, thread_identifier: u32) -> O
 /// attacker-controlled syscall number. Follows the D-02 pattern.
 ///
 /// Returns `Some(result)` for a recognized network server number, `None` otherwise.
-fn handle_server_range_syscall(syscall_number: u64) -> Option<i64> {
+fn handle_server_range_syscall(syscall_number: u64, thread_identifier: u32) -> Option<i64> {
     issue_speculative_load_barrier();
     match syscall_number {
-        SYSCALL_NUMBER_FRAME_MAP => Some(super::frame_map::handle_frame_map_syscall()),
+        SYSCALL_NUMBER_FRAME_MAP => {
+            Some(super::frame_map::handle_frame_map_syscall(thread_identifier))
+        }
         _ => None,
     }
 }
@@ -139,7 +141,7 @@ pub unsafe extern "C" fn dispatch_syscall(syscall_number: u64, thread_identifier
         .or_else(|| handle_notify_range_syscall(syscall_number))
         .or_else(|| handle_process_lifecycle_syscall(syscall_number, thread_identifier))
         .or_else(|| handle_device_range_syscall(syscall_number, thread_identifier))
-        .or_else(|| handle_server_range_syscall(syscall_number))
+        .or_else(|| handle_server_range_syscall(syscall_number, thread_identifier))
         .unwrap_or(-1)
 }
 
