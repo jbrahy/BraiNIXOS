@@ -20,6 +20,7 @@ const SERIAL_MODEM_CONTROL_READY: u8 = 0x0B;
 const SERIAL_BAUD_115200_DIVISOR_LOW_BYTE: u8 = 0x01;
 const SERIAL_BAUD_115200_DIVISOR_HIGH_BYTE: u8 = 0x00;
 const SERIAL_LINE_STATUS_TRANSMIT_EMPTY_BIT: u8 = 0x20;
+const SERIAL_LINE_STATUS_DATA_READY_BIT: u8 = 0x01;
 const SERIAL_INTERRUPT_NONE: u8 = 0x00;
 
 /// COM1 serial output port. Initialize with [`SerialOutputPort::initialize`].
@@ -122,4 +123,26 @@ impl core::fmt::Write for SerialOutputPort {
         }
         Ok(())
     }
+}
+
+/// Non-blocking read of one byte from the COM1 UART receive buffer.
+///
+/// Returns `Some(byte)` if a byte is available (line-status data-ready bit set),
+/// `None` otherwise. Callers poll in a loop; future work is to replace polling
+/// with an IRQ 4 handler that pushes keystrokes into a bounded ring buffer.
+///
+/// Enforces INV-BOOT-001: serial access is confined to kernel-mode ring 0.
+pub fn read_serial_byte_non_blocking() -> Option<u8> {
+    if !serial_input_has_data_ready() {
+        return None;
+    }
+    let byte_value = read_port_byte(SERIAL_PORT_COM1_BASE_ADDRESS);
+    Some(byte_value)
+}
+
+/// Returns true if the COM1 line-status data-ready bit is set.
+fn serial_input_has_data_ready() -> bool {
+    let line_status = read_port_byte(SERIAL_LINE_STATUS_REGISTER);
+    let data_ready_bit_is_set = (line_status & SERIAL_LINE_STATUS_DATA_READY_BIT) != 0;
+    data_ready_bit_is_set
 }

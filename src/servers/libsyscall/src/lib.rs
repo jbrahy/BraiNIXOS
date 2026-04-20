@@ -353,3 +353,61 @@ pub fn syscall_irq_bind(irq_capability_slot: u8, endpoint_capability_slot: u8) -
 pub fn syscall_irq_bind(_irq_capability_slot: u8, _endpoint_capability_slot: u8) -> i64 {
     0
 }
+
+/// Syscall number for sys_serial_read_byte.
+///
+/// Reads one byte from the COM1 UART receive buffer (non-blocking).
+/// Returns 0..=255 if a byte is available, -1 if no byte is ready.
+/// Not capability-gated today (console-server is the only legitimate
+/// caller; real capability gating via CapSerial is future work).
+pub const SYSCALL_NUMBER_SERIAL_READ_BYTE: u64 = 12;
+
+/// Reads one byte from the COM1 UART receive buffer (non-blocking).
+///
+/// Returns `Some(byte)` if a byte was available, `None` otherwise.
+/// Callers (console-server) poll; an IRQ-driven ring buffer is future work.
+#[cfg(target_arch = "x86_64")]
+pub fn syscall_serial_read_byte() -> Option<u8> {
+    // SAFETY: SYSCALL transfers control to kernel. Kernel reads the COM1
+    // data-ready line-status bit; if set, returns the received byte as
+    // 0..=255; otherwise returns -1.
+    // - Precondition: COM1 serial was initialized at boot.
+    // - Invariant: INV-BOOT-001.
+    // - Evidence: polling console loop in console-server integration test.
+    let return_value: i64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") SYSCALL_NUMBER_SERIAL_READ_BYTE,
+            lateout("rax") return_value,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack)
+        );
+    }
+    translate_serial_read_return(return_value)
+}
+
+/// Translates the sys_serial_read_byte return into an Option<u8>.
+///
+/// The kernel returns a byte value 0..=255 when data is ready, and -1
+/// when no data is currently available. This helper is called on both
+/// host and bare-metal targets so behavior is identical in tests.
+fn translate_serial_read_return(return_value: i64) -> Option<u8> {
+    if return_value < 0 {
+        return None;
+    }
+    if return_value > 255 {
+        return None;
+    }
+    Some(return_value as u8)
+}
+
+/// Host-target stub for syscall_serial_read_byte.
+///
+/// Returns None when invoked outside x86_64 (no serial port on host).
+/// Used for host-side unit test compilation only.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn syscall_serial_read_byte() -> Option<u8> {
+    None
+}

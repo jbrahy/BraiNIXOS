@@ -21,7 +21,7 @@ use crate::ipc::{
 };
 use brainix_libsyscall::{
     SYSCALL_NUMBER_AUDIT_READ, SYSCALL_NUMBER_DEVICE_MAP_MMIO, SYSCALL_NUMBER_FRAME_MAP,
-    SYSCALL_NUMBER_IRQ_BIND, SYSCALL_NUMBER_PROCESS_EXIT,
+    SYSCALL_NUMBER_IRQ_BIND, SYSCALL_NUMBER_PROCESS_EXIT, SYSCALL_NUMBER_SERIAL_READ_BYTE,
 };
 
 /// Issues LFENCE then routes IPC syscall numbers (1-3) to their handlers.
@@ -108,6 +108,9 @@ fn handle_server_range_syscall(syscall_number: u64, thread_identifier: u32) -> O
     match syscall_number {
         SYSCALL_NUMBER_FRAME_MAP => {
             Some(super::frame_map::handle_frame_map_syscall(thread_identifier))
+        }
+        SYSCALL_NUMBER_SERIAL_READ_BYTE => {
+            Some(super::serial_read::handle_serial_read_byte_syscall())
         }
         _ => None,
     }
