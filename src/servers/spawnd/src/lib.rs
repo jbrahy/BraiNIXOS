@@ -23,8 +23,12 @@ use brainix_libsyscall::{ProcessType, SpawnError};
 ///
 /// Adding a new ProcessType variant to libsyscall forces a compile
 /// error here until the whitelist is explicitly updated. Per D-08.
-const PERMITTED_PROCESS_TYPES: [ProcessType; 3] =
-    [ProcessType::Init, ProcessType::Spawnd, ProcessType::Auditd];
+const PERMITTED_PROCESS_TYPES: [ProcessType; 4] = [
+    ProcessType::Init,
+    ProcessType::Spawnd,
+    ProcessType::Auditd,
+    ProcessType::Shell,
+];
 
 /// Maximum number of automatic restarts per server crash event.
 ///

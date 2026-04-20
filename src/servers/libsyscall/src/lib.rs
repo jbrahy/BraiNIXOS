@@ -35,6 +35,10 @@ pub enum ProcessType {
     DeviceServer = 3,
     /// A network stack server. Isolated userspace network process (reserved for Phase 9).
     NetworkServer = 4,
+    /// The interactive shell process (v1.1 milestone). Reads/writes COM1 via
+    /// direct serial syscalls today; future versions will route through a
+    /// console-server via capability-gated IPC.
+    Shell = 5,
 }
 
 /// Error returned when spawnd refuses to spawn a process.
