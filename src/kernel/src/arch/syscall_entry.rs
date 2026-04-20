@@ -241,6 +241,7 @@ global_asm!(
     // frame construction without a saved user RSP (Phase 5 adds GS-based stack
     // switching and will implement this path correctly).
     "hlt",
+    options(att_syntax),
 );
 
 extern "C" {
