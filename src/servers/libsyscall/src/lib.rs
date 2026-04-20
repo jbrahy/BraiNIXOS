@@ -411,3 +411,41 @@ fn translate_serial_read_return(return_value: i64) -> Option<u8> {
 pub fn syscall_serial_read_byte() -> Option<u8> {
     None
 }
+
+/// Syscall number for sys_serial_write_byte.
+///
+/// Writes one byte to the COM1 UART transmit buffer (blocking until the
+/// transmit buffer is empty). Returns 0 on success. Not capability-gated
+/// today; the shell process is the only legitimate writer.
+pub const SYSCALL_NUMBER_SERIAL_WRITE_BYTE: u64 = 13;
+
+/// Writes one byte to the COM1 UART transmit buffer.
+///
+/// Returns 0 on success. The underlying kernel path busy-waits for the
+/// transmit buffer to drain — safe on single-core but not high-throughput.
+#[cfg(target_arch = "x86_64")]
+pub fn syscall_serial_write_byte(byte_value: u8) -> i64 {
+    // SAFETY: SYSCALL transfers control to kernel.
+    // - Precondition: COM1 serial was initialized at boot.
+    // - Invariant: INV-BOOT-001.
+    // - Evidence: interactive shell loop writes a greeting banner via this wrapper.
+    let return_value: i64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") SYSCALL_NUMBER_SERIAL_WRITE_BYTE,
+            in("rdi") byte_value as u64,
+            lateout("rax") return_value,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack)
+        );
+    }
+    return_value
+}
+
+/// Host-target stub for syscall_serial_write_byte.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn syscall_serial_write_byte(_byte_value: u8) -> i64 {
+    0
+}

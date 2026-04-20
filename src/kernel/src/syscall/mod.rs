@@ -12,3 +12,4 @@ pub mod kernel_ipc_state;
 pub mod kernel_syscall_registers;
 pub mod process_exit;
 pub mod serial_read;
+pub mod serial_write;
