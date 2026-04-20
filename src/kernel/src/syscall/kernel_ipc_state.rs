@@ -8,6 +8,7 @@
 
 use core::mem::MaybeUninit;
 
+use crate::capability::irq_capability::IrqBindingTable;
 use crate::ipc::endpoint::EndpointPool;
 use crate::ipc::wait_for_graph::WaitForGraph;
 use crate::ipc::MAXIMUM_THREADS;
@@ -25,6 +26,12 @@ static mut KERNEL_THREAD_POOL: [Thread; MAXIMUM_THREADS] = [Thread::new(); MAXIM
 
 /// Kernel-owned process table mapping ThreadIdentifier to CapabilitySpace.
 static mut KERNEL_PROCESS_TABLE: MaybeUninit<ProcessTable> = MaybeUninit::uninit();
+
+/// Kernel-owned IRQ binding table. 16 slots, each recording irq_number ->
+/// (owning_process_index, endpoint_slot_index). Populated by sys_irq_bind.
+/// The default state (all slots inactive) is correct at boot; no runtime
+/// initializer is required because `IrqBindingTable::new()` is a const fn.
+static mut KERNEL_IRQ_BINDING_TABLE: IrqBindingTable = IrqBindingTable::new();
 
 /// Initializes the kernel endpoint pool. Must be called once at boot.
 ///
@@ -100,4 +107,14 @@ pub unsafe fn kernel_thread_at_mut(thread_index: usize) -> Option<&'static mut T
 pub unsafe fn kernel_process_table_mut() -> &'static mut ProcessTable {
     let table_pointer = core::ptr::addr_of_mut!(KERNEL_PROCESS_TABLE);
     (*table_pointer).assume_init_mut()
+}
+
+/// Returns a mutable reference to the kernel IRQ binding table.
+///
+/// # Safety
+///
+/// Called only from single-core SYSCALL dispatch path. No concurrent access.
+/// Invariant: INV-DEV-003 (interrupt authority is explicit and typed).
+pub unsafe fn kernel_irq_binding_table_mut() -> &'static mut IrqBindingTable {
+    &mut *core::ptr::addr_of_mut!(KERNEL_IRQ_BINDING_TABLE)
 }

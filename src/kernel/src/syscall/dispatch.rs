@@ -84,13 +84,15 @@ fn handle_process_exit_dispatch(thread_identifier: u32) -> Option<i64> {
 /// of device syscall). Follows the D-02 pattern established in handle_ipc_range_syscall.
 ///
 /// Returns `Some(result)` for a recognized device number, `None` otherwise.
-fn handle_device_range_syscall(syscall_number: u64) -> Option<i64> {
+fn handle_device_range_syscall(syscall_number: u64, thread_identifier: u32) -> Option<i64> {
     issue_speculative_load_barrier();
     match syscall_number {
         SYSCALL_NUMBER_DEVICE_MAP_MMIO => {
             Some(super::device_map_mmio::handle_device_map_mmio_syscall())
         }
-        SYSCALL_NUMBER_IRQ_BIND => Some(super::irq_bind::handle_irq_bind_syscall()),
+        SYSCALL_NUMBER_IRQ_BIND => {
+            Some(super::irq_bind::handle_irq_bind_syscall(thread_identifier))
+        }
         _ => None,
     }
 }
@@ -136,7 +138,7 @@ pub unsafe extern "C" fn dispatch_syscall(syscall_number: u64, thread_identifier
     handle_ipc_range_syscall(syscall_number, thread_identifier)
         .or_else(|| handle_notify_range_syscall(syscall_number))
         .or_else(|| handle_process_lifecycle_syscall(syscall_number, thread_identifier))
-        .or_else(|| handle_device_range_syscall(syscall_number))
+        .or_else(|| handle_device_range_syscall(syscall_number, thread_identifier))
         .or_else(|| handle_server_range_syscall(syscall_number))
         .unwrap_or(-1)
 }
