@@ -1,17 +1,20 @@
-//! BraiNIX userspace shell (v0.01 skeleton).
+//! BraiNIX userspace shell (v0.01 — interactive REPL over COM1).
 //!
-//! This crate is the capability-native shell for BraiNIX. It is written from
-//! scratch in Rust no_std and must not depend on any POSIX-style surface:
-//! no fork, exec, pipes, file descriptors, signals, or tty ioctls. All
-//! interaction with the outside world flows through explicit IPC endpoint
-//! capabilities held in the shell process's CSpace.
+//! The shell is a capability-native Rust no_std program. v0.01 runs a
+//! tight read-echo loop directly against the serial read/write syscalls
+//! (`syscall_serial_read_byte`, `syscall_serial_write_byte`). The process
+//! holds only the capabilities spawnd grants it at creation time — no
+//! ambient authority. Exits cleanly via `syscall_process_exit` when the
+//! user sends Ctrl-D (0x04) or Ctrl-C (0x03).
 //!
-//! Status at v0.01: skeleton only. The console IPC contract, capability
-//! slot indices, and entry point shape are declared, but no parser, no
-//! builtins, no line editing, and no console server wiring exist yet.
+//! Written from scratch — bash-5.3 at ~/OpenSource/bash-5.3/ is a
+//! read-only design reference only. Every identifier is a full English
+//! word; every function body is <= 6 executable lines; no unsafe.
 //!
-//! Enforces invariant INV-AUTH-001: the shell holds no ambient authority.
-//! Every effect the shell performs is reached through an explicit capability
-//! granted by the spawner at process creation time.
+//! Enforces INV-AUTH-001: the shell holds no ambient authority.
 #![no_std]
 #![deny(unsafe_code)]
+
+pub mod entry;
+
+pub use entry::shell_main;
