@@ -41,10 +41,14 @@ cargo build -p brainix-bootloader --target x86_64-unknown-none --release
 echo "[test.sh] Building shell binary..."
 cargo build -p brainix-shell --target x86_64-unknown-none --release
 
+echo "[test.sh] Building kernel binary (requires --features kernel-binary)..."
+cargo build --features kernel-binary -p brainix-kernel --target x86_64-unknown-none --release
+
 echo "[test.sh] Creating GRUB2 ISO directory structure..."
 rm -rf iso
 mkdir -p iso/boot/grub
 cp target/x86_64-unknown-none/release/brainix-bootloader iso/boot/
+cp target/x86_64-unknown-none/release/brainix iso/boot/kernel.elf
 cp target/x86_64-unknown-none/release/brainix-shell iso/boot/shell.elf
 
 echo "[test.sh] Writing grub.cfg..."
@@ -52,6 +56,7 @@ cat > iso/boot/grub/grub.cfg << 'GRUBEOF'
 set timeout=0
 menuentry "BraiNIX" {
     multiboot2 /boot/brainix-bootloader
+    module  /boot/kernel.elf
     module  /boot/shell.elf
     boot
 }
