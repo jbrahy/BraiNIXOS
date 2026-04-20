@@ -18,6 +18,7 @@ use crate::boot::ipc_init::initialize_ipc_subsystem;
 use crate::boot::logger::BootStepLogger;
 use crate::boot::multiboot2_info::initialize_memory_subsystem;
 use crate::boot::scheduler_init::initialize_scheduler_subsystem;
+use crate::boot::server_measurement::extract_module_byte_slices_from_boot_information;
 use crate::capability::audit_log::AuditRingBuffer;
 use crate::capability::audit_log_protection::protect_audit_log_pages;
 use crate::capability::capability_rights;
@@ -53,7 +54,7 @@ pub fn execute_boot_sequence(
     finalize_hardware_security(boot_step_logger);
     protect_audit_log_after_boot_entries(boot_step_logger);
     detect_and_enforce_iommu_policy(boot_step_logger);
-    measure_server_binaries_into_pcr3(boot_step_logger);
+    measure_server_binaries_into_pcr3(multiboot2_info_address, boot_step_logger);
     initialize_kernel_ipc_globals(boot_step_logger);
     allocate_network_stack_endpoints(boot_step_logger);
     load_and_launch_server_processes(boot_step_logger);
@@ -101,9 +102,27 @@ fn protect_audit_log_after_boot_entries(boot_step_logger: &mut BootStepLogger) {
 /// init, spawnd, auditd, devd-nic, devd-disk, linkd, ipd, transportd.
 ///
 /// Enforces INV-BOOT-001: measured boot path integrity.
-fn measure_server_binaries_into_pcr3(boot_step_logger: &mut BootStepLogger) {
-    measure_all_server_binaries(&[], &[], &[], &[], &[], &[], &[], &[]);
-    boot_step_logger.ok("PCR[3] extended with 8 server binary hashes (D-02)");
+fn measure_server_binaries_into_pcr3(
+    multiboot2_info_address: u64,
+    boot_step_logger: &mut BootStepLogger,
+) {
+    let module_slices = extract_module_byte_slices_from_boot_information(multiboot2_info_address);
+    pass_module_slices_to_pcr3_measurement(&module_slices);
+    boot_step_logger.ok("PCR[3] extended with 8 server binary hashes (real module bytes)");
+}
+
+/// Passes the 8 module byte slices to measure_all_server_binaries.
+fn pass_module_slices_to_pcr3_measurement(module_slices: &[&[u8]; 8]) {
+    measure_all_server_binaries(
+        module_slices[0],
+        module_slices[1],
+        module_slices[2],
+        module_slices[3],
+        module_slices[4],
+        module_slices[5],
+        module_slices[6],
+        module_slices[7],
+    );
 }
 
 /// Initializes kernel IPC state globals: EndpointPool and ProcessTable.
@@ -492,14 +511,14 @@ fn insert_capability_space_into_global_process_table(
 fn log_kernel_banner(boot_step_logger: &mut BootStepLogger) {
     boot_step_logger.separator();
     boot_step_logger.line(" BraiNIX MICROKERNEL  v0.1.0");
-    boot_step_logger.line(" x86_64-unknown-none | Rust nightly-2025-12-01 | Phase 11");
+    boot_step_logger.line(" x86_64-unknown-none | Rust nightly-2025-12-01 | Phase 12");
     boot_step_logger.separator();
 }
 
 fn log_boot_infrastructure_status(boot_step_logger: &mut BootStepLogger) {
     boot_step_logger.ok("Serial console initialized (COM1 | 115200 8N1)");
     boot_step_logger.ok("Kernel entry point reached");
-    boot_step_logger.info("Build: Phase 11 -- IPC syscall dispatch wiring");
+    boot_step_logger.info("Build: Phase 12 -- Attestation chain measurement wiring");
 }
 
 fn log_boot_complete(boot_step_logger: &mut BootStepLogger) {

@@ -7,3 +7,4 @@ pub mod phases;
 pub mod scheduler_init;
 pub mod serial;
 pub mod server_launch;
+pub mod server_measurement;
