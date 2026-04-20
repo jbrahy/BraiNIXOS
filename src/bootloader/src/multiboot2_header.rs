@@ -10,7 +10,9 @@
 
 const MULTIBOOT2_MAGIC: u32 = 0xE85250D6;
 const MULTIBOOT2_ARCHITECTURE_I386: u32 = 0;
-const MULTIBOOT2_HEADER_LENGTH: u32 = 24;
+// Header layout: fixed 16-byte prologue + 8-byte info-request tag (type=1, flags=1, size=8)
+// + 8-byte end tag = 32 bytes total.
+const MULTIBOOT2_HEADER_LENGTH: u32 = 32;
 
 // Checksum: the four header fields must sum to zero (mod 2^32).
 // checksum = -(magic + architecture + length)
@@ -19,15 +21,21 @@ const MULTIBOOT2_CHECKSUM: u32 = (0u32)
     .wrapping_sub(MULTIBOOT2_ARCHITECTURE_I386)
     .wrapping_sub(MULTIBOOT2_HEADER_LENGTH);
 
-/// Constructs the 24-byte multiboot2 header as a byte array.
+/// Constructs the 32-byte multiboot2 header as a byte array.
 ///
-/// Layout (little-endian, per Multiboot2 Specification 2.0 §3.1.1):
+/// Layout (little-endian, per Multiboot2 Specification 2.0 §3.1):
 ///   bytes  0- 3: magic (0xE85250D6)
 ///   bytes  4- 7: architecture (0 = i386 protected mode)
-///   bytes  8-11: header_length (24)
+///   bytes  8-11: header_length (32)
 ///   bytes 12-15: checksum
-///   bytes 16-23: end tag (type=0, flags=0, size=8)
-const fn build_multiboot2_header() -> [u8; 24] {
+///   bytes 16-23: information-request tag (type=1, flags=0, size=8) — tells
+///                GRUB the kernel wants module list and memory map information.
+///                Tag has no `mbi_tag_types` entries because size is exactly 8;
+///                this registers a kernel-loader-expects-info state in GRUB's
+///                multiboot2 command (required in GRUB 2.06 to properly flag
+///                the file as a loaded kernel).
+///   bytes 24-31: end tag (type=0, flags=0, size=8)
+const fn build_multiboot2_header() -> [u8; 32] {
     let magic_bytes = MULTIBOOT2_MAGIC.to_le_bytes();
     let architecture_bytes = MULTIBOOT2_ARCHITECTURE_I386.to_le_bytes();
     let length_bytes = MULTIBOOT2_HEADER_LENGTH.to_le_bytes();
@@ -49,6 +57,16 @@ const fn build_multiboot2_header() -> [u8; 24] {
         checksum_bytes[1],
         checksum_bytes[2],
         checksum_bytes[3],
+        // information-request tag: type=1, flags=0, size=8
+        1, // tag type low byte (1 = information request)
+        0, // tag type high byte
+        0, // tag flags low byte
+        0, // tag flags high byte
+        8, // tag size byte 0 (size = 8, no request entries)
+        0, // tag size byte 1
+        0, // tag size byte 2
+        0, // tag size byte 3
+        // end tag: type=0, flags=0, size=8
         0, // end tag type low byte
         0, // end tag type high byte
         0, // end tag flags low byte
@@ -70,7 +88,7 @@ const fn build_multiboot2_header() -> [u8; 24] {
 // - Evidence: test_multiboot2_header_magic_is_correct in this module.
 #[used]
 #[link_section = ".multiboot2_header"]
-static MULTIBOOT2_HEADER: [u8; 24] = build_multiboot2_header();
+static MULTIBOOT2_HEADER: [u8; 32] = build_multiboot2_header();
 
 #[cfg(test)]
 mod tests {

@@ -52,12 +52,19 @@ cp target/x86_64-unknown-none/release/brainix iso/boot/kernel.elf
 cp target/x86_64-unknown-none/release/brainix-shell iso/boot/shell.elf
 
 echo "[test.sh] Writing grub.cfg..."
+# Note: as of 2026-04-20, GRUB 2.06's multiboot2 command validates the
+# brainix-bootloader header successfully via `grub-file --is-x86-multiboot2`
+# but at boot time fails silently — subsequent `module` and `boot` commands
+# report "you need to load the kernel first". Root cause not yet identified;
+# suspects are (1) segment load address conflicting with GRUB's working RAM,
+# (2) an address-tag expectation specific to GRUB 2.06 that the minimal
+# multiboot2 header does not satisfy. Tracked as follow-up.
 cat > iso/boot/grub/grub.cfg << 'GRUBEOF'
 set timeout=0
 menuentry "BraiNIX" {
     multiboot2 /boot/brainix-bootloader
-    module  /boot/kernel.elf
-    module  /boot/shell.elf
+    module /boot/kernel.elf
+    module /boot/shell.elf
     boot
 }
 GRUBEOF
