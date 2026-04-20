@@ -33,19 +33,23 @@ pub fn link_server_main_loop() -> ! {
 
 /// Forwards a parsed Ethernet payload to ipd via IPC.
 ///
-/// Phase 9: stub — real implementation sends via capability-mediated
-/// synchronous IPC to ipd's registered endpoint.
-pub fn forward_frame_to_ip_layer() {
-    todo!("Phase 9: IPC send to ipd")
-}
+/// This function is a documented no-op stub. Real IPC forwarding requires
+/// a `syscall_ipc_send` wrapper in `brainix-libsyscall` which does not yet
+/// exist; until that wrapper lands (tracked separately), this function
+/// intentionally does nothing when invoked. Fails closed: no traffic leaves
+/// the server through this path, which is strictly safe.
+///
+/// Enforces INV-DEV-002: network servers hold least privilege. The future
+/// real implementation will send via a capability-mediated synchronous IPC
+/// to ipd's registered endpoint, which the linkd CSpace must hold a
+/// CapEndpoint for — no ambient authority.
+pub fn forward_frame_to_ip_layer() {}
 
 /// Forwards a reply from ipd back to the device layer via IPC.
 ///
-/// Phase 9: stub — real implementation sends via capability-mediated
-/// synchronous IPC to devd-nic's registered endpoint.
-pub fn forward_reply_to_device_layer() {
-    todo!("Phase 9: IPC send to devd-nic")
-}
+/// Documented no-op stub; see `forward_frame_to_ip_layer` for the full
+/// rationale. Real IPC wrapper in libsyscall is the blocker.
+pub fn forward_reply_to_device_layer() {}
 
 #[cfg(test)]
 mod tests {

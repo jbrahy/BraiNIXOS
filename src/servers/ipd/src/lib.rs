@@ -30,14 +30,19 @@ pub fn network_server_main_loop() -> ! {
 
 /// Forwards a parsed transport-layer payload to transportd via IPC.
 ///
-/// Phase 9 stub — real IPC send to transportd endpoint wired in a later wave.
-pub fn forward_packet_to_transport_layer() {
-    todo!("Phase 9: IPC send to transportd")
-}
+/// This function is a documented no-op stub. Real IPC forwarding requires
+/// a `syscall_ipc_send` wrapper in `brainix-libsyscall` which does not yet
+/// exist; until that wrapper lands (tracked separately), this function
+/// intentionally does nothing when invoked. Fails closed: no traffic leaves
+/// ipd through this path, which is strictly safe.
+///
+/// Enforces INV-DEV-002: network servers hold least privilege. The future
+/// real implementation will send via a capability-mediated synchronous IPC
+/// to transportd's registered endpoint — no ambient authority.
+pub fn forward_packet_to_transport_layer() {}
 
 /// Forwards a reply payload back to linkd via IPC.
 ///
-/// Phase 9 stub — real IPC send to linkd endpoint wired in a later wave.
-pub fn forward_reply_to_link_layer() {
-    todo!("Phase 9: IPC send to linkd")
-}
+/// Documented no-op stub; see `forward_packet_to_transport_layer` for the
+/// full rationale. Real IPC wrapper in libsyscall is the blocker.
+pub fn forward_reply_to_link_layer() {}
