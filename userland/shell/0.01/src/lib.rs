@@ -16,6 +16,7 @@
 #![deny(unsafe_code)]
 
 pub mod entry;
+pub mod history;
 pub mod input_decoder;
 pub mod line_buffer;
 
