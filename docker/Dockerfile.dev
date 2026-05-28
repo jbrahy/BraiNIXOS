@@ -77,6 +77,26 @@ RUN useradd -m -u ${UID} -s /bin/bash ${USERNAME} \
     && chmod 700 /home/${USERNAME}/.ssh \
     && chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.ssh
 
+# Root elevation: set a known root password so `su -` works for promotion
+# from the dev user. Password: "brainix". This is a dev-only container that
+# (a) lives only on the developer's local Docker daemon, (b) has SSH gated by
+# the dev user's public key, and (c) has no other externally reachable
+# surfaces. Treat the password as a convenience, not a secret.
+RUN echo 'root:brainix' | chpasswd
+
+# MOTD shown on every interactive shell so the root password is discoverable
+# without grepping the Dockerfile.
+RUN printf '%s\n' \
+    '================================================================' \
+    ' BraiNIX dev container' \
+    '   `su -`     → root shell  (password: brainix)' \
+    '   `exit`     → back to dev user' \
+    '   /home/dev/brainix is the host repo mount' \
+    '================================================================' \
+    > /etc/motd \
+    && sed -i 's/^#\?PrintMotd .*/PrintMotd yes/' /etc/ssh/sshd_config \
+    && echo '[ -f /etc/motd ] && cat /etc/motd' >> /etc/bash.bashrc
+
 # Rust toolchain — installed as dev user
 USER ${USERNAME}
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
