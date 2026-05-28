@@ -24,21 +24,21 @@
 // by the linker script and BSS layout below. These addresses MUST be kept in
 // sync with the .bss labels at the bottom of this file.
 //
-// Fixed BSS layout (load address 0x100000, .bss starts at 0x103000):
-//   0x103000 pml4_table          (4096 bytes)
-//   0x104000 pdpt_identity       (4096 bytes)
-//   0x105000 pdpt_high           (4096 bytes)
-//   0x106000 pd_low              (4096 bytes)
-//   0x107000 temporary_stack_bottom (4096 bytes, top = 0x108000)
-//   0x108000 temporary_stack_top (label only, stack grows down from here)
-//   0x108000 bootloader_stack_bottom (4096 bytes, top = 0x109000)
-//   0x109000 bootloader_stack_top (label only)
-//   0x109000 multiboot2_info_pointer_storage (4 bytes — separate from stack)
+// Fixed BSS layout (load address 0x800000, .bss starts at 0x803000):
+//   0x803000 pml4_table          (4096 bytes)
+//   0x804000 pdpt_identity       (4096 bytes)
+//   0x805000 pdpt_high           (4096 bytes)
+//   0x806000 pd_low              (4096 bytes)
+//   0x807000 temporary_stack_bottom (4096 bytes, top = 0x808000)
+//   0x808000 temporary_stack_top (label only, stack grows down from here)
+//   0x808000 bootloader_stack_bottom (4096 bytes, top = 0x809000)
+//   0x809000 bootloader_stack_top (label only)
+//   0x809000 multiboot2_info_pointer_storage (4 bytes — separate from stack)
 //
 // Note: bootloader_stack_top and multiboot2_info_pointer_storage share address
-// 0x109000. The stack grows downward from 0x109000 so the first push goes to
-// 0x108FFC (inside bootloader_stack_bottom), NOT into the 4-byte info storage
-// at 0x109000. The info storage is written BEFORE the 64-bit stack is set up,
+// 0x809000. The stack grows downward from 0x809000 so the first push goes to
+// 0x808FFC (inside bootloader_stack_bottom), NOT into the 4-byte info storage
+// at 0x809000. The info storage is written BEFORE the 64-bit stack is set up,
 // and read later — no collision occurs during normal execution.
 //
 // Security invariants enforced:
@@ -99,11 +99,11 @@ global_asm!(
     // Disable interrupts immediately. GRUB2 may have left them enabled.
     "cli",
     // Save the multiboot2 info struct pointer (EBX) to fixed address
-    // 0x109000. Hardcoded because OFFSET symbol generates wrong relocations
+    // 0x809000. Hardcoded because OFFSET symbol generates wrong relocations
     // in .code32 via global_asm! (64-bit RIP-relative instead of 32-bit).
-    "mov DWORD PTR ds:[0x109000], ebx",
-    // Set up a temporary 32-bit stack at 0x108000 (top of temporary stack).
-    "mov esp, 0x108000",
+    "mov DWORD PTR ds:[0x809000], ebx",
+    // Set up a temporary 32-bit stack at 0x808000 (top of temporary stack).
+    "mov esp, 0x808000",
     // -------------------------------------------------------------------
     // Step 1: Enable Physical Address Extension (PAE) — CR4 bit 5.
     // Required before setting LME in EFER to enter IA-32e mode.
@@ -115,38 +115,38 @@ global_asm!(
     // Step 2: Build page tables using hardcoded physical addresses.
     //
     // Identity map: virtual 0x0..0x200000 -> physical 0x0..0x200000
-    //   PML4[0]    (at 0x103000) -> pdpt_identity (0x104000)
-    //   pdpt_identity[0] (at 0x104000) -> pd_low (0x106000)
+    //   PML4[0]    (at 0x803000) -> pdpt_identity (0x804000)
+    //   pdpt_identity[0] (at 0x804000) -> pd_low (0x806000)
     //
     // Higher-half map: virtual 0xFFFFFFFF80000000 -> physical 0x0
-    //   PML4[511]  (at 0x103FF8) -> pdpt_high (0x105000)
-    //   pdpt_high[510] (at 0x105FF0) -> pd_low (0x106000)
-    //   pd_low[0]  (at 0x106000) = 0x83 (2MB page, present+writable+PS)
+    //   PML4[511]  (at 0x803FF8) -> pdpt_high (0x805000)
+    //   pdpt_high[510] (at 0x805FF0) -> pd_low (0x806000)
+    //   pd_low[0]  (at 0x806000) = 0x83 (2MB page, present+writable+PS)
     //
     // Kernel at 0xFFFFFFFF80100000 maps to physical 0x100000 (same 2MB).
     //
     // All page table entries: Present=1 (bit 0), Writable=1 (bit 1).
     // PD entries: PS=1 (bit 7) for 2MB huge pages (no PT level needed).
     //
-    // 0x103 = pdpt_identity | P+W bits
+    // 0x803 = pdpt_identity | P+W bits (used as constant 0x804003)
     // 0xFF8 = index 511 * 8 bytes = byte offset in PML4 for index 511
     // 0xFF0 = index 510 * 8 bytes = byte offset in PDPT for index 510
     // -------------------------------------------------------------------
 
-    // PML4[0] = 0x104003 (pdpt_identity physical address | P | W)
-    "mov DWORD PTR ds:[0x103000], 0x104003",
-    // PML4[511] = 0x105003 (pdpt_high physical address | P | W)
-    // PML4 index 511 is at offset 511*8 = 0xFF8 from PML4 base (0x103000).
-    "mov DWORD PTR ds:[0x103FF8], 0x105003",
-    // pdpt_identity[0] = 0x106003 (pd_low physical address | P | W)
-    "mov DWORD PTR ds:[0x104000], 0x106003",
-    // pdpt_high[510] = 0x106003 (pd_low physical address | P | W)
-    // PDPT index 510 is at offset 510*8 = 0xFF0 from PDPT base (0x105000).
-    "mov DWORD PTR ds:[0x105FF0], 0x106003",
+    // PML4[0] = 0x804003 (pdpt_identity physical address | P | W)
+    "mov DWORD PTR ds:[0x803000], 0x804003",
+    // PML4[511] = 0x805003 (pdpt_high physical address | P | W)
+    // PML4 index 511 is at offset 511*8 = 0xFF8 from PML4 base (0x803000).
+    "mov DWORD PTR ds:[0x803FF8], 0x805003",
+    // pdpt_identity[0] = 0x806003 (pd_low physical address | P | W)
+    "mov DWORD PTR ds:[0x804000], 0x806003",
+    // pdpt_high[510] = 0x806003 (pd_low physical address | P | W)
+    // PDPT index 510 is at offset 510*8 = 0xFF0 from PDPT base (0x805000).
+    "mov DWORD PTR ds:[0x805FF0], 0x806003",
     // pd_low[0] = 0x83 (phys addr 0x0 | PS=1 | W=1 | P=1 = 2MB at phys 0)
-    "mov DWORD PTR ds:[0x106000], 0x83",
+    "mov DWORD PTR ds:[0x806000], 0x83",
     // Load PML4 physical address into CR3.
-    "mov eax, 0x103000",
+    "mov eax, 0x803000",
     "mov cr3, eax",
     // -------------------------------------------------------------------
     // Step 3: Enable IA-32e (long) mode: set LME (bit 8) in EFER MSR.

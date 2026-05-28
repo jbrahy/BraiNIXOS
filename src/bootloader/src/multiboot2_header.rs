@@ -21,19 +21,23 @@ const MULTIBOOT2_MAGIC: u32 = 0xE85250D6;
 const MULTIBOOT2_ARCHITECTURE_I386: u32 = 0;
 
 // Physical address constants — must match bootloader linker.ld.
-const BOOTLOADER_HEADER_PHYSICAL_ADDRESS: u32 = 0x0010_0000;
-const BOOTLOADER_LOAD_BEGIN_PHYSICAL_ADDRESS: u32 = 0x0010_0000;
-// End of loadable data: .data section ends before 0x103000 (aligned).
+// Bootloader loads at 0x800000 (8 MiB), well above the kernel's physical
+// footprint (kernel .bss ends at 0x3CBAFE) and the shell load region
+// (0x400000), so the bootloader can copy the kernel module to its target
+// physical address (0x100000) without overlapping itself.
+const BOOTLOADER_HEADER_PHYSICAL_ADDRESS: u32 = 0x0080_0000;
+const BOOTLOADER_LOAD_BEGIN_PHYSICAL_ADDRESS: u32 = 0x0080_0000;
+// End of loadable data: .data section ends before 0x803000 (aligned).
 // Using an explicit value rather than the 0 sentinel because GRUB 2.06's
 // multiboot2 loader has been observed to refuse ELF64 binaries when
 // load_end_addr = 0 (sentinel "use end of file").
-const BOOTLOADER_LOAD_END_ADDRESS: u32 = 0x0010_3000;
-// Physical end of .bss per bootloader linker.ld / readelf (.data+.bss
-// segment MemSiz ends at 0x109004). Rounded up to 0x10A000 for safety.
-const BOOTLOADER_BSS_END_PHYSICAL_ADDRESS: u32 = 0x0010_A000;
+const BOOTLOADER_LOAD_END_ADDRESS: u32 = 0x0080_3000;
+// Physical end of .bss per bootloader linker.ld (.data+.bss
+// segment MemSiz ends at 0x809004). Rounded up to 0x80A000 for safety.
+const BOOTLOADER_BSS_END_PHYSICAL_ADDRESS: u32 = 0x0080_A000;
 // Entry point physical address — matches bootloader ELF header Entry field
 // and the _start label resolved by the linker.
-const BOOTLOADER_ENTRY_PHYSICAL_ADDRESS: u32 = 0x0010_1000;
+const BOOTLOADER_ENTRY_PHYSICAL_ADDRESS: u32 = 0x0080_1000;
 
 // Header layout (all little-endian):
 //   16 bytes prologue (magic, architecture, length, checksum)

@@ -1,21 +1,26 @@
 /* BraiNIX bootloader linker script
  *
- * Load address: 1 MiB (0x100000) — conventional multiboot2 load address.
+ * Load address: 8 MiB (0x800000). Chosen to be safely above:
+ *   - the kernel ELF's physical extent (.bss ends at 0x3CBAFE),
+ *   - the shell binary's load region (Phase 14-02 puts shell at 0x400000),
+ * which lets the bootloader copy the kernel module into its expected
+ * physical destination (0x100000) without overlapping its own image.
+ *
  * The .multiboot2_header section is placed first so GRUB2 finds the
  * multiboot2 magic (0xE85250D6) within the first 32768 bytes of the binary.
  *
  * _kernel_start is defined as a fixed symbol at the kernel's higher-half
  * virtual load address. This address MUST match the ORIGIN defined in
- * src/kernel/linker.ld. The page table set up by start.s maps
- * 0xFFFFFFFF80000000 -> physical 0x0 so this virtual address is valid
- * after the long mode transition.
+ * src/kernel/linker.ld. The bootloader's page tables map
+ * 0xFFFFFFFF80000000 -> physical 0x0 (covering 6 MiB) so the kernel is
+ * reachable at this virtual address after long mode is active.
  */
 
 ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x100000;
+    . = 0x800000;
 
     /* Multiboot2 header must come before .text so it is within the first
      * 32768 bytes of the binary. ALIGN(8) satisfies the Multiboot2
