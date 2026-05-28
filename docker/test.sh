@@ -169,8 +169,18 @@ else
         -device e1000,netdev=net0,mac=52:54:00:12:34:56 \
         -object filter-dump,id=net0,netdev=net0,file=/tmp/qemu-net.pcap"
 fi
+# Honor KEEP_RUNNING=1 (set by bin/run-brainx.sh in its default "always have
+# the latest version running" mode): omit the 300s `timeout` wrapper so qemu
+# stays alive after the kernel reaches its halt loop, until the user
+# interrupts (Ctrl-A X for the qemu monitor, or Ctrl-C from the host).
+# CI / one-shot mode keeps the 300s bound so a stuck boot can't hang a job.
+if [[ "${KEEP_RUNNING:-0}" == "1" ]]; then
+    QEMU_TIMEOUT_CMD=()
+else
+    QEMU_TIMEOUT_CMD=(timeout 300)
+fi
 # shellcheck disable=SC2086
-timeout 300 qemu-system-x86_64 \
+"${QEMU_TIMEOUT_CMD[@]}" qemu-system-x86_64 \
     -drive file=brainix.iso,format=raw,if=ide \
     -boot order=c \
     -nographic \

@@ -33,31 +33,37 @@ usage() {
     cat <<'USAGE'
 bin/run-brainx.sh — Build and live-boot the current BraiNIX working tree
 
-Wraps docker/test.sh so you can watch the GRUB → bootloader → kernel chain
-stream to your terminal in real time. The container is one-shot (--rm);
-nothing persists between runs except the cargo build cache under target/.
+Default: rebuilds the kernel/bootloader/shell from the current source,
+boots the resulting ISO under QEMU, and keeps QEMU running so the
+latest version stays up until you interrupt it.
 
 Usage:
-  bin/run-brainx.sh             build image if missing, then live-boot
+  bin/run-brainx.sh             build, boot, KEEP RUNNING until interrupted
+  bin/run-brainx.sh --once      build, boot, exit after the test.sh 300s timeout
   bin/run-brainx.sh --rebuild   force rebuild of the dev container image
   bin/run-brainx.sh --no-net    skip QEMU NIC + pcap capture
   bin/run-brainx.sh --shell     drop into a bash shell in the container
   bin/run-brainx.sh --help      this message
 
-To quit QEMU while it is running:
-  Ctrl-A then X      QEMU -nographic monitor escape
-  Ctrl-C             kills the docker container
+To stop QEMU:
+  Ctrl-A then X      QEMU -nographic monitor escape (sends shutdown)
+  Ctrl-C             kills the docker container outright
+
+Re-running rebuilds against the current working tree, so to pick up
+source changes just stop QEMU and run bin/run-brainx.sh again.
 USAGE
 }
 
 REBUILD=false
 SHELL_MODE=false
 NO_NET=false
+ONCE=false
 for arg in "$@"; do
     case "$arg" in
         --rebuild)  REBUILD=true ;;
         --no-net)   NO_NET=true ;;
         --shell)    SHELL_MODE=true ;;
+        --once)     ONCE=true ;;
         --help|-h)  usage; exit 0 ;;
         *)          printf "${RED}unknown flag: %s${NC}\n" "$arg"; usage; exit 2 ;;
     esac
@@ -138,7 +144,13 @@ if [[ "${NO_NET}" == true ]]; then
 else
     printf "Network:         user-mode NIC (e1000), pcap to /tmp/qemu-net.pcap inside container\n"
 fi
-printf "${YELLOW}While QEMU is running:${NC}  Ctrl-A X to quit, or Ctrl-C this terminal.\n\n"
+if [[ "${ONCE}" == true ]]; then
+    printf "Lifetime:        one-shot (--once: 300s QEMU timeout, exits after assertion)\n"
+else
+    printf "Lifetime:        ${GREEN}keep running until you interrupt${NC}\n"
+    docker_run_args+=( -e KEEP_RUNNING=1 )
+fi
+printf "${YELLOW}To stop QEMU:${NC}  Ctrl-A X (qemu monitor), or Ctrl-C this terminal.\n\n"
 
 # Stream docker/test.sh to the terminal. Disabling pipefail so a 124 (timeout)
 # exit from the inner qemu doesn't kill our outer status reporting; the script
