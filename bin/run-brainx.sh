@@ -98,9 +98,16 @@ else
 fi
 
 # Common docker-run arguments.
+#
+# IMPORTANT: do not pass `-it` for the boot path. With -it allocated, docker
+# attaches a pseudo-TTY to the container's stdin; qemu in -nographic mode then
+# behaves differently because `tee /tmp/boot.log` makes stdout a pipe while
+# stdin is a TTY — qemu produces no serial output and exits, leaving an empty
+# boot log and an immediate `FAIL: BraiNIX: boot complete not found`.
+# Foreground docker without -it streams qemu's stdout cleanly to the terminal
+# and Ctrl-C is still forwarded as SIGINT.
 docker_run_args=(
     --rm
-    -it
     --platform "${CONTAINER_PLATFORM}"
     --security-opt seccomp=unconfined
     -v "${REPO_ROOT}:/home/dev/brainix"
@@ -111,7 +118,13 @@ docker_run_args=(
 
 if [[ "${SHELL_MODE}" == true ]]; then
     printf "${BOLD}Dropping into a shell in %s ...${NC}\n" "${IMAGE_NAME}"
-    docker run "${docker_run_args[@]}" "${IMAGE_NAME}" -l
+    # --shell needs a real TTY; ensure stdin is a TTY before requesting one.
+    if [[ -t 0 && -t 1 ]]; then
+        docker run -it "${docker_run_args[@]}" "${IMAGE_NAME}" -l
+    else
+        printf "${RED}error:${NC} --shell needs an interactive terminal (stdin/stdout must be TTYs).\n" >&2
+        exit 1
+    fi
     exit $?
 fi
 
