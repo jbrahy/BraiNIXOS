@@ -46,6 +46,7 @@
 //   INV-BOOT-002: SMEP and SMAP are enabled before kernel entry
 //   INV-BOOT-003: CPU is in 64-bit long mode before kernel entry
 
+mod elf_loader;
 mod multiboot2_header;
 mod multiboot2_info;
 

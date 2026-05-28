@@ -5,5 +5,6 @@
 // bootloader binary (main.rs) and potentially by fuzz targets.
 // Unsafe is permitted in src/bootloader/src/ per UNSAFE_CODE_POLICY.md allowlist.
 
+pub mod elf_loader;
 pub mod multiboot2_header;
 pub mod multiboot2_info;
