@@ -24,14 +24,45 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
     curl \
     git \
     openssh-server \
+    openssh-client \
     qemu-system-x86 \
     ovmf \
     swtpm \
     swtpm-tools \
+    tpm2-tools \
     socat \
     grub-pc-bin \
     grub-common \
     xorriso \
+    \
+    # Routing & link-layer
+    iproute2 \
+    net-tools \
+    iptables \
+    bridge-utils \
+    \
+    # Connectivity & reachability
+    iputils-ping \
+    iputils-tracepath \
+    traceroute \
+    mtr-tiny \
+    nmap \
+    netcat-openbsd \
+    iperf3 \
+    \
+    # Name resolution
+    dnsutils \
+    ldnsutils \
+    whois \
+    \
+    # Packet capture & decode
+    tcpdump \
+    tshark \
+    \
+    # Misc HTTP / TLS clients (curl already above)
+    wget \
+    openssl \
+    \
     && rm -rf /var/lib/apt/lists/*
 
 # SSH server setup

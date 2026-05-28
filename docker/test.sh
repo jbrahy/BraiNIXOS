@@ -152,6 +152,23 @@ echo "[test.sh] Booting BraiNIX via hybrid ISO as hard disk in QEMU (300s timeou
 # brainix.iso is a hybrid image (boot_hybrid.img MBR) — bootable as hard disk too.
 # Presenting it as an IDE hard drive avoids the slow CD-ROM emulation path; the
 # embedded MBR boots GRUB2 the same way a real hybrid USB drive would.
+#
+# Networking:
+#   -netdev user,id=net0           — user-mode (slirp) networking, no root needed
+#   -device e1000,netdev=net0,mac=… — Intel e1000 NIC, fixed MAC for repeatable hashes
+#   -object filter-dump,…           — captures all guest network frames to a pcap
+# Inspect after boot:  tshark -r /tmp/qemu-net.pcap   or   tcpdump -nnXr /tmp/qemu-net.pcap
+# shellcheck disable=SC2086
+rm -f /tmp/qemu-net.pcap
+# Set QEMU_NO_NET=1 to omit the guest NIC entirely (useful when debugging
+# the boot chain without a network stack on the bus).
+if [[ "${QEMU_NO_NET:-0}" == "1" ]]; then
+    QEMU_NET_ARGS=""
+else
+    QEMU_NET_ARGS="-netdev user,id=net0 \
+        -device e1000,netdev=net0,mac=52:54:00:12:34:56 \
+        -object filter-dump,id=net0,netdev=net0,file=/tmp/qemu-net.pcap"
+fi
 # shellcheck disable=SC2086
 timeout 300 qemu-system-x86_64 \
     -drive file=brainix.iso,format=raw,if=ide \
@@ -160,6 +177,7 @@ timeout 300 qemu-system-x86_64 \
     -machine q35,accel=tcg \
     -cpu qemu64,+smep,+smap,+rdrand,+rdseed \
     -m 512M \
+    ${QEMU_NET_ARGS} \
     ${QEMU_TPM_ARGS} \
     2>&1 | tee /tmp/boot.log || true
 
