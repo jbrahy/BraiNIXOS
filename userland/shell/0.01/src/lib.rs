@@ -15,6 +15,7 @@
 #![no_std]
 #![deny(unsafe_code)]
 
+pub mod display;
 pub mod entry;
 pub mod history;
 pub mod input_decoder;
