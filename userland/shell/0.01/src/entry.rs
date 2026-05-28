@@ -9,7 +9,9 @@
 //!
 //! No dynamic memory, no unsafe, every function body <= 6 lines.
 
-use brainix_libsyscall::{syscall_process_exit, syscall_serial_read_byte, syscall_serial_write_byte};
+use brainix_libsyscall::{
+    syscall_process_exit, syscall_serial_read_byte, syscall_serial_write_byte,
+};
 
 /// ASCII Ctrl-D (end-of-transmission). Treated as "exit shell".
 const CONTROL_D_BYTE: u8 = 0x04;

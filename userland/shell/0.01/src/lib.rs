@@ -16,5 +16,6 @@
 #![deny(unsafe_code)]
 
 pub mod entry;
+pub mod input_decoder;
 
 pub use entry::shell_main;

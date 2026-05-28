@@ -17,7 +17,16 @@ use core::panic::PanicInfo;
 
 use brainix_libsyscall::syscall_process_exit;
 
-/// ELF entry point. Linked at SERVER_CODE_BASE_VIRTUAL_ADDRESS.
+/// ELF entry point. Linked at `SERVER_CODE_BASE_VIRTUAL_ADDRESS`.
+///
+/// # Safety
+///
+/// Called exactly once by the kernel's process loader after the shell's
+/// CSpace, stack, and code/rodata/data/bss mappings are installed. The
+/// function never returns; it transfers immediately into
+/// `brainix_shell::shell_main`. Calling this from any other context
+/// (e.g. recursively, or before the userland VA layout is set up) is
+/// undefined behavior.
 #[no_mangle]
 pub unsafe extern "C" fn _start() -> ! {
     brainix_shell::shell_main()
