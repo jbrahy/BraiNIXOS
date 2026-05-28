@@ -17,6 +17,7 @@ use crate::boot::hardware_security_init::{
 use crate::boot::ipc_init::initialize_ipc_subsystem;
 use crate::boot::logger::BootStepLogger;
 use crate::boot::multiboot2_info::initialize_memory_subsystem;
+use crate::memory::virtual_address_layout::DIRECT_MAP_REGION_START;
 use crate::boot::scheduler_init::initialize_scheduler_subsystem;
 use crate::boot::server_measurement::extract_module_byte_slices_from_boot_information;
 use crate::capability::audit_log::AuditRingBuffer;
@@ -49,6 +50,11 @@ pub fn execute_boot_sequence(
     );
     initialize_page_tables(boot_step_logger);
     activate_ipc_subsystem(boot_step_logger);
+    // CR3 swap inside `activate_ipc_subsystem` has retired the bootloader's
+    // identity map. The multiboot2 info structure (and module bytes the
+    // bootloader copied for PCR[3] measurement) live at physical addresses
+    // that are now reachable only through the direct-map region.
+    let multiboot2_info_address = DIRECT_MAP_REGION_START.wrapping_add(multiboot2_info_address);
     initialize_scheduler_subsystem(boot_step_logger);
     initialize_hardware_security(boot_step_logger);
     finalize_hardware_security(boot_step_logger);

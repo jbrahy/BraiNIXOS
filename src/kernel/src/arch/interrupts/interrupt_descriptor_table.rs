@@ -229,10 +229,16 @@ extern "x86-interrupt" fn handle_device_not_available(_stack_frame: InterruptSta
 }
 
 extern "x86-interrupt" fn handle_double_fault(
-    _stack_frame: InterruptStackFrame,
+    stack_frame: InterruptStackFrame,
     _error_code: u64,
 ) -> ! {
     print_fault_message("Double Fault (vector 8)");
+    print_fault_diagnostic_address(
+        "RIP at double-fault",
+        stack_frame.instruction_pointer.as_u64(),
+    );
+    print_fault_diagnostic_address("RSP at double-fault", stack_frame.stack_pointer.as_u64());
+    print_fault_diagnostic_address("CR2 (if from PF)", read_control_register_2());
     disable_interrupts_and_halt()
 }
 
@@ -269,11 +275,34 @@ extern "x86-interrupt" fn handle_general_protection_fault(
 }
 
 extern "x86-interrupt" fn handle_page_fault(
-    _stack_frame: InterruptStackFrame,
-    _error_code: PageFaultErrorCode,
+    stack_frame: InterruptStackFrame,
+    error_code: PageFaultErrorCode,
 ) {
     print_fault_message("Page Fault (vector 14)");
+    let cr2_value = read_control_register_2();
+    print_fault_diagnostic_address("CR2 (faulting addr)", cr2_value);
+    print_fault_diagnostic_address(
+        "RIP (faulting insn)",
+        stack_frame.instruction_pointer.as_u64(),
+    );
+    print_fault_diagnostic_address("RSP", stack_frame.stack_pointer.as_u64());
+    print_fault_diagnostic_address("error code", error_code.bits());
     disable_interrupts_and_halt();
+}
+
+fn read_control_register_2() -> u64 {
+    let cr2_value: u64;
+    // SAFETY: CR2 is a readable control register. Reading it has no side effects.
+    unsafe {
+        core::arch::asm!("mov {}, cr2", out(reg) cr2_value, options(nomem, nostack, preserves_flags));
+    }
+    cr2_value
+}
+
+fn print_fault_diagnostic_address(label: &str, value: u64) {
+    use core::fmt::Write;
+    let mut emergency_serial_port = crate::boot::serial::SerialOutputPort::initialize();
+    let _ = writeln!(emergency_serial_port, "[FAULT] {label} = {value:#018x}");
 }
 
 extern "x86-interrupt" fn handle_x87_floating_point_exception(_stack_frame: InterruptStackFrame) {

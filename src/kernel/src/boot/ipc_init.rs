@@ -8,6 +8,7 @@
 #![allow(unsafe_code)]
 
 use crate::arch::syscall_entry::install_syscall_entry_point;
+use crate::memory::virtual_address_layout::DIRECT_MAP_REGION_START;
 
 /// Initializes the IPC subsystem: loads CR3 and installs the SYSCALL handler.
 ///
@@ -24,27 +25,53 @@ use crate::arch::syscall_entry::install_syscall_entry_point;
 ///   in Phase 2), INV-MEM-002 (KPTI active after CR3 load).
 /// - Evidence: test_kernel_virtual_address_is_absent_from_user_page_table (Phase 2).
 pub fn initialize_ipc_subsystem(kernel_pml4_physical_address: u64) {
-    load_cr3_to_activate_kpti_page_tables(kernel_pml4_physical_address);
+    switch_stack_to_direct_map_view_and_load_cr3(kernel_pml4_physical_address);
     install_syscall_entry_point();
 }
 
-/// Writes the kernel PML4 physical address to CR3, activating KPTI page tables.
+/// Atomically rebases the stack pointer onto the direct-map region and
+/// loads the kernel PML4 into CR3.
+///
+/// The bootloader's identity map made the boot stack reachable at its
+/// physical address (e.g. 0x808000). The kernel's KPTI page tables do
+/// not include that identity map; once CR3 is loaded, the only
+/// virtual-address path to the boot stack's physical memory is through
+/// the direct-map region (DIRECT_MAP_REGION_START + phys).
+///
+/// The two writes — adjusting RSP and loading CR3 — must occur in the
+/// same inline-asm block so that no `push`/`pop`/`call`/`ret` runs
+/// between them. `mov rsp, …` does not access memory; the next memory
+/// access via the stack happens after `mov cr3, …` and resolves
+/// through the new direct-map mapping to the same physical bytes the
+/// boot stack already holds.
+///
+/// After this returns, the caller's saved return address (originally
+/// pushed at the bootloader's physical stack address) is read back via
+/// the direct-map virtual address that points to the same physical
+/// memory, so unwinding works normally.
 ///
 /// # Safety
 ///
-/// `kernel_pml4_physical_address` must be the Phase 2 kernel PML4.
-/// Writing CR3 flushes the TLB. The user PML4 is structurally empty (KPTI by
-/// construction — the kernel is never mapped in user page tables in Phase 2).
-fn load_cr3_to_activate_kpti_page_tables(kernel_pml4_physical_address: u64) {
-    // SAFETY: Physical address is the kernel PML4 built in Phase 2 (D-09).
-    // - Precondition: kernel_pml4_physical_address is a valid 4096-byte aligned PML4.
+/// - `kernel_pml4_physical_address` must be the Phase 2 kernel PML4 and
+///   that PML4 must map both the current RIP (kernel binary region) and
+///   the direct-map region used as the new stack view.
+/// - Must be called while still on the bootloader's identity-mapped
+///   stack (otherwise the rebase computation lands in the wrong place).
+fn switch_stack_to_direct_map_view_and_load_cr3(kernel_pml4_physical_address: u64) {
+    // SAFETY: See function doc-comment. The asm block performs only
+    // register-to-register operations until the final CR3 write; no stack
+    // access occurs between the rebase and the page-table swap.
+    // - Precondition: caller's stack lives in identity-mapped low memory.
     // - Invariant: INV-MEM-001 (kernel absent from user PT), INV-MEM-002 (KPTI active).
-    // - Evidence: test_kernel_virtual_address_is_absent_from_user_page_table (Phase 2).
+    // - Evidence: live boot verified via docker/test.sh inside dev container.
     unsafe {
         core::arch::asm!(
-            "mov cr3, {}",
-            in(reg) kernel_pml4_physical_address,
-            options(nostack, preserves_flags),
+            "movabs rcx, {direct_map}",
+            "add rsp, rcx",
+            "mov cr3, {pml4}",
+            direct_map = const DIRECT_MAP_REGION_START,
+            pml4 = in(reg) kernel_pml4_physical_address,
+            out("rcx") _,
         );
     }
 }

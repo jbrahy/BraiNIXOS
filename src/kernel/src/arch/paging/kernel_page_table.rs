@@ -39,8 +39,17 @@ use crate::memory::virtual_address_layout::{
 /// Number of bootstrap page table pages available in BSS.
 const BOOTSTRAP_PAGE_TABLE_PAGE_COUNT: usize = 32;
 
-/// Total number of 4KB pages in the kernel binary region to map (conservative 1 MB bound).
-const KERNEL_BINARY_PAGE_COUNT: u64 = 256;
+/// Total number of 4KB pages in the kernel binary region to map.
+///
+/// Must cover the kernel ELF's full LOAD extent: .text + .rodata + .data
+/// + .bss. The current build's last PT_LOAD ends at physical 0x3CBAFE
+/// (3.5 MiB above KERNEL_PHYSICAL_LOAD_ADDRESS), driven mostly by the
+/// PhysicalAllocator's fixed-size tracking tables and other BSS
+/// statics. Round to 1024 pages (4 MiB) so the kernel's own data
+/// stays mapped after the Phase 4 CR3 swap retires the bootloader's
+/// identity map. A smaller value silently relies on the bootloader's
+/// identity map and breaks at the moment of CR3 load.
+const KERNEL_BINARY_PAGE_COUNT: u64 = 1024;
 
 /// Page-aligned BSS-backed storage for bootstrap page table pages.
 ///
@@ -298,7 +307,58 @@ fn map_all_kernel_regions(page_map_level_4: &mut PageTable, boot_step_logger: &m
     map_kernel_binary_region(page_map_level_4).expect("kernel binary region mapping failed");
     map_kernel_stack_region(page_map_level_4).expect("kernel stack region mapping failed");
     map_pool_region(page_map_level_4).expect("pool region mapping failed");
+    map_local_apic_mmio_region(page_map_level_4).expect("LAPIC MMIO region mapping failed");
+    map_tpm_tis_mmio_region(page_map_level_4).expect("TPM TIS MMIO region mapping failed");
     map_direct_map_region(page_map_level_4, 128 * 1024 * 1024, boot_step_logger);
+}
+
+/// Identity-maps the local APIC MMIO page (0xFEE00000) into the kernel PML4.
+///
+/// The scheduler timer (`arch::timer`) writes to LAPIC registers using their
+/// physical addresses (0xFEE00000-0xFEE00FFF) as virtual addresses. The
+/// bootloader's identity map provided that mapping during early boot; the
+/// kernel's KPTI PML4 must re-establish it before the CR3 swap, otherwise
+/// the first APIC write page-faults.
+///
+/// Maps a single 4 KiB page with PRESENT | WRITABLE | NO_EXECUTE | NO_CACHE
+/// | WRITE_THROUGH — strong-uncacheable semantics required for MMIO.
+fn map_local_apic_mmio_region(page_map_level_4: &mut PageTable) -> Result<(), MappingError> {
+    const LOCAL_APIC_PHYSICAL_BASE_ADDRESS: u64 = 0xFEE0_0000;
+    identity_map_strong_uncacheable_page(page_map_level_4, LOCAL_APIC_PHYSICAL_BASE_ADDRESS)
+}
+
+/// Identity-maps the TPM TIS MMIO page (0xFED40000) into the kernel PML4.
+///
+/// `hardware_security::pcr_measurement` reads/writes TPM TIS registers using
+/// their physical addresses as virtual addresses. The bootloader's identity
+/// map covered this during early boot; the kernel PML4 must re-establish it
+/// before the CR3 swap.
+fn map_tpm_tis_mmio_region(page_map_level_4: &mut PageTable) -> Result<(), MappingError> {
+    const TPM_TIS_PHYSICAL_BASE_ADDRESS: u64 = 0xFED4_0000;
+    identity_map_strong_uncacheable_page(page_map_level_4, TPM_TIS_PHYSICAL_BASE_ADDRESS)
+}
+
+/// Identity-maps a single 4 KiB page as strong-uncacheable MMIO.
+///
+/// PRESENT | WRITABLE | NO_EXECUTE | NO_CACHE | WRITE_THROUGH — the standard
+/// flag set for memory-mapped device registers. The virtual address equals
+/// the physical address so existing code paths that treat the physical
+/// address as a virtual pointer continue to work after the KPTI CR3 swap.
+fn identity_map_strong_uncacheable_page(
+    page_map_level_4: &mut PageTable,
+    physical_base_address: u64,
+) -> Result<(), MappingError> {
+    let mmio_flags = PageTableFlags::PRESENT
+        | PageTableFlags::WRITABLE
+        | PageTableFlags::NO_EXECUTE
+        | PageTableFlags::NO_CACHE
+        | PageTableFlags::WRITE_THROUGH;
+    map_single_page(
+        page_map_level_4,
+        physical_base_address,
+        PhysAddr::new(physical_base_address),
+        mmio_flags,
+    )
 }
 
 /// Acquires a mutable reference to the kernel PML4 during single-threaded boot.

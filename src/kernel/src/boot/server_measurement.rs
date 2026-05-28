@@ -8,6 +8,8 @@
 use multiboot2::BootInformation;
 use multiboot2::BootInformationHeader;
 
+use crate::memory::virtual_address_layout::DIRECT_MAP_REGION_START;
+
 /// Maximum number of server binary module slots.
 const MAXIMUM_SERVER_MODULE_COUNT: usize = 8;
 
@@ -31,9 +33,16 @@ fn load_boot_information_for_measurement(
     load_result.ok()
 }
 
-/// Extracts a byte slice from a single module tag's physical address range.
+/// Extracts a byte slice from a single module tag's physical address range,
+/// re-based onto the kernel's direct-map region.
 ///
 /// Returns an empty slice if end_address < start_address (malformed tag guard).
+///
+/// Module addresses reported by GRUB are physical. After the Phase 4 CR3
+/// load this function is called from `measure_server_binaries_into_pcr3`
+/// at a point where the bootloader's identity map is gone; the only
+/// remaining virtual route to module bytes is the direct-map region
+/// (`DIRECT_MAP_REGION_START + phys`).
 ///
 /// Enforces INV-BOOT-001: measured boot path integrity.
 fn extract_single_module_byte_slice(start_address: u32, end_address: u32) -> &'static [u8] {
@@ -41,13 +50,17 @@ fn extract_single_module_byte_slice(start_address: u32, end_address: u32) -> &'s
         return &[];
     }
     let byte_count = (end_address - start_address) as usize;
-    // SAFETY: start_address and end_address are physical addresses from GRUB
-    // multiboot2 module tags. The identity map covers 0x0..0x200000
-    // (KERNEL_PHYSICAL_END). All module binaries are loaded into this range.
-    // - Precondition: end_address >= start_address (validated by guard above).
+    let direct_map_pointer =
+        DIRECT_MAP_REGION_START.wrapping_add(u64::from(start_address)) as *const u8;
+    // SAFETY: GRUB-provided module addresses are within physical RAM and
+    // therefore inside the kernel's direct-map coverage (128 MiB from
+    // DIRECT_MAP_REGION_START). The re-based pointer resolves to the same
+    // physical bytes the original phys address pointed to, now via the
+    // kernel's KPTI page tables.
+    // - Precondition: byte_count fits within the direct map region.
     // - Invariant: INV-BOOT-001 (measured boot path integrity).
-    // - Evidence: identity map range matches KERNEL_PHYSICAL_END = 0x200000.
-    unsafe { core::slice::from_raw_parts(start_address as *const u8, byte_count) }
+    // - Evidence: direct_map.rs:188 maps 128 MiB at DIRECT_MAP_REGION_START.
+    unsafe { core::slice::from_raw_parts(direct_map_pointer, byte_count) }
 }
 
 /// Collects up to 8 module byte slices from the multiboot2 boot information.

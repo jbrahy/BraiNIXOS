@@ -33,8 +33,9 @@ const BOOTLOADER_LOAD_BEGIN_PHYSICAL_ADDRESS: u32 = 0x0080_0000;
 // load_end_addr = 0 (sentinel "use end of file").
 const BOOTLOADER_LOAD_END_ADDRESS: u32 = 0x0080_3000;
 // Physical end of .bss per bootloader linker.ld (.data+.bss
-// segment MemSiz ends at 0x809004). Rounded up to 0x80A000 for safety.
-const BOOTLOADER_BSS_END_PHYSICAL_ADDRESS: u32 = 0x0080_A000;
+// segment MemSiz ends at 0x810004 after the 32 KiB stack expansion).
+// Rounded up to 0x811000 for safety.
+const BOOTLOADER_BSS_END_PHYSICAL_ADDRESS: u32 = 0x0081_1000;
 // Entry point physical address — matches bootloader ELF header Entry field
 // and the _start label resolved by the linker.
 const BOOTLOADER_ENTRY_PHYSICAL_ADDRESS: u32 = 0x0080_1000;

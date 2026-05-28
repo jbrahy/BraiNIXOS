@@ -31,14 +31,18 @@
 //   0x806000 pd_low              (4096 bytes)
 //   0x807000 temporary_stack_bottom (4096 bytes, top = 0x808000)
 //   0x808000 temporary_stack_top (label only, stack grows down from here)
-//   0x808000 bootloader_stack_bottom (4096 bytes, top = 0x809000)
-//   0x809000 bootloader_stack_top (label only)
-//   0x809000 multiboot2_info_pointer_storage (4 bytes — separate from stack)
+//   0x808000 bootloader_stack_bottom (32768 bytes, top = 0x810000)
+//   0x810000 bootloader_stack_top (label only)
+//   0x810000 multiboot2_info_pointer_storage (4 bytes — separate from stack)
+//
+// Stack sizing: 32 KiB matches `KERNEL_STACK_SIZE_IN_BYTES` so the kernel's
+// boot-sequence functions (which the disassembly shows allocating ≥14 KiB
+// frames during scheduler/PCR setup) do not overflow into adjacent BSS pages.
 //
 // Note: bootloader_stack_top and multiboot2_info_pointer_storage share address
-// 0x809000. The stack grows downward from 0x809000 so the first push goes to
-// 0x808FFC (inside bootloader_stack_bottom), NOT into the 4-byte info storage
-// at 0x809000. The info storage is written BEFORE the 64-bit stack is set up,
+// 0x810000. The stack grows downward from 0x810000 so the first push goes to
+// 0x80FFFC (inside bootloader_stack_bottom), NOT into the 4-byte info storage
+// at 0x810000. The info storage is written BEFORE the 64-bit stack is set up,
 // and read later — no collision occurs during normal execution.
 //
 // Security invariants enforced:
@@ -64,7 +68,7 @@ const MULTIBOOT2_BOOT_MAGIC: u32 = 0x36D7_6289;
 /// multiboot2 info-structure pointer (originally in EBX) for later use
 /// by the 64-bit Rust handoff stage. Must match the BSS layout in the
 /// global_asm! block above.
-const SAVED_MULTIBOOT2_INFO_POINTER_ADDRESS: u64 = 0x0080_9000;
+const SAVED_MULTIBOOT2_INFO_POINTER_ADDRESS: u64 = 0x0081_0000;
 
 /// Null-terminated identifier used in grub.cfg `module2` lines.
 const KERNEL_MODULE_NAME: &[u8] = b"kernel";
@@ -235,9 +239,9 @@ global_asm!(
     // Disable interrupts immediately. GRUB2 may have left them enabled.
     "cli",
     // Save the multiboot2 info struct pointer (EBX) to fixed address
-    // 0x809000. Hardcoded because OFFSET symbol generates wrong relocations
+    // 0x810000. Hardcoded because OFFSET symbol generates wrong relocations
     // in .code32 via global_asm! (64-bit RIP-relative instead of 32-bit).
-    "mov DWORD PTR ds:[0x809000], ebx",
+    "mov DWORD PTR ds:[0x810000], ebx",
     // Set up a temporary 32-bit stack at 0x808000 (top of temporary stack).
     "mov esp, 0x808000",
     // -------------------------------------------------------------------
@@ -317,12 +321,17 @@ global_asm!(
     "mov eax, 0x803000",
     "mov cr3, eax",
     // -------------------------------------------------------------------
-    // Step 3: Enable IA-32e (long) mode: set LME (bit 8) in EFER MSR.
-    // EFER MSR address: 0xC0000080.
+    // Step 3: Enable IA-32e long mode (LME, bit 8) AND No-Execute pages
+    // (NXE, bit 11) in EFER. NXE must be enabled here because the
+    // kernel's KPTI page tables (built before the bootloader transfers
+    // control) use the NO_EXECUTE bit on data pages (direct-map region,
+    // kernel stack, pool region). Without EFER.NXE the CPU treats bit 63
+    // of any PTE as "reserved bits set" and faults on every access.
+    // EFER MSR address: 0xC0000080. Combined mask: 0x100 | 0x800 = 0x900.
     // -------------------------------------------------------------------
     "mov ecx, 0xC0000080",
     "rdmsr",
-    "or eax, 0x100",
+    "or eax, 0x900",
     "wrmsr",
     // -------------------------------------------------------------------
     // Step 4: Enable paging (CR0 bit 31). Protected mode bit 0 is already
@@ -421,19 +430,21 @@ global_asm!(
     "pdpt_high:     .space 4096",
     // 0x106000: Page Directory (shared by both PDPTs, 2MB entries)
     "pd_low:        .space 4096",
-    // 0x107000: Temporary 32-bit stack (used only during long mode transition)
+    // 0x807000: Temporary 32-bit stack (used only during long mode transition)
     ".align 16",
     "temporary_stack_bottom: .space 4096",
-    // 0x108000: Top of temporary stack (stack grows down from here)
+    // 0x808000: Top of temporary stack (stack grows down from here)
     "temporary_stack_top:",
-    // 0x108000: 64-bit bootloader stack (used from long_mode_entry to kernel)
+    // 0x808000: 64-bit bootloader stack (used from long_mode_entry to kernel).
+    // 32 KiB matches KERNEL_STACK_SIZE_IN_BYTES so kernel boot frames do not
+    // overflow into adjacent BSS pages.
     ".align 16",
-    "bootloader_stack_bottom: .space 4096",
-    // 0x109000: Top of bootloader stack (stack grows down from here)
+    "bootloader_stack_bottom: .space 32768",
+    // 0x810000: Top of bootloader stack (stack grows down from here)
     "bootloader_stack_top:",
-    // 0x109000: Multiboot2 info struct pointer storage (4 bytes).
+    // 0x810000: Multiboot2 info struct pointer storage (4 bytes).
     // Shares address with bootloader_stack_top — safe because the stack
-    // grows downward (first push goes to 0x108FFC) and this storage is
+    // grows downward (first push goes to 0x80FFFC) and this storage is
     // written by the 32-bit code before the 64-bit stack is initialized.
     ".align 4",
     "multiboot2_info_pointer_storage: .space 4",

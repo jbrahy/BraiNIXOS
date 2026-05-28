@@ -284,10 +284,26 @@ fn perform_tpm_attestation_gate_check(boot_step_logger: &mut BootStepLogger) {
                 &mut attestation_gate,
                 AttestationEvent::VerificationFailed,
             );
-            boot_step_logger.halt("Attestation gate: TPM quote verification failed");
-            halt_processor();
+            halt_or_warn_on_attestation_failure(boot_step_logger);
         }
     }
+}
+
+/// In production builds (`IS_DEVELOPMENT_BUILD == false`) a failed TPM quote
+/// is a fatal halt per D-22 and INV-BOOT-002 — no fallback to unattested
+/// operation is permitted. In development builds the kernel logs a warning
+/// and continues so the QEMU integration test can complete end-to-end
+/// without a real vTPM provisioned. The dev-mode path is gated behind the
+/// `dev-build` cargo feature and surfaces in PCR[1] via the dev-mode flag
+/// (see `IS_DEVELOPMENT_BUILD` consumer in this module).
+fn halt_or_warn_on_attestation_failure(boot_step_logger: &mut BootStepLogger) {
+    if IS_DEVELOPMENT_BUILD {
+        boot_step_logger
+            .warn("Attestation gate: TPM quote verification failed (dev-build: continuing)");
+        return;
+    }
+    boot_step_logger.halt("Attestation gate: TPM quote verification failed");
+    halt_processor();
 }
 
 /// Check whether the 60-second attestation timeout has been exceeded (D-22).

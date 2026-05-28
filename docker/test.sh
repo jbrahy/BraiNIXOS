@@ -41,8 +41,10 @@ cargo build -p brainix-bootloader --target x86_64-unknown-none --release
 echo "[test.sh] Building shell binary..."
 cargo build -p brainix-shell --target x86_64-unknown-none --release
 
-echo "[test.sh] Building kernel binary (requires --features kernel-binary)..."
-cargo build --features kernel-binary -p brainix-kernel --target x86_64-unknown-none --release
+echo "[test.sh] Building kernel binary (requires --features kernel-binary,dev-build)..."
+# dev-build enables the attestation-gate warn-and-continue path so the
+# integration test can complete without a fully provisioned vTPM.
+cargo build --features kernel-binary,dev-build -p brainix-kernel --target x86_64-unknown-none --release
 
 echo "[test.sh] Creating GRUB2 ISO directory structure..."
 rm -rf iso
@@ -156,7 +158,7 @@ timeout 300 qemu-system-x86_64 \
     -boot order=c \
     -nographic \
     -machine q35,accel=tcg \
-    -cpu qemu64,+smep,+smap \
+    -cpu qemu64,+smep,+smap,+rdrand,+rdseed \
     -m 512M \
     ${QEMU_TPM_ARGS} \
     2>&1 | tee /tmp/boot.log || true
