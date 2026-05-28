@@ -157,11 +157,22 @@ const fn concatenate_header_sections(
 
 // SAFETY: Read-only static. The #[used] attribute prevents dead-strip.
 // The linker script places .multiboot2_header before .text at physical
-// address 0x100000 so GRUB2 finds the magic within the first 32768 bytes.
+// address 0x800000 so GRUB2 finds the magic within the first 32768 bytes.
 // - Precondition: bootloader linker.ld places .multiboot2_header first.
 // - Invariant: INV-BOOT-001 — bootloader binary is GRUB2-loadable.
+//
+// The link_section attribute is only valid for the bare-metal target
+// (x86_64-unknown-none, target_os = "none"). On the host test target
+// (aarch64-apple-darwin), Mach-O rejects the bare `.multiboot2_header`
+// section name. The static itself is still const-eval'd on the host so
+// the multiboot2 header unit tests continue to run.
+#[cfg(target_os = "none")]
 #[used]
 #[link_section = ".multiboot2_header"]
+static MULTIBOOT2_HEADER: [u8; 72] = build_multiboot2_header();
+
+#[cfg(not(target_os = "none"))]
+#[allow(dead_code)]
 static MULTIBOOT2_HEADER: [u8; 72] = build_multiboot2_header();
 
 #[cfg(test)]

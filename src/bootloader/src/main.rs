@@ -47,6 +47,7 @@
 //   INV-BOOT-003: CPU is in 64-bit long mode before kernel entry
 
 mod multiboot2_header;
+mod multiboot2_info;
 
 use core::arch::global_asm;
 use core::panic::PanicInfo;

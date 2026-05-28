@@ -18,5 +18,13 @@ fn pass_linker_flags() {
 }
 
 fn main() {
-    pass_linker_flags();
+    // Only emit the bare-metal linker flags when building for the
+    // x86_64-unknown-none bootloader binary target. On host test targets
+    // (e.g. aarch64-apple-darwin) the macOS linker rejects -T / -no-pie /
+    // -static. The lib-test target only exercises pure-data parsing logic
+    // and does not need a custom linker script.
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "none" {
+        pass_linker_flags();
+    }
 }
