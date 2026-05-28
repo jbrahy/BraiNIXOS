@@ -53,6 +53,96 @@ mod multiboot2_info;
 use core::arch::global_asm;
 use core::panic::PanicInfo;
 
+use crate::elf_loader::ParsedKernelImage;
+use crate::multiboot2_info::ModuleLocation;
+
+/// Multiboot2 boot magic value passed by GRUB in EAX. The kernel reads
+/// this from EAX at `_start` to confirm a valid multiboot2 handoff.
+const MULTIBOOT2_BOOT_MAGIC: u32 = 0x36D7_6289;
+
+/// Fixed physical address where `_start` (32-bit code) saves GRUB's
+/// multiboot2 info-structure pointer (originally in EBX) for later use
+/// by the 64-bit Rust handoff stage. Must match the BSS layout in the
+/// global_asm! block above.
+const SAVED_MULTIBOOT2_INFO_POINTER_ADDRESS: u64 = 0x0080_9000;
+
+/// Null-terminated identifier used in grub.cfg `module2` lines.
+const KERNEL_MODULE_NAME: &[u8] = b"kernel";
+
+/// Final stage of the bootloader: locate the kernel module that GRUB
+/// loaded for us, ELF-load its PT_LOAD segments into their physical
+/// destinations, and transfer control to the kernel's entry point
+/// with the multiboot2 boot ABI registers populated.
+///
+/// Called from `long_mode_entry` in the global_asm! block above once
+/// the CPU is in 64-bit long mode with SMEP+SMAP enabled.
+///
+/// # Safety
+/// - Called exactly once, from the assembly stub, on the boot CPU.
+/// - The bootloader's identity page-table mapping must cover both the
+///   GRUB-loaded module address and every kernel `p_paddr`.
+/// - This function never returns. On any error it halts the CPU.
+#[no_mangle]
+pub unsafe extern "C" fn load_kernel_module_and_jump_to_entry() -> ! {
+    let information_structure_address = read_saved_multiboot2_info_pointer();
+    let kernel_module = locate_kernel_module(information_structure_address);
+    let parsed_image = parse_kernel_image(kernel_module);
+    load_kernel_image(kernel_module, &parsed_image);
+    jump_to_kernel_entry(
+        parsed_image.entry_point_address,
+        information_structure_address,
+    );
+}
+
+unsafe fn read_saved_multiboot2_info_pointer() -> u64 {
+    let storage_pointer = SAVED_MULTIBOOT2_INFO_POINTER_ADDRESS as *const u32;
+    u64::from(core::ptr::read_volatile(storage_pointer))
+}
+
+unsafe fn locate_kernel_module(information_structure_address: u64) -> ModuleLocation {
+    match multiboot2_info::find_module_by_name(information_structure_address, KERNEL_MODULE_NAME) {
+        Some(module) => module,
+        None => halt_on_boot_failure(),
+    }
+}
+
+unsafe fn parse_kernel_image(kernel_module: ModuleLocation) -> ParsedKernelImage {
+    let module_base_address = u64::from(kernel_module.physical_start_address);
+    let module_size_in_bytes = u64::from(kernel_module.size_in_bytes());
+    match elf_loader::parse_kernel_elf_image(module_base_address, module_size_in_bytes) {
+        Ok(parsed_image) => parsed_image,
+        Err(_) => halt_on_boot_failure(),
+    }
+}
+
+unsafe fn load_kernel_image(kernel_module: ModuleLocation, parsed_image: &ParsedKernelImage) {
+    let module_base_address = u64::from(kernel_module.physical_start_address);
+    elf_loader::load_kernel_image_to_physical_memory(module_base_address, parsed_image);
+}
+
+unsafe fn jump_to_kernel_entry(entry_point_address: u64, information_pointer: u64) -> ! {
+    // RBX cannot be used directly as an `in("rbx")` operand — LLVM reserves
+    // it internally on x86-64. Set it via an explicit `mov` from a normal
+    // scratch register; `options(noreturn)` tells LLVM not to expect any
+    // register state to survive past the jump.
+    core::arch::asm!(
+        "mov rbx, {info}",
+        "jmp {entry}",
+        info = in(reg) information_pointer,
+        entry = in(reg) entry_point_address,
+        in("eax") MULTIBOOT2_BOOT_MAGIC,
+        options(noreturn),
+    );
+}
+
+fn halt_on_boot_failure() -> ! {
+    loop {
+        // SAFETY: hlt allowlisted for bootloader halt loops per
+        // UNSAFE_CODE_POLICY.md (src/bootloader/src/).
+        unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)) };
+    }
+}
+
 // Panic handler required for #![no_std] binaries.
 // The bootloader halts on panic — no serial output available at this stage.
 #[panic_handler]
@@ -116,26 +206,29 @@ global_asm!(
     // -------------------------------------------------------------------
     // Step 2: Build page tables using hardcoded physical addresses.
     //
-    // Identity map: virtual 0x0..0xA00000 -> physical 0x0..0xA00000
+    // Identity map: virtual 0..0x2000000 -> physical 0..0x2000000 (32 MiB)
     //   PML4[0]    (at 0x803000) -> pdpt_identity (0x804000)
     //   pdpt_identity[0] (at 0x804000) -> pd_low (0x806000)
     //
-    // Higher-half map: virtual 0xFFFFFFFF80000000..0xFFFFFFFF80A00000
-    //   -> physical 0x0..0xA00000 (shares pd_low; same 5 huge pages)
+    // Higher-half map: virtual 0xFFFFFFFF80000000..0xFFFFFFFF82000000
+    //   -> physical 0..0x2000000 (shares pd_low; 16 huge pages)
     //   PML4[511]  (at 0x803FF8) -> pdpt_high (0x805000)
     //   pdpt_high[510] (at 0x805FF0) -> pd_low (0x806000)
-    //   pd_low[0..4]  (at 0x806000+i*8) = i*0x200000 | 0x83
+    //   pd_low[i] (at 0x806000+i*8) = i*0x200000 | 0x83  for i in 0..16
     //
-    // Coverage rationale:
-    //   - pd_low[0] (phys 0..0x200000): low memory + start of kernel (.text
-    //     entry at 0x100370). Maps the kernel virt 0xFFFFFFFF80100000.
-    //   - pd_low[1] (phys 0x200000..0x400000): kernel .rodata/.data and
-    //     start of .bss (kernel .bss ends at 0x3CBAFE).
-    //   - pd_low[2] (phys 0x400000..0x600000): shell module load region
-    //     (Phase 14-02 placed shell at 0x400000).
-    //   - pd_low[3] (phys 0x600000..0x800000): scratch / GRUB module spill.
-    //   - pd_low[4] (phys 0x800000..0xA00000): bootloader's own image
-    //     (.text/.data/.bss live here after the 0x800000 relocate).
+    // Coverage rationale (16 * 2 MiB = 32 MiB):
+    //   - pd_low[0]: low memory + kernel entry (.text at 0x100370). The
+    //     higher-half view maps the kernel's virt 0xFFFFFFFF80100000.
+    //   - pd_low[1]: kernel .rodata/.data and start of .bss (kernel .bss
+    //     ends at 0x3CBAFE).
+    //   - pd_low[2]: shell module load region (Phase 14-02 placed shell
+    //     at 0x400000).
+    //   - pd_low[4]: bootloader's own image (.text/.data/.bss live at
+    //     0x800000 after the relocate in src/bootloader/linker.ld).
+    //   - pd_low[5..16]: headroom for GRUB to place the multiboot2
+    //     information structure and additional modules above the
+    //     bootloader. GRUB 2.06 has been observed to place the info
+    //     struct at addresses well past 8 MiB on some configurations.
     //
     // Note: identity and higher-half share the same pd_low. The bootloader
     // is therefore visible at both virt 0x800000 and virt 0xFFFFFFFF80800000
@@ -159,12 +252,23 @@ global_asm!(
     // pdpt_high[510] = 0x806003 (pd_low physical address | P | W)
     // PDPT index 510 is at offset 510*8 = 0xFF0 from PDPT base (0x805000).
     "mov DWORD PTR ds:[0x805FF0], 0x806003",
-    // pd_low[0..4] = i*0x200000 | 0x83 (PS=1, W=1, P=1 — 2 MiB huge pages)
-    "mov DWORD PTR ds:[0x806000], 0x000083",
-    "mov DWORD PTR ds:[0x806008], 0x200083",
-    "mov DWORD PTR ds:[0x806010], 0x400083",
-    "mov DWORD PTR ds:[0x806018], 0x600083",
-    "mov DWORD PTR ds:[0x806020], 0x800083",
+    // pd_low[0..16] = i*0x200000 | 0x83 (PS=1, W=1, P=1; 2 MiB huge pages)
+    "mov DWORD PTR ds:[0x806000], 0x0000083",
+    "mov DWORD PTR ds:[0x806008], 0x0200083",
+    "mov DWORD PTR ds:[0x806010], 0x0400083",
+    "mov DWORD PTR ds:[0x806018], 0x0600083",
+    "mov DWORD PTR ds:[0x806020], 0x0800083",
+    "mov DWORD PTR ds:[0x806028], 0x0A00083",
+    "mov DWORD PTR ds:[0x806030], 0x0C00083",
+    "mov DWORD PTR ds:[0x806038], 0x0E00083",
+    "mov DWORD PTR ds:[0x806040], 0x1000083",
+    "mov DWORD PTR ds:[0x806048], 0x1200083",
+    "mov DWORD PTR ds:[0x806050], 0x1400083",
+    "mov DWORD PTR ds:[0x806058], 0x1600083",
+    "mov DWORD PTR ds:[0x806060], 0x1800083",
+    "mov DWORD PTR ds:[0x806068], 0x1A00083",
+    "mov DWORD PTR ds:[0x806070], 0x1C00083",
+    "mov DWORD PTR ds:[0x806078], 0x1E00083",
     // Load PML4 physical address into CR3.
     "mov eax, 0x803000",
     "mov cr3, eax",
@@ -223,15 +327,14 @@ global_asm!(
     // -------------------------------------------------------------------
     "mov rsp, OFFSET bootloader_stack_top",
     // -------------------------------------------------------------------
-    // Step 8: Jump to kernel entry at _kernel_start.
-    // _kernel_start = 0xFFFFFFFF80100000 (defined in bootloader linker.ld).
-    // The higher-half page table maps this virtual address to physical
-    // 0x100000 where the kernel binary is loaded by GRUB2.
-    // Use an indirect register jump — no single instruction encodes a
-    // 64-bit absolute direct jump.
+    // Step 8: Hand off to Rust. `load_kernel_module_and_jump_to_entry`
+    // (defined below) walks the multiboot2 info structure to find the
+    // kernel module, copies its PT_LOAD segments to their physical
+    // destinations, and jumps to the kernel's entry point with EAX +
+    // RBX set to the multiboot2 boot ABI values the kernel expects.
+    // The Rust function never returns; the halt loop is unreachable.
     // -------------------------------------------------------------------
-    "mov rax, OFFSET _kernel_start",
-    "jmp rax",
+    "call load_kernel_module_and_jump_to_entry",
     // Halt loop — kernel entry should never return in normal operation.
     "halt_loop:",
     "cli",

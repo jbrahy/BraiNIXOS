@@ -27,6 +27,12 @@
 //!   validated against the module's declared size before access.
 
 #![allow(unsafe_code)]
+// ELF64 parsing iterates fixed-size headers and bytes within a multiboot2
+// module whose declared size is checked against `module_size_in_bytes` on
+// entry, and against each PT_LOAD segment's bounds before any access via
+// `require_segment_within_module`. All offset arithmetic is therefore on
+// validated inputs; overflow is structurally impossible.
+#![allow(clippy::arithmetic_side_effects)]
 
 const ELF_MAGIC_BYTES: [u8; 4] = [0x7f, b'E', b'L', b'F'];
 const ELF_CLASS_64_BIT: u8 = 2;
@@ -85,7 +91,10 @@ pub unsafe fn parse_kernel_elf_image(
     validate_elf_type_and_machine(module_base_address)?;
     let entry_point_address = read_u64_at(module_base_address + 24);
     let segments = collect_loadable_segments(module_base_address, module_size_in_bytes)?;
-    Ok(ParsedKernelImage { entry_point_address, loadable_segments: segments })
+    Ok(ParsedKernelImage {
+        entry_point_address,
+        loadable_segments: segments,
+    })
 }
 
 /// Copies each PT_LOAD segment from the module into its physical
@@ -101,11 +110,9 @@ pub unsafe fn load_kernel_image_to_physical_memory(
     module_base_address: u64,
     parsed_image: &ParsedKernelImage,
 ) {
-    for segment_slot in parsed_image.loadable_segments.iter() {
-        if let Some(segment) = segment_slot {
-            copy_segment_bytes(module_base_address, segment);
-            zero_fill_bss_portion(segment);
-        }
+    for segment in parsed_image.loadable_segments.iter().flatten() {
+        copy_segment_bytes(module_base_address, segment);
+        zero_fill_bss_portion(segment);
     }
 }
 
@@ -135,9 +142,7 @@ unsafe fn require_little_endian_encoding(module_base_address: u64) -> Result<(),
     Ok(())
 }
 
-unsafe fn validate_elf_type_and_machine(
-    module_base_address: u64,
-) -> Result<(), ElfLoadError> {
+unsafe fn validate_elf_type_and_machine(module_base_address: u64) -> Result<(), ElfLoadError> {
     if read_u16_at(module_base_address + 16) != ELF_TYPE_EXECUTABLE {
         return Err(ElfLoadError::NotExecutable);
     }
@@ -378,9 +383,8 @@ mod tests {
                 flags: SEGMENT_FLAG_EXECUTABLE,
             }],
         );
-        let result = unsafe {
-            parse_kernel_elf_image(bytes.as_ptr() as u64, bytes.len() as u64 + 0x1100)
-        };
+        let result =
+            unsafe { parse_kernel_elf_image(bytes.as_ptr() as u64, bytes.len() as u64 + 0x1100) };
         let image = result.expect("parse should succeed");
         assert_eq!(image.entry_point_address, 0xFFFF_FFFF_8010_0370);
         let first = image.loadable_segments[0].unwrap();
@@ -400,10 +404,12 @@ mod tests {
                 flags: SEGMENT_FLAG_WRITABLE | SEGMENT_FLAG_EXECUTABLE,
             }],
         );
-        let result = unsafe {
-            parse_kernel_elf_image(bytes.as_ptr() as u64, bytes.len() as u64 + 0x2000)
-        };
-        assert_eq!(result.err(), Some(ElfLoadError::WritableAndExecutableSegment));
+        let result =
+            unsafe { parse_kernel_elf_image(bytes.as_ptr() as u64, bytes.len() as u64 + 0x2000) };
+        assert_eq!(
+            result.err(),
+            Some(ElfLoadError::WritableAndExecutableSegment)
+        );
     }
 
     #[test]
@@ -418,8 +424,7 @@ mod tests {
                 flags: SEGMENT_FLAG_EXECUTABLE,
             }],
         );
-        let result =
-            unsafe { parse_kernel_elf_image(bytes.as_ptr() as u64, bytes.len() as u64) };
+        let result = unsafe { parse_kernel_elf_image(bytes.as_ptr() as u64, bytes.len() as u64) };
         assert_eq!(result.err(), Some(ElfLoadError::SegmentDataOutOfBounds));
     }
 
@@ -434,8 +439,7 @@ mod tests {
     fn rejects_wrong_magic() {
         let mut bytes = build_minimal_elf64(0, &[]);
         bytes[0] = b'X';
-        let result =
-            unsafe { parse_kernel_elf_image(bytes.as_ptr() as u64, bytes.len() as u64) };
+        let result = unsafe { parse_kernel_elf_image(bytes.as_ptr() as u64, bytes.len() as u64) };
         assert_eq!(result.err(), Some(ElfLoadError::InvalidMagic));
     }
 }

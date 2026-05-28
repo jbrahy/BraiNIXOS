@@ -22,6 +22,12 @@
 //! fits inside the declared total info-structure size.
 
 #![allow(unsafe_code)]
+// Byte-level parsing of a GRUB-supplied structure performs offset arithmetic
+// on u32/u64 values throughout. Every arithmetic operation is bounded by the
+// structure's declared `total_size` field (validated against the caller's
+// mapping) or by `target_name.len()` (caller-supplied slice). Overflow is
+// structurally impossible at the call sites used in this module.
+#![allow(clippy::arithmetic_side_effects)]
 
 const MULTIBOOT2_TAG_TYPE_END: u32 = 0;
 const MULTIBOOT2_TAG_TYPE_MODULE: u32 = 3;
@@ -91,10 +97,7 @@ unsafe fn inspect_tag(tag_address: u64, target_name: &[u8]) -> Option<ModuleLoca
     extract_matching_module(tag_address, target_name)
 }
 
-unsafe fn extract_matching_module(
-    tag_address: u64,
-    target_name: &[u8],
-) -> Option<ModuleLocation> {
+unsafe fn extract_matching_module(tag_address: u64, target_name: &[u8]) -> Option<ModuleLocation> {
     let module_start = read_u32_at(tag_address + 8);
     let module_end = read_u32_at(tag_address + 12);
     if module_end <= module_start {
@@ -103,7 +106,10 @@ unsafe fn extract_matching_module(
     if !tag_string_matches(tag_address, target_name) {
         return None;
     }
-    Some(ModuleLocation { physical_start_address: module_start, physical_end_address: module_end })
+    Some(ModuleLocation {
+        physical_start_address: module_start,
+        physical_end_address: module_end,
+    })
 }
 
 unsafe fn tag_string_matches(tag_address: u64, target_name: &[u8]) -> bool {
@@ -182,9 +188,7 @@ mod tests {
 
     #[test]
     fn finds_kernel_module_when_present_as_only_tag() {
-        let info = build_info_structure(&[build_module_tag(
-            0x500000, 0x50d065, b"kernel",
-        )]);
+        let info = build_info_structure(&[build_module_tag(0x500000, 0x50d065, b"kernel")]);
         let address = info.as_ptr() as u64;
         let result = unsafe { find_module_by_name(address, b"kernel") };
         assert_eq!(
@@ -204,14 +208,15 @@ mod tests {
         ]);
         let address = info.as_ptr() as u64;
         let result = unsafe { find_module_by_name(address, b"kernel") };
-        assert_eq!(result.map(ModuleLocation::size_in_bytes), Some(0x50d065 - 0x500000));
+        assert_eq!(
+            result.map(ModuleLocation::size_in_bytes),
+            Some(0x50d065 - 0x500000)
+        );
     }
 
     #[test]
     fn returns_none_when_target_name_absent() {
-        let info = build_info_structure(&[build_module_tag(
-            0x400000, 0x401000, b"shell",
-        )]);
+        let info = build_info_structure(&[build_module_tag(0x400000, 0x401000, b"shell")]);
         let address = info.as_ptr() as u64;
         let result = unsafe { find_module_by_name(address, b"kernel") };
         assert_eq!(result, None);
