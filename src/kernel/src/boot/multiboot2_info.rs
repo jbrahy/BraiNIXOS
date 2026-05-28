@@ -15,6 +15,7 @@ use crate::memory::page_type::PageType;
 use crate::memory::physical_allocator::PhysicalAllocator;
 use crate::memory::virtual_address_layout::PAGE_SIZE_IN_BYTES;
 use multiboot2::BootInformationHeader;
+use multiboot2::MemoryAreaType;
 
 /// The multiboot2 bootloader magic value placed in eax by GRUB.
 const MULTIBOOT2_BOOTLOADER_MAGIC: u32 = 0x36D76289;
@@ -143,9 +144,17 @@ fn validate_memory_map_tag_present(
     }
 }
 
-/// Iterates all memory areas in the map and registers available regions.
+/// Iterates all memory areas in the map and registers AVAILABLE regions.
+///
+/// QEMU's multiboot2 memory map includes Reserved entries at high physical
+/// addresses (e.g. the PCI hole near 0xB0000000) that must not be enrolled
+/// as Free pages — their page-frame numbers exceed `MAXIMUM_PHYSICAL_PAGES`
+/// and would index out-of-bounds in `register_physical_page`.
 fn register_memory_regions_from_map(memory_map_tag: &multiboot2::MemoryMapTag) {
     for memory_area in memory_map_tag.memory_areas() {
+        if MemoryAreaType::from(memory_area.typ()) != MemoryAreaType::Available {
+            continue;
+        }
         let region_start = memory_area.start_address();
         let region_end = memory_area.end_address();
         register_available_memory_region(region_start, region_end);

@@ -51,8 +51,16 @@ impl PhysicalAllocator {
     /// Registers a physical page with the given type.
     ///
     /// Free pages are pushed onto the free stack for later allocation.
+    ///
+    /// Pages whose frame number exceeds `MAXIMUM_PHYSICAL_PAGES` are silently
+    /// dropped. The multiboot2 memory map originates outside the TCB and can
+    /// describe regions beyond the allocator's fixed-size tables (e.g. QEMU's
+    /// PCI hole near 0xB0000000); accepting them would index out-of-bounds.
     pub fn register_physical_page(&mut self, physical_address: u64, page_type: PageType) {
         let frame_number = compute_page_frame_number(physical_address);
+        if frame_number >= MAXIMUM_PHYSICAL_PAGES {
+            return;
+        }
         self.page_type_table[frame_number] = page_type;
         self.total_pages_discovered = self.total_pages_discovered.wrapping_add(1);
         // Boot registration: stack capacity equals MAXIMUM_PHYSICAL_PAGES; overflow is structurally impossible.

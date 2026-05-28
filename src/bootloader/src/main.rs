@@ -69,6 +69,21 @@ const SAVED_MULTIBOOT2_INFO_POINTER_ADDRESS: u64 = 0x0080_9000;
 /// Null-terminated identifier used in grub.cfg `module2` lines.
 const KERNEL_MODULE_NAME: &[u8] = b"kernel";
 
+/// Scratch physical address where the bootloader copies the multiboot2
+/// information structure before loading the kernel ELF. Chosen at 12 MiB:
+/// above the bootloader image (0x800000-0x80A000), above the shell load
+/// region (0x400000+), well inside the 32 MiB identity-mapped window.
+///
+/// Why this copy is necessary: GRUB places the multiboot2 info structure
+/// (and its inline tag data: memory map entries, command line strings,
+/// module name strings) at low memory addresses chosen by GRUB. These
+/// frequently land inside the kernel's PT_LOAD destination range
+/// (0x100000-0x3CB000). Copying the kernel ELF segments into that range
+/// destroys the info structure before the kernel can parse it. By
+/// staging a copy here first, we preserve the info structure across
+/// the segment-copy step.
+const SAFE_MULTIBOOT2_INFO_SCRATCH_ADDRESS: u64 = 0x00C0_0000;
+
 /// Final stage of the bootloader: locate the kernel module that GRUB
 /// loaded for us, ELF-load its PT_LOAD segments into their physical
 /// destinations, and transfer control to the kernel's entry point
@@ -84,14 +99,13 @@ const KERNEL_MODULE_NAME: &[u8] = b"kernel";
 /// - This function never returns. On any error it halts the CPU.
 #[no_mangle]
 pub unsafe extern "C" fn load_kernel_module_and_jump_to_entry() -> ! {
-    let information_structure_address = read_saved_multiboot2_info_pointer();
-    let kernel_module = locate_kernel_module(information_structure_address);
+    let original_information_address = read_saved_multiboot2_info_pointer();
+    let kernel_module = locate_kernel_module(original_information_address);
     let parsed_image = parse_kernel_image(kernel_module);
+    let safe_information_address =
+        copy_multiboot2_info_to_safe_scratch(original_information_address);
     load_kernel_image(kernel_module, &parsed_image);
-    jump_to_kernel_entry(
-        parsed_image.entry_point_address,
-        information_structure_address,
-    );
+    jump_to_kernel_entry(parsed_image.entry_point_address, safe_information_address);
 }
 
 unsafe fn read_saved_multiboot2_info_pointer() -> u64 {
@@ -118,6 +132,36 @@ unsafe fn parse_kernel_image(kernel_module: ModuleLocation) -> ParsedKernelImage
 unsafe fn load_kernel_image(kernel_module: ModuleLocation, parsed_image: &ParsedKernelImage) {
     let module_base_address = u64::from(kernel_module.physical_start_address);
     elf_loader::load_kernel_image_to_physical_memory(module_base_address, parsed_image);
+}
+
+/// Copies the multiboot2 info structure from its GRUB-assigned address
+/// to `SAFE_MULTIBOOT2_INFO_SCRATCH_ADDRESS` and returns the scratch
+/// address. Reads `total_size` from the first u32 of the structure.
+///
+/// Must be called before `load_kernel_image_to_physical_memory`, which
+/// may overwrite the original structure's bytes.
+#[allow(clippy::arithmetic_side_effects)]
+unsafe fn copy_multiboot2_info_to_safe_scratch(source_address: u64) -> u64 {
+    let total_size_pointer = source_address as *const u32;
+    let total_size_in_bytes = u64::from(core::ptr::read_volatile(total_size_pointer));
+    copy_bytes_byte_at_a_time(
+        source_address,
+        SAFE_MULTIBOOT2_INFO_SCRATCH_ADDRESS,
+        total_size_in_bytes,
+    );
+    SAFE_MULTIBOOT2_INFO_SCRATCH_ADDRESS
+}
+
+#[allow(clippy::arithmetic_side_effects)]
+unsafe fn copy_bytes_byte_at_a_time(
+    source_address: u64,
+    destination_address: u64,
+    byte_count: u64,
+) {
+    for byte_offset in 0..byte_count {
+        let source_byte = core::ptr::read_volatile((source_address + byte_offset) as *const u8);
+        core::ptr::write_volatile((destination_address + byte_offset) as *mut u8, source_byte);
+    }
 }
 
 unsafe fn jump_to_kernel_entry(entry_point_address: u64, information_pointer: u64) -> ! {
