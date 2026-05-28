@@ -78,6 +78,11 @@ docker-compose.override.yml
 
 # Compiled bootloader binary (built artifact, not source)
 iso/boot/brainix-bootloader
+iso/boot/kernel.elf
+iso/boot/shell.elf
+
+# Nested cargo target dirs (fuzz/, etc.) — top-level /target/ already ignored
+fuzz/target/
 
 # the build toolchain session data
 .assistant/
