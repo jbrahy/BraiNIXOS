@@ -114,21 +114,35 @@ global_asm!(
     // -------------------------------------------------------------------
     // Step 2: Build page tables using hardcoded physical addresses.
     //
-    // Identity map: virtual 0x0..0x200000 -> physical 0x0..0x200000
+    // Identity map: virtual 0x0..0xA00000 -> physical 0x0..0xA00000
     //   PML4[0]    (at 0x803000) -> pdpt_identity (0x804000)
     //   pdpt_identity[0] (at 0x804000) -> pd_low (0x806000)
     //
-    // Higher-half map: virtual 0xFFFFFFFF80000000 -> physical 0x0
+    // Higher-half map: virtual 0xFFFFFFFF80000000..0xFFFFFFFF80A00000
+    //   -> physical 0x0..0xA00000 (shares pd_low; same 5 huge pages)
     //   PML4[511]  (at 0x803FF8) -> pdpt_high (0x805000)
     //   pdpt_high[510] (at 0x805FF0) -> pd_low (0x806000)
-    //   pd_low[0]  (at 0x806000) = 0x83 (2MB page, present+writable+PS)
+    //   pd_low[0..4]  (at 0x806000+i*8) = i*0x200000 | 0x83
     //
-    // Kernel at 0xFFFFFFFF80100000 maps to physical 0x100000 (same 2MB).
+    // Coverage rationale:
+    //   - pd_low[0] (phys 0..0x200000): low memory + start of kernel (.text
+    //     entry at 0x100370). Maps the kernel virt 0xFFFFFFFF80100000.
+    //   - pd_low[1] (phys 0x200000..0x400000): kernel .rodata/.data and
+    //     start of .bss (kernel .bss ends at 0x3CBAFE).
+    //   - pd_low[2] (phys 0x400000..0x600000): shell module load region
+    //     (Phase 14-02 placed shell at 0x400000).
+    //   - pd_low[3] (phys 0x600000..0x800000): scratch / GRUB module spill.
+    //   - pd_low[4] (phys 0x800000..0xA00000): bootloader's own image
+    //     (.text/.data/.bss live here after the 0x800000 relocate).
+    //
+    // Note: identity and higher-half share the same pd_low. The bootloader
+    // is therefore visible at both virt 0x800000 and virt 0xFFFFFFFF80800000
+    // during boot. This is a benign temporary mapping that disappears when
+    // the kernel installs its own KPTI page tables in Phase 2.
     //
     // All page table entries: Present=1 (bit 0), Writable=1 (bit 1).
     // PD entries: PS=1 (bit 7) for 2MB huge pages (no PT level needed).
     //
-    // 0x803 = pdpt_identity | P+W bits (used as constant 0x804003)
     // 0xFF8 = index 511 * 8 bytes = byte offset in PML4 for index 511
     // 0xFF0 = index 510 * 8 bytes = byte offset in PDPT for index 510
     // -------------------------------------------------------------------
@@ -143,8 +157,12 @@ global_asm!(
     // pdpt_high[510] = 0x806003 (pd_low physical address | P | W)
     // PDPT index 510 is at offset 510*8 = 0xFF0 from PDPT base (0x805000).
     "mov DWORD PTR ds:[0x805FF0], 0x806003",
-    // pd_low[0] = 0x83 (phys addr 0x0 | PS=1 | W=1 | P=1 = 2MB at phys 0)
-    "mov DWORD PTR ds:[0x806000], 0x83",
+    // pd_low[0..4] = i*0x200000 | 0x83 (PS=1, W=1, P=1 — 2 MiB huge pages)
+    "mov DWORD PTR ds:[0x806000], 0x000083",
+    "mov DWORD PTR ds:[0x806008], 0x200083",
+    "mov DWORD PTR ds:[0x806010], 0x400083",
+    "mov DWORD PTR ds:[0x806018], 0x600083",
+    "mov DWORD PTR ds:[0x806020], 0x800083",
     // Load PML4 physical address into CR3.
     "mov eax, 0x803000",
     "mov cr3, eax",
