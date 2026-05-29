@@ -115,10 +115,7 @@ impl HistoryRing {
     /// Returns the entry that is `offset_from_newest` positions back from
     /// the most recent (0 = newest). `None` if the offset exceeds the
     /// number of stored entries.
-    pub fn entry_at_offset_from_newest(
-        &self,
-        offset_from_newest: usize,
-    ) -> Option<&HistoryEntry> {
+    pub fn entry_at_offset_from_newest(&self, offset_from_newest: usize) -> Option<&HistoryEntry> {
         if offset_from_newest >= self.entry_count {
             return None;
         }
@@ -127,8 +124,7 @@ impl HistoryRing {
     }
 
     fn advance_write_index(&mut self) {
-        self.next_write_index =
-            self.next_write_index.saturating_add(1) & HISTORY_ENTRY_INDEX_MASK;
+        self.next_write_index = self.next_write_index.saturating_add(1) & HISTORY_ENTRY_INDEX_MASK;
     }
 
     fn bump_entry_count_up_to_capacity(&mut self) {

@@ -150,9 +150,7 @@ mod tests {
     fn emit_erase_repeated_three_writes_nine_bytes() {
         let mut sink = CapturingByteSink::new();
         emit_erase_last_character_repeated(&mut sink, 3);
-        let expected = [
-            0x08, 0x20, 0x08, 0x08, 0x20, 0x08, 0x08, 0x20, 0x08,
-        ];
+        let expected = [0x08, 0x20, 0x08, 0x08, 0x20, 0x08, 0x08, 0x20, 0x08];
         assert_eq!(sink.captured_bytes(), &expected);
     }
 
