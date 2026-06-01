@@ -36,9 +36,15 @@ pub enum CredentialCheck {
 pub trait CredentialAuthority {
     /// Checks `password` for `username`.
     fn check_password(&self, username: &[u8], password: &[u8]) -> CredentialCheck;
-    /// Sets a new password for `username`, clearing the force-change flag.
-    /// Returns false if the authority refuses (e.g. unknown user).
-    fn set_password(&mut self, username: &[u8], new_password: &[u8]) -> bool;
+    /// Sets a new password for `username`, proving authority with the
+    /// `current_password` (the authority re-verifies it). Clears the
+    /// force-change flag. Returns false if the proof is wrong or refused.
+    fn set_password(
+        &mut self,
+        username: &[u8],
+        current_password: &[u8],
+        new_password: &[u8],
+    ) -> bool;
 }
 
 /// Which line the flow is currently waiting for.
@@ -91,6 +97,9 @@ pub struct LoginFlow {
     stage: LoginStage,
     username: StoredLine,
     pending_new_password: StoredLine,
+    /// The current password the user proved at login, retained so a forced
+    /// change can present it to the authority as proof of authority.
+    verified_password: StoredLine,
 }
 
 impl LoginFlow {
@@ -101,6 +110,7 @@ impl LoginFlow {
             stage: LoginStage::AwaitingUsername,
             username: StoredLine::new(),
             pending_new_password: StoredLine::new(),
+            verified_password: StoredLine::new(),
         }
     }
 
@@ -140,7 +150,11 @@ impl LoginFlow {
         write_carriage_return_line_feed(sink);
         match authority.check_password(self.username.as_slice(), line) {
             CredentialCheck::Accepted => self.finish_authenticated(sink),
-            CredentialCheck::AcceptedMustChange => self.begin_forced_change(sink),
+            CredentialCheck::AcceptedMustChange => {
+                // Retain the just-proven password to authorize the forced change.
+                self.verified_password.store(line);
+                self.begin_forced_change(sink)
+            }
             CredentialCheck::Rejected => self.reject_and_restart(sink),
         }
     }
@@ -170,7 +184,11 @@ impl LoginFlow {
             write_byte_slice(sink, NEW_PASSWORD_PROMPT);
             return LoginProgress::NeedMoreInput;
         }
-        authority.set_password(self.username.as_slice(), line);
+        authority.set_password(
+            self.username.as_slice(),
+            self.verified_password.as_slice(),
+            line,
+        );
         self.finish_authenticated(sink)
     }
 
@@ -197,6 +215,7 @@ impl LoginFlow {
         self.stage = LoginStage::AwaitingUsername;
         self.username = StoredLine::new();
         self.pending_new_password = StoredLine::new();
+        self.verified_password = StoredLine::new();
         write_byte_slice(sink, USERNAME_PROMPT);
         LoginProgress::NeedMoreInput
     }
@@ -274,11 +293,20 @@ impl CredentialAuthority for InMemoryCredentialAuthority {
         }
     }
 
-    fn set_password(&mut self, username: &[u8], new_password: &[u8]) -> bool {
+    fn set_password(
+        &mut self,
+        username: &[u8],
+        current_password: &[u8],
+        new_password: &[u8],
+    ) -> bool {
         let index = match self.account_index_for(username) {
             Some(index) => index,
             None => return false,
         };
+        // Proof of authority: the current password must match.
+        if self.accounts[index].password.as_slice() != current_password {
+            return false;
+        }
         self.accounts[index].password.store(new_password);
         self.accounts[index].must_change_password = false;
         true
@@ -343,8 +371,13 @@ mod tests {
             }
         }
 
-        fn set_password(&mut self, username: &[u8], new_password: &[u8]) -> bool {
-            if username != b"root" {
+        fn set_password(
+            &mut self,
+            username: &[u8],
+            current_password: &[u8],
+            new_password: &[u8],
+        ) -> bool {
+            if username != b"root" || current_password != self.root_password_slice() {
                 return false;
             }
             self.store_root_password(new_password);
@@ -464,7 +497,10 @@ mod tests {
             authority.check_password(b"nobody", b"brainxos"),
             CredentialCheck::Rejected
         );
-        assert!(authority.set_password(b"jbrahy", b"newpass"));
+        // Wrong current password is refused (no privilege escalation).
+        assert!(!authority.set_password(b"jbrahy", b"wrongcurrent", b"newpass"));
+        // Correct current password authorizes the change.
+        assert!(authority.set_password(b"jbrahy", b"brainxos", b"newpass"));
         assert_eq!(
             authority.check_password(b"jbrahy", b"newpass"),
             CredentialCheck::Accepted

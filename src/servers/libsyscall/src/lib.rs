@@ -503,12 +503,22 @@ pub fn syscall_auth_login(_username: &[u8], _password: &[u8]) -> i64 {
     -1
 }
 
-/// Sets a new password for `username` in the kernel credential store, clearing
-/// the force-change flag and persisting to disk. Returns 0 on success, -1 on
-/// failure. Same ABI as `syscall_auth_login`.
+/// Sets a new password for `username`, proving authority with `current_password`
+/// (the kernel verifies it before changing — preventing password changes by a
+/// caller that cannot already authenticate as the user). Clears the force-change
+/// flag and persists to disk. Returns 0 on success, -1 on failure.
+///
+/// ABI: r8 = username ptr, r9 = current-password ptr, r10 = new-password ptr,
+/// rdx = (username_len << 16) | (current_len << 8) | new_len.
 #[cfg(target_arch = "x86_64")]
-pub fn syscall_auth_set_password(username: &[u8], new_password: &[u8]) -> i64 {
-    let packed_lengths = pack_credential_lengths(username.len(), new_password.len());
+pub fn syscall_auth_set_password(
+    username: &[u8],
+    current_password: &[u8],
+    new_password: &[u8],
+) -> i64 {
+    let packed_lengths = ((username.len() as u64) << 16)
+        | ((current_password.len() as u64 & 0xFF) << 8)
+        | (new_password.len() as u64 & 0xFF);
     let return_value: i64;
     // SAFETY: SYSCALL transfers control to the kernel, which reads the buffers
     // via bounded copy_from_user. The slices remain live across the call.
@@ -517,8 +527,9 @@ pub fn syscall_auth_set_password(username: &[u8], new_password: &[u8]) -> i64 {
             "syscall",
             in("rax") SYSCALL_NUMBER_AUTH_SET_PASSWORD,
             in("r8") username.as_ptr() as u64,
-            in("r9") packed_lengths,
+            in("r9") current_password.as_ptr() as u64,
             in("r10") new_password.as_ptr() as u64,
+            in("rdx") packed_lengths,
             lateout("rax") return_value,
             out("rcx") _,
             out("r11") _,
@@ -530,6 +541,10 @@ pub fn syscall_auth_set_password(username: &[u8], new_password: &[u8]) -> i64 {
 
 /// Host-target stub for syscall_auth_set_password.
 #[cfg(not(target_arch = "x86_64"))]
-pub fn syscall_auth_set_password(_username: &[u8], _new_password: &[u8]) -> i64 {
+pub fn syscall_auth_set_password(
+    _username: &[u8],
+    _current_password: &[u8],
+    _new_password: &[u8],
+) -> i64 {
     -1
 }

@@ -47,8 +47,13 @@ impl CredentialAuthority for KernelCredentialAuthority {
         }
     }
 
-    fn set_password(&mut self, username: &[u8], new_password: &[u8]) -> bool {
-        syscall_auth_set_password(username, new_password) == 0
+    fn set_password(
+        &mut self,
+        username: &[u8],
+        current_password: &[u8],
+        new_password: &[u8],
+    ) -> bool {
+        syscall_auth_set_password(username, current_password, new_password) == 0
     }
 }
 
