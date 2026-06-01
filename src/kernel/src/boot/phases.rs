@@ -86,6 +86,7 @@ fn initialize_page_tables(boot_step_logger: &mut BootStepLogger) {
 fn activate_ipc_subsystem(boot_step_logger: &mut BootStepLogger) {
     let kernel_pml4_physical_address = kernel_page_map_level_4_physical_address();
     initialize_ipc_subsystem(kernel_pml4_physical_address);
+    crate::arch::syscall_trampoline::record_kernel_trampoline_state();
     boot_step_logger.ok("IPC subsystem initialized (CR3 loaded, SYSCALL entry installed)");
 }
 

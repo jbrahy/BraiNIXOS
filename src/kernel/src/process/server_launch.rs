@@ -248,6 +248,11 @@ fn build_loaded_process(
     let layout = build_layout_for_loaded_process(entry_point)?;
     let user_page_map_level_4 = acquire_fresh_user_page_map_level_4();
     load_segments_and_stack(user_page_map_level_4, elf_module_bytes, segments, &layout)?;
+    // SAFETY: single-core boot; exclusive access to the freshly-built PML4. Maps
+    // the supervisor-only KPTI trampoline pages so this process can syscall.
+    unsafe {
+        crate::arch::syscall_trampoline::map_trampoline_into_user_page_table(user_page_map_level_4);
+    }
     let user_page_table_physical_address =
         compute_user_page_table_physical_address(user_page_map_level_4);
     let handle =

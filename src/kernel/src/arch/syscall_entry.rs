@@ -169,6 +169,15 @@ pub extern "C" fn is_canonical_virtual_address(address: u64) -> bool {
 global_asm!(
     ".global syscall_entry_point",
     "syscall_entry_point:",
+    // KPTI entry: the CPU arrived here on the USER page table and USER stack.
+    // Swap to the kernel page table and the ring-0 stack before touching any
+    // kernel memory. rcx (return RIP) and r11 (RFLAGS) must be preserved.
+    "mov %rsp, SYSCALL_TRAMPOLINE_SCRATCH+24(%rip)", // save user rsp
+    "mov %rax, SYSCALL_TRAMPOLINE_SCRATCH+32(%rip)", // spill rax to free a register
+    "mov SYSCALL_TRAMPOLINE_SCRATCH+0(%rip), %rax",  // kernel CR3
+    "mov %rax, %cr3",                                 // -> kernel page table (kernel now mapped)
+    "mov SYSCALL_TRAMPOLINE_SCRATCH+8(%rip), %rsp",  // kernel RSP0
+    "mov SYSCALL_TRAMPOLINE_SCRATCH+32(%rip), %rax", // restore rax
     // SYSCALL clobbers rcx (return RIP) and r11 (RFLAGS). Save them first.
     "push %rcx",
     "push %r11",
@@ -233,14 +242,44 @@ global_asm!(
     "xor %r13, %r13",
     "xor %r14, %r14",
     "xor %r15, %r15",
+    // KPTI exit: rax holds the return code, rcx the return RIP, r11 the RFLAGS.
+    // Swap back to the user page table and the user stack, then SYSRET.
+    "mov %rax, SYSCALL_TRAMPOLINE_SCRATCH+32(%rip)", // save return code
+    "mov SYSCALL_TRAMPOLINE_SCRATCH+16(%rip), %rax", // user CR3
+    "mov %rax, %cr3",                                 // -> user page table
+    "mov SYSCALL_TRAMPOLINE_SCRATCH+24(%rip), %rsp", // restore user rsp
+    "mov SYSCALL_TRAMPOLINE_SCRATCH+32(%rip), %rax", // restore return code
     // SYSRET restores RIP from rcx and RFLAGS from r11 (both pre-verified canonical).
     "sysretq",
     ".Liretq_fallback:",
-    // Phase 4: no real userspace exists. A non-canonical return RIP cannot occur
-    // in normal operation. If this path is reached, halt rather than attempt IRETQ
-    // frame construction without a saved user RSP (Phase 5 adds GS-based stack
-    // switching and will implement this path correctly).
+    // A non-canonical return RIP cannot occur for a correctly-built userspace
+    // binary. Halt rather than attempt an IRETQ frame here.
     "hlt",
+    // First entry to ring 3: rdi=entry RIP, rsi=user RSP, rdx=user CR3. Runs on
+    // the kernel page table until the `mov %rdx,%cr3`; the rest executes from this
+    // (user-mapped) trampoline page under the user page table.
+    ".global enter_userspace_trampoline",
+    "enter_userspace_trampoline:",
+    "mov %rdx, SYSCALL_TRAMPOLINE_SCRATCH+16(%rip)", // record user CR3 for later exits
+    "mov %rsi, SYSCALL_TRAMPOLINE_SCRATCH+24(%rip)", // user rsp
+    "mov %rdi, %rcx",                                 // SYSRET loads RIP from rcx
+    "mov $0x202, %r11",                               // RFLAGS: IF set (bit 9) + reserved bit 1
+    "mov %rdx, %cr3",                                 // -> user page table
+    "mov SYSCALL_TRAMPOLINE_SCRATCH+24(%rip), %rsp",  // load user rsp
+    "xor %rax, %rax",
+    "xor %rbx, %rbx",
+    "xor %rdx, %rdx",
+    "xor %rsi, %rsi",
+    "xor %rdi, %rdi",
+    "xor %rbp, %rbp",
+    "xor %r8, %r8",
+    "xor %r9, %r9",
+    "xor %r10, %r10",
+    "xor %r12, %r12",
+    "xor %r13, %r13",
+    "xor %r14, %r14",
+    "xor %r15, %r15",
+    "sysretq",
     options(att_syntax),
 );
 

@@ -8,3 +8,6 @@ pub mod timer;
 
 #[cfg(target_arch = "x86_64")]
 pub mod syscall_entry;
+
+#[cfg(target_arch = "x86_64")]
+pub mod syscall_trampoline;
