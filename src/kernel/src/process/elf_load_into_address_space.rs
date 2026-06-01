@@ -20,6 +20,9 @@ use x86_64::PhysAddr;
 use crate::arch::paging::kernel_page_table;
 use crate::boot::multiboot2_info::global_physical_allocator_pointer;
 use crate::memory::virtual_address_layout::{DIRECT_MAP_REGION_START, PAGE_SIZE_IN_BYTES};
+use crate::process::address_space::{
+    compute_stack_bottom_address, compute_total_stack_pages, ProcessAddressSpaceLayout,
+};
 use crate::process::elf_loader::{
     translate_segment_flags_to_user_page_permissions, ElfLoadError, LoadableSegment,
     UserPageMappingPermissions,
@@ -218,4 +221,52 @@ unsafe fn resolve_user_virtual_to_physical(
 ) -> Result<u64, ElfLoadError> {
     kernel_page_table::resolve_mapped_physical_address(user_page_map_level_4, virtual_address)
         .map_err(|_| ElfLoadError::UserPageTableWalkFailed)
+}
+
+/// Allocates `compute_total_stack_pages()` user pages from the physical
+/// allocator and maps them into `user_page_map_level_4` at the stack
+/// region defined by `layout`. The guard page (`layout.guard_page_virtual_address`)
+/// is intentionally left unmapped — INV-MEM-007 is structural.
+///
+/// # Safety
+/// Called only during boot, single-core, no concurrent access to the
+/// global physical allocator or the supplied PML4.
+#[allow(clippy::arithmetic_side_effects)]
+pub unsafe fn map_stack_pages_in_user_page_table(
+    user_page_map_level_4: &mut PageTable,
+    layout: &ProcessAddressSpaceLayout,
+) -> Result<(), ElfLoadError> {
+    let stack_page_flags = build_user_stack_page_flags();
+    let stack_bottom = compute_stack_bottom_address();
+    let stack_page_count = compute_total_stack_pages();
+    map_stack_pages_in_range(
+        user_page_map_level_4,
+        stack_bottom,
+        stack_page_count,
+        stack_page_flags,
+    )?;
+    let _ = layout;
+    Ok(())
+}
+
+fn build_user_stack_page_flags() -> PageTableFlags {
+    PageTableFlags::PRESENT
+        | PageTableFlags::WRITABLE
+        | PageTableFlags::NO_EXECUTE
+        | PageTableFlags::USER_ACCESSIBLE
+}
+
+#[allow(clippy::arithmetic_side_effects)]
+unsafe fn map_stack_pages_in_range(
+    user_page_map_level_4: &mut PageTable,
+    stack_bottom_virtual_address: u64,
+    stack_page_count: usize,
+    page_flags: PageTableFlags,
+) -> Result<(), ElfLoadError> {
+    for stack_page_index in 0..stack_page_count {
+        let virtual_address = stack_bottom_virtual_address
+            + (stack_page_index as u64) * (PAGE_SIZE_IN_BYTES as u64);
+        allocate_and_map_one_page(user_page_map_level_4, virtual_address, page_flags)?;
+    }
+    Ok(())
 }
