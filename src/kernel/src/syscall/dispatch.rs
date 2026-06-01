@@ -20,9 +20,9 @@ use crate::ipc::{
     SYSCALL_NUMBER_NOTIFY_POLL, SYSCALL_NUMBER_NOTIFY_SIGNAL, SYSCALL_NUMBER_NOTIFY_WAIT,
 };
 use brainix_libsyscall::{
-    SYSCALL_NUMBER_AUDIT_READ, SYSCALL_NUMBER_DEVICE_MAP_MMIO, SYSCALL_NUMBER_FRAME_MAP,
-    SYSCALL_NUMBER_IRQ_BIND, SYSCALL_NUMBER_PROCESS_EXIT, SYSCALL_NUMBER_SERIAL_READ_BYTE,
-    SYSCALL_NUMBER_SERIAL_WRITE_BYTE,
+    SYSCALL_NUMBER_AUDIT_READ, SYSCALL_NUMBER_AUTH_LOGIN, SYSCALL_NUMBER_AUTH_SET_PASSWORD,
+    SYSCALL_NUMBER_DEVICE_MAP_MMIO, SYSCALL_NUMBER_FRAME_MAP, SYSCALL_NUMBER_IRQ_BIND,
+    SYSCALL_NUMBER_PROCESS_EXIT, SYSCALL_NUMBER_SERIAL_READ_BYTE, SYSCALL_NUMBER_SERIAL_WRITE_BYTE,
 };
 
 /// Issues LFENCE then routes IPC syscall numbers (1-3) to their handlers.
@@ -115,6 +115,10 @@ fn handle_server_range_syscall(syscall_number: u64, thread_identifier: u32) -> O
         }
         SYSCALL_NUMBER_SERIAL_WRITE_BYTE => {
             Some(super::serial_write::handle_serial_write_byte_syscall())
+        }
+        SYSCALL_NUMBER_AUTH_LOGIN => Some(super::auth_syscalls::handle_auth_login_syscall()),
+        SYSCALL_NUMBER_AUTH_SET_PASSWORD => {
+            Some(super::auth_syscalls::handle_auth_set_password_syscall())
         }
         _ => None,
     }

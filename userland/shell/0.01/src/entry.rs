@@ -17,7 +17,9 @@
 //!
 //! No allocation, no unsafe; every function body ≤ 6 executable lines.
 
-use brainix_libsyscall::{syscall_process_exit, syscall_serial_read_byte};
+use brainix_libsyscall::{
+    syscall_auth_login, syscall_auth_set_password, syscall_process_exit, syscall_serial_read_byte,
+};
 
 use crate::display::{
     echo_printable_byte, emit_erase_last_character, emit_erase_last_character_repeated,
@@ -28,8 +30,27 @@ use crate::history::{HistoryNavigationCursor, HistoryRing};
 use crate::input_decoder::{decode_next_byte, InputDecoderState, InputEvent};
 use crate::line_buffer::CurrentLineBuffer;
 use crate::login::{
-    InMemoryCredentialAuthority, LoginFlow, LoginProgress, MAXIMUM_CREDENTIAL_LINE_LENGTH,
+    CredentialAuthority, CredentialCheck, LoginFlow, LoginProgress, MAXIMUM_CREDENTIAL_LINE_LENGTH,
 };
+
+/// A [`CredentialAuthority`] backed by the kernel auth syscalls. Verification
+/// and password changes happen in the kernel TCB against the persistent
+/// credential store; the shell only relays the typed bytes.
+struct KernelCredentialAuthority;
+
+impl CredentialAuthority for KernelCredentialAuthority {
+    fn check_password(&self, username: &[u8], password: &[u8]) -> CredentialCheck {
+        match syscall_auth_login(username, password) {
+            0 => CredentialCheck::Accepted,
+            1 => CredentialCheck::AcceptedMustChange,
+            _ => CredentialCheck::Rejected,
+        }
+    }
+
+    fn set_password(&mut self, username: &[u8], new_password: &[u8]) -> bool {
+        syscall_auth_set_password(username, new_password) == 0
+    }
+}
 
 /// One-line v0.02 greeting written immediately before the first prompt.
 const GREETING_BANNER_BYTES: &[u8] =
@@ -77,10 +98,10 @@ pub fn shell_main() -> ! {
 /// assembles each line, and drives the [`LoginFlow`] until it authenticates.
 /// Username bytes echo; password bytes do not.
 ///
-/// MVP: the authority verifies in-process (see [`InMemoryCredentialAuthority`]).
-/// Hardening to kernel-syscall verification + on-disk persistence is follow-up.
+/// Verification + password changes run in the kernel TCB via the auth syscalls
+/// (see [`KernelCredentialAuthority`]); the persistent credential store backs them.
 fn run_login_gate<S: ByteSink>(sink: &mut S) {
-    let mut authority = InMemoryCredentialAuthority::with_default_accounts();
+    let mut authority = KernelCredentialAuthority;
     let mut flow = LoginFlow::start(sink);
     let mut line_buffer = [0u8; MAXIMUM_CREDENTIAL_LINE_LENGTH];
     let mut line_length: usize = 0;
@@ -105,9 +126,9 @@ fn run_login_gate<S: ByteSink>(sink: &mut S) {
 
 /// Feeds one received byte into the login line assembler. Returns true once the
 /// flow reports the user is authenticated.
-fn drive_login_with_byte<S: ByteSink>(
+fn drive_login_with_byte<S: ByteSink, A: CredentialAuthority>(
     flow: &mut LoginFlow,
-    authority: &mut InMemoryCredentialAuthority,
+    authority: &mut A,
     sink: &mut S,
     line_buffer: &mut [u8; MAXIMUM_CREDENTIAL_LINE_LENGTH],
     line_length: &mut usize,
@@ -122,9 +143,9 @@ fn drive_login_with_byte<S: ByteSink>(
 
 /// Submits the assembled line to the flow, echoing CR/LF only while the visible
 /// username is being entered (the flow emits its own CR/LF for secret lines).
-fn submit_login_line<S: ByteSink>(
+fn submit_login_line<S: ByteSink, A: CredentialAuthority>(
     flow: &mut LoginFlow,
-    authority: &mut InMemoryCredentialAuthority,
+    authority: &mut A,
     sink: &mut S,
     line_buffer: &mut [u8; MAXIMUM_CREDENTIAL_LINE_LENGTH],
     line_length: &mut usize,

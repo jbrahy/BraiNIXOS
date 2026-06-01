@@ -455,3 +455,81 @@ pub fn syscall_serial_write_byte(byte_value: u8) -> i64 {
 pub fn syscall_serial_write_byte(_byte_value: u8) -> i64 {
     0
 }
+
+/// Syscall number for sys_auth_login.
+pub const SYSCALL_NUMBER_AUTH_LOGIN: u64 = 14;
+
+/// Syscall number for sys_auth_set_password.
+pub const SYSCALL_NUMBER_AUTH_SET_PASSWORD: u64 = 15;
+
+/// Packs two buffer lengths into one register: username in the high 32 bits,
+/// password (or new password) in the low 32 bits.
+#[inline]
+fn pack_credential_lengths(username_length: usize, password_length: usize) -> u64 {
+    ((username_length as u64) << 32) | (password_length as u64 & 0xFFFF_FFFF)
+}
+
+/// Verifies a login against the kernel credential store. Returns 0 if accepted,
+/// 1 if accepted but the password must be changed, -1 if rejected.
+///
+/// The kernel reads `username`/`password` from this process's memory by virtual
+/// address + length (ABI: r8 = username ptr, r9 = packed lengths, r10 =
+/// password ptr). Verification happens in the kernel TCB, not here.
+#[cfg(target_arch = "x86_64")]
+pub fn syscall_auth_login(username: &[u8], password: &[u8]) -> i64 {
+    let packed_lengths = pack_credential_lengths(username.len(), password.len());
+    let return_value: i64;
+    // SAFETY: SYSCALL transfers control to the kernel, which reads the buffers
+    // via bounded copy_from_user. The slices remain live across the call.
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") SYSCALL_NUMBER_AUTH_LOGIN,
+            in("r8") username.as_ptr() as u64,
+            in("r9") packed_lengths,
+            in("r10") password.as_ptr() as u64,
+            lateout("rax") return_value,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack)
+        );
+    }
+    return_value
+}
+
+/// Host-target stub for syscall_auth_login.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn syscall_auth_login(_username: &[u8], _password: &[u8]) -> i64 {
+    -1
+}
+
+/// Sets a new password for `username` in the kernel credential store, clearing
+/// the force-change flag and persisting to disk. Returns 0 on success, -1 on
+/// failure. Same ABI as `syscall_auth_login`.
+#[cfg(target_arch = "x86_64")]
+pub fn syscall_auth_set_password(username: &[u8], new_password: &[u8]) -> i64 {
+    let packed_lengths = pack_credential_lengths(username.len(), new_password.len());
+    let return_value: i64;
+    // SAFETY: SYSCALL transfers control to the kernel, which reads the buffers
+    // via bounded copy_from_user. The slices remain live across the call.
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") SYSCALL_NUMBER_AUTH_SET_PASSWORD,
+            in("r8") username.as_ptr() as u64,
+            in("r9") packed_lengths,
+            in("r10") new_password.as_ptr() as u64,
+            lateout("rax") return_value,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack)
+        );
+    }
+    return_value
+}
+
+/// Host-target stub for syscall_auth_set_password.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn syscall_auth_set_password(_username: &[u8], _new_password: &[u8]) -> i64 {
+    -1
+}

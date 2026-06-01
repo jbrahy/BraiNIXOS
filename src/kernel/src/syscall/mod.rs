@@ -15,3 +15,7 @@ pub mod process_exit;
 pub mod serial_read;
 #[cfg(target_arch = "x86_64")]
 pub mod serial_write;
+#[cfg(target_arch = "x86_64")]
+pub mod user_memory;
+#[cfg(target_arch = "x86_64")]
+pub mod auth_syscalls;

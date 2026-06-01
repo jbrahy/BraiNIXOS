@@ -66,6 +66,14 @@ pub fn set_active_user_page_table(user_page_table_physical_address: u64) {
     }
 }
 
+/// Returns the active user CR3 (the current process's PML4 physical address)
+/// the trampoline last recorded. Used by syscall handlers to translate
+/// user-supplied pointers (copy_from_user) against the caller's address space.
+pub fn active_user_page_table() -> u64 {
+    // SAFETY: single-core, non-preemptible userspace; read-only access.
+    unsafe { (*core::ptr::addr_of!(SYSCALL_TRAMPOLINE_SCRATCH))[2] }
+}
+
 #[allow(clippy::arithmetic_side_effects)]
 fn align_down_to_page(virtual_address: u64) -> u64 {
     virtual_address & !0xFFF
