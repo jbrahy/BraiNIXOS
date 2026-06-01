@@ -41,6 +41,24 @@ pub enum ElfLoadError {
     SegmentOutOfBounds,
     /// A PT_LOAD segment has both the Write and Execute permission flags set (W^X violation).
     WritableAndExecutableSegment,
+    /// A program header has a `p_type` other than PT_LOAD. Whitelist: only
+    /// PT_LOAD is accepted. Rejects PT_DYNAMIC, PT_INTERP, PT_TLS, PT_NOTE,
+    /// PT_PHDR, PT_GNU_RELRO, PT_GNU_STACK, PT_GNU_EH_FRAME, and unknowns.
+    /// See docs/superpowers/specs/2026-05-31-userspace-elf-loading-design.md.
+    UnsupportedProgramHeaderType,
+    /// A PT_LOAD segment's flags combination is not one of the four
+    /// acceptable shapes (R / RX / RW). PF_R must always be set; any
+    /// other combination returns this error.
+    UnsupportedSegmentFlags,
+    /// The ELF header's `e_entry` is not a canonical user-space virtual
+    /// address. User-space canonical range: 0x0 .. 0x0000_7FFF_FFFF_FFFF.
+    EntryPointNotCanonical,
+    /// The physical allocator returned `None` while servicing a request
+    /// to back one of the segment's pages.
+    PageAllocationFailed,
+    /// Could not allocate an intermediate PML4 / PDPT / PD / PT bootstrap
+    /// page for the user page-table walk while mapping a segment.
+    UserPageTableWalkFailed,
 }
 
 /// A loadable ELF64 segment extracted from a PT_LOAD program header.
@@ -519,5 +537,35 @@ mod tests {
         header[39] = offset_bytes[7];
         let result = extract_loadable_segments(&header);
         assert_eq!(result, Err(ElfLoadError::SegmentOutOfBounds));
+    }
+
+    #[test]
+    fn elf_load_error_includes_unsupported_program_header_type_variant() {
+        let error = ElfLoadError::UnsupportedProgramHeaderType;
+        assert_ne!(error, ElfLoadError::WritableAndExecutableSegment);
+    }
+
+    #[test]
+    fn elf_load_error_includes_unsupported_segment_flags_variant() {
+        let error = ElfLoadError::UnsupportedSegmentFlags;
+        assert_ne!(error, ElfLoadError::WritableAndExecutableSegment);
+    }
+
+    #[test]
+    fn elf_load_error_includes_entry_point_not_canonical_variant() {
+        let error = ElfLoadError::EntryPointNotCanonical;
+        assert_ne!(error, ElfLoadError::SegmentOutOfBounds);
+    }
+
+    #[test]
+    fn elf_load_error_includes_page_allocation_failed_variant() {
+        let error = ElfLoadError::PageAllocationFailed;
+        assert_ne!(error, ElfLoadError::SegmentOutOfBounds);
+    }
+
+    #[test]
+    fn elf_load_error_includes_user_page_table_walk_failed_variant() {
+        let error = ElfLoadError::UserPageTableWalkFailed;
+        assert_ne!(error, ElfLoadError::SegmentOutOfBounds);
     }
 }
