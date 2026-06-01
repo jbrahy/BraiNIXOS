@@ -516,39 +516,25 @@ fn insert_capability_space_into_global_process_table(
 }
 
 /// Launches the shell server by ELF-loading the multiboot2 `shell`
-/// module. Halts the kernel with PCR[5] extended on any loader error.
+/// module into a fresh user address space and registering it in the
+/// global process table. Halts the kernel with PCR[5] extended on any
+/// loader error.
 ///
 /// Enforces invariant INV-BOOT-001 (measured boot integrity) by routing
 /// the source module's hash into the failure record.
 ///
-/// **BLOCKED — overnight unsupervised run, 2026-05-31.** Invoking the
-/// real shell-launch path (`prepare_shell_module_inputs` →
-/// `create_shell_process_or_halt`) at this position in the boot
-/// sequence triggers a page fault to physical address ~0x80c490
-/// (within the bootloader's stack-page region) during the next
-/// activate_ipc_subsystem step. The same call chain
-/// (extract_module_byte_slices_from_boot_information +
-/// compute_module_sha256) succeeds when invoked earlier from
-/// `measure_server_binaries_into_pcr3`. Bisected with stubs of every
-/// internal call: extract-alone passes; sha256-alone passes;
-/// extract+sha256-of-slice fails. Function-definition-only (no
-/// runtime call) passes — only the second runtime invocation breaks
-/// the boot. Suspect a kernel binary code-layout interaction with
-/// some other state initialized between PCR[3] measurement and this
-/// point. Documented in OVERNIGHT_REPORT.md for daytime
-/// investigation. Until resolved, the shell is not launched at boot
-/// — boot reaches "BraiNIX: boot complete" but the v0.02 shell never
-/// appears on the serial console.
+/// The shell thread is created in the `Ready` state; it does not yet run
+/// because the boot sequence halts after `log_boot_complete` with no
+/// scheduler dispatch to userspace (see `main.rs`). Executing the shell's
+/// first instruction on the serial console is a separate scheduler task.
 fn launch_shell_server_process(
     multiboot2_info_address: u64,
     boot_step_logger: &mut BootStepLogger,
 ) {
-    let _ = multiboot2_info_address;
-    let _ = prepare_shell_module_inputs;
-    let _ = create_shell_process_or_halt;
-    let _ = register_shell_process_in_table;
-    boot_step_logger
-        .warn("Shell process launch deferred (Phase 16-A Task 9 blocker — see OVERNIGHT_REPORT.md)");
+    let module_inputs = prepare_shell_module_inputs(multiboot2_info_address);
+    let handle_and_cspace = create_shell_process_or_halt(&module_inputs, boot_step_logger);
+    register_shell_process_in_table(handle_and_cspace);
+    boot_step_logger.ok("Shell process created and registered (Ready; not yet scheduled)");
 }
 
 struct ShellModuleInputs {
