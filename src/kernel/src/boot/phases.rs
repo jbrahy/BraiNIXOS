@@ -222,6 +222,7 @@ fn probe_pci_devices(boot_step_logger: &mut BootStepLogger) {
             boot_step_logger.ok("e1000 NIC initialized (MMIO mapped, reset, MAC read)");
             if let Some(gateway_mac) = resolve_gateway_via_arp(&nic, mac, boot_step_logger) {
                 ping_gateway_via_icmp(&nic, mac, gateway_mac, boot_step_logger);
+                query_dns_via_udp(&nic, mac, gateway_mac, boot_step_logger);
             }
         }
         None => boot_step_logger.warn("e1000 NIC not found"),
@@ -318,6 +319,55 @@ fn ping_gateway_via_icmp(
         core::hint::spin_loop();
     }
     boot_step_logger.warn("ICMP: no echo reply from gateway");
+}
+
+/// Sends a DNS A-query for example.com to slirp's DNS server (10.0.2.3:53) over
+/// UDP and polls for the response — proving the UDP datapath end-to-end.
+fn query_dns_via_udp(
+    nic: &crate::arch::e1000::E1000Device,
+    our_mac: [u8; 6],
+    gateway_mac: [u8; 6],
+    boot_step_logger: &mut BootStepLogger,
+) {
+    const DNS_SERVER_IPV4: [u8; 4] = [10, 0, 2, 3];
+    const EPHEMERAL_PORT: u16 = 0xC000;
+    const DNS_PORT: u16 = 53;
+    // example.com in DNS label form.
+    let question_name: &[u8] = b"\x07example\x03com\x00";
+    let mut query = [0u8; 64];
+    let query_length = crate::net::udp::build_dns_query(0xB2A1, question_name, &mut query);
+
+    let mut frame = [0u8; 256];
+    let frame_length = crate::net::build_udp_ipv4_frame(
+        gateway_mac,
+        our_mac,
+        OUR_IPV4,
+        DNS_SERVER_IPV4,
+        EPHEMERAL_PORT,
+        DNS_PORT,
+        &query[..query_length],
+        &mut frame,
+    );
+    if !nic.send_frame(&frame[..frame_length]) {
+        boot_step_logger.warn("UDP/DNS: query transmit did not complete");
+        return;
+    }
+    let mut reply = [0u8; 2048];
+    for _attempt in 0..10_000_000u64 {
+        if let Some(received) = nic.poll_receive(&mut reply) {
+            if crate::net::is_udp_response(
+                &reply[..received],
+                DNS_SERVER_IPV4,
+                DNS_PORT,
+                EPHEMERAL_PORT,
+            ) {
+                boot_step_logger.ok("Networking: DNS response received over UDP (UDP works)");
+                return;
+            }
+        }
+        core::hint::spin_loop();
+    }
+    boot_step_logger.warn("UDP/DNS: no response from DNS server");
 }
 
 /// Sanity-logs the loaded credential store: confirms the default password

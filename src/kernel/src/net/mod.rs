@@ -7,6 +7,7 @@
 
 pub mod icmp;
 pub mod ipv4;
+pub mod udp;
 
 /// Ethernet header length.
 pub const ETHERNET_HEADER_LENGTH: usize = 14;
@@ -60,6 +61,69 @@ pub fn build_icmp_ping_frame(
     let icmp_start = ip_start + ipv4::IPV4_HEADER_LENGTH;
     out[icmp_start..icmp_start + icmp::ICMP_ECHO_LENGTH].copy_from_slice(&echo);
     ICMP_PING_FRAME_LENGTH
+}
+
+/// Assembles an Ethernet+IPv4+UDP frame carrying `payload` into `out`. Returns
+/// the frame length.
+pub fn build_udp_ipv4_frame(
+    destination_mac: [u8; 6],
+    source_mac: [u8; 6],
+    source_ipv4: [u8; 4],
+    destination_ipv4: [u8; 4],
+    source_port: u16,
+    destination_port: u16,
+    payload: &[u8],
+    out: &mut [u8],
+) -> usize {
+    write_ethernet_header(out, destination_mac, source_mac, ipv4::ETHERTYPE_IPV4);
+    let mut datagram = [0u8; 512];
+    let datagram_length = udp::build_datagram(
+        source_ipv4,
+        destination_ipv4,
+        source_port,
+        destination_port,
+        payload,
+        &mut datagram,
+    );
+    let header = ipv4::build_header(
+        source_ipv4,
+        destination_ipv4,
+        udp::IP_PROTOCOL_UDP,
+        datagram_length as u16,
+        source_port, // reuse the ephemeral port as the IP id; uniqueness suffices
+    );
+    let ip_start = ETHERNET_HEADER_LENGTH;
+    out[ip_start..ip_start + ipv4::IPV4_HEADER_LENGTH].copy_from_slice(&header);
+    let udp_start = ip_start + ipv4::IPV4_HEADER_LENGTH;
+    out[udp_start..udp_start + datagram_length].copy_from_slice(&datagram[..datagram_length]);
+    udp_start + datagram_length
+}
+
+/// True if `frame` is an Ethernet/IPv4/UDP datagram from `expected_source_ipv4`
+/// with the given source/destination ports.
+pub fn is_udp_response(
+    frame: &[u8],
+    expected_source_ipv4: [u8; 4],
+    expected_source_port: u16,
+    expected_destination_port: u16,
+) -> bool {
+    if frame.len() < ETHERNET_HEADER_LENGTH {
+        return false;
+    }
+    if u16::from_be_bytes([frame[12], frame[13]]) != ipv4::ETHERTYPE_IPV4 {
+        return false;
+    }
+    let ip_packet = &frame[ETHERNET_HEADER_LENGTH..];
+    let payload_offset =
+        match ipv4::parse_payload_offset(ip_packet, udp::IP_PROTOCOL_UDP, expected_source_ipv4) {
+            Some(offset) => offset,
+            None => return false,
+        };
+    udp::is_response_from_port(
+        &ip_packet[payload_offset..],
+        expected_source_port,
+        expected_destination_port,
+    )
 }
 
 /// True if `frame` is an Ethernet/IPv4/ICMP echo reply from `expected_src_ipv4`
