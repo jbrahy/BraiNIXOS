@@ -9,6 +9,7 @@ pub mod icmp;
 pub mod ipv4;
 pub mod ipv6;
 pub mod tcp;
+pub mod tcp_connection;
 pub mod udp;
 
 /// Ethernet header length.
@@ -99,6 +100,68 @@ pub fn build_udp_ipv4_frame(
     let udp_start = ip_start + ipv4::IPV4_HEADER_LENGTH;
     out[udp_start..udp_start + datagram_length].copy_from_slice(&datagram[..datagram_length]);
     udp_start + datagram_length
+}
+
+/// Wraps an already-built L4 segment (`l4_payload`, e.g. a TCP segment with its
+/// own checksum) in an Ethernet + IPv4 frame. Returns the frame length.
+pub fn build_ipv4_frame(
+    destination_mac: [u8; 6],
+    source_mac: [u8; 6],
+    source_ipv4: [u8; 4],
+    destination_ipv4: [u8; 4],
+    protocol: u8,
+    l4_payload: &[u8],
+    out: &mut [u8],
+) -> usize {
+    write_ethernet_header(out, destination_mac, source_mac, ipv4::ETHERTYPE_IPV4);
+    let header = ipv4::build_header(
+        source_ipv4,
+        destination_ipv4,
+        protocol,
+        l4_payload.len() as u16,
+        // IP id: low 16 bits of the payload length is fine for our traffic.
+        l4_payload.len() as u16,
+    );
+    let ip_start = ETHERNET_HEADER_LENGTH;
+    out[ip_start..ip_start + ipv4::IPV4_HEADER_LENGTH].copy_from_slice(&header);
+    let l4_start = ip_start + ipv4::IPV4_HEADER_LENGTH;
+    out[l4_start..l4_start + l4_payload.len()].copy_from_slice(l4_payload);
+    l4_start + l4_payload.len()
+}
+
+/// If `frame` is an Ethernet/IPv4/TCP frame addressed to `local_ipv4`, returns
+/// (peer MAC, peer IPv4, byte range of the TCP segment within `frame`).
+pub fn extract_ipv4_tcp(
+    frame: &[u8],
+    local_ipv4: [u8; 4],
+) -> Option<([u8; 6], [u8; 4], core::ops::Range<usize>)> {
+    if frame.len() < ETHERNET_HEADER_LENGTH + ipv4::IPV4_HEADER_LENGTH {
+        return None;
+    }
+    if u16::from_be_bytes([frame[12], frame[13]]) != ipv4::ETHERTYPE_IPV4 {
+        return None;
+    }
+    let ip = ETHERNET_HEADER_LENGTH;
+    if frame[ip] >> 4 != 4 {
+        return None;
+    }
+    let ihl = ((frame[ip] & 0x0F) as usize) * 4;
+    if ihl < ipv4::IPV4_HEADER_LENGTH || frame.len() < ip + ihl {
+        return None;
+    }
+    if frame[ip + 9] != tcp::IP_PROTOCOL_TCP {
+        return None;
+    }
+    let mut destination = [0u8; 4];
+    destination.copy_from_slice(&frame[ip + 16..ip + 20]);
+    if destination != local_ipv4 {
+        return None;
+    }
+    let mut peer_mac = [0u8; 6];
+    peer_mac.copy_from_slice(&frame[6..12]);
+    let mut peer_ipv4 = [0u8; 4];
+    peer_ipv4.copy_from_slice(&frame[ip + 12..ip + 16]);
+    Some((peer_mac, peer_ipv4, (ip + ihl)..frame.len()))
 }
 
 /// Assembles an Ethernet+IPv4+TCP SYN frame into `out`. Returns the frame length.

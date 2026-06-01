@@ -165,10 +165,27 @@ rm -f /tmp/qemu-net.pcap
 if [[ "${QEMU_NO_NET:-0}" == "1" ]]; then
     QEMU_NET_ARGS=""
 else
-    QEMU_NET_ARGS="-netdev user,id=net0 \
+    # hostfwd forwards container-localhost:2222 -> guest:2222 so the inbound
+    # TCP/SSH service can be reached from the test harness.
+    QEMU_NET_ARGS="-netdev user,id=net0,hostfwd=tcp::2222-:2222 \
         -device e1000,netdev=net0,mac=52:54:00:12:34:56 \
         -object filter-dump,id=net0,netdev=net0,file=/tmp/qemu-net.pcap"
 fi
+
+# Background inbound-connectivity probe: once the guest's network service is up,
+# connect to the forwarded port and exchange a line, proving the inbound TCP
+# server datapath. Result is written for printing after QEMU exits.
+rm -f /tmp/inbound_tcp_result.txt
+(
+    sleep 75
+    probe_payload="brainix-inbound-probe"
+    if command -v nc >/dev/null 2>&1; then
+        reply="$(printf '%s\n' "${probe_payload}" | timeout 8 nc -w 5 127.0.0.1 2222 2>/dev/null | head -c 100)"
+    else
+        reply="$(printf '%s\n' "${probe_payload}" | timeout 8 python3 -c 'import socket,sys; s=socket.create_connection(("127.0.0.1",2222),5); s.sendall(sys.stdin.buffer.read()); s.settimeout(4); print(s.recv(100).decode("latin1"),end="")' 2>/dev/null)"
+    fi
+    printf 'INBOUND_TCP_SENT: %s\nINBOUND_TCP_REPLY: %s\n' "${probe_payload}" "${reply}" > /tmp/inbound_tcp_result.txt
+) &
 # Honor KEEP_RUNNING=1 (set by bin/run-brainx.sh in its default "always have
 # the latest version running" mode): omit the 300s `timeout` wrapper so qemu
 # stays alive after the kernel reaches its halt loop, until the user
@@ -201,6 +218,11 @@ fi
     ${QEMU_NET_ARGS} \
     ${QEMU_TPM_ARGS} \
     2>&1 | tee /tmp/boot.log || true
+
+echo "[test.sh] === INBOUND TCP PROBE ==="
+wait
+cat /tmp/inbound_tcp_result.txt 2>/dev/null || echo "no inbound result"
+echo "[test.sh] === END INBOUND TCP PROBE ==="
 
 echo "[test.sh] Asserting boot completion..."
 BOOT_PASS=0

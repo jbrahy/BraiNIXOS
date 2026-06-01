@@ -10,9 +10,78 @@ pub const TCP_HEADER_LENGTH: usize = 20;
 pub const IP_PROTOCOL_TCP: u8 = 6;
 
 // TCP flag bits.
-const TCP_FLAG_SYN: u8 = 1 << 1;
-const TCP_FLAG_RST: u8 = 1 << 2;
-const TCP_FLAG_ACK: u8 = 1 << 4;
+pub const TCP_FLAG_FIN: u8 = 1 << 0;
+pub const TCP_FLAG_SYN: u8 = 1 << 1;
+pub const TCP_FLAG_RST: u8 = 1 << 2;
+pub const TCP_FLAG_PSH: u8 = 1 << 3;
+pub const TCP_FLAG_ACK: u8 = 1 << 4;
+
+/// A parsed view of a TCP segment's header fields.
+#[derive(Copy, Clone, Debug)]
+pub struct TcpSegmentView {
+    pub source_port: u16,
+    pub destination_port: u16,
+    pub sequence_number: u32,
+    pub acknowledgment_number: u32,
+    pub flags: u8,
+    pub window_size: u16,
+    /// Byte offset of the payload within the segment.
+    pub payload_offset: usize,
+}
+
+/// Parses a TCP segment header. Returns None if too short or malformed.
+pub fn parse_segment(segment: &[u8]) -> Option<TcpSegmentView> {
+    if segment.len() < TCP_HEADER_LENGTH {
+        return None;
+    }
+    let data_offset_words = (segment[12] >> 4) as usize;
+    let header_length = data_offset_words * 4;
+    if header_length < TCP_HEADER_LENGTH || segment.len() < header_length {
+        return None;
+    }
+    Some(TcpSegmentView {
+        source_port: u16::from_be_bytes([segment[0], segment[1]]),
+        destination_port: u16::from_be_bytes([segment[2], segment[3]]),
+        sequence_number: u32::from_be_bytes([segment[4], segment[5], segment[6], segment[7]]),
+        acknowledgment_number: u32::from_be_bytes([
+            segment[8], segment[9], segment[10], segment[11],
+        ]),
+        flags: segment[13],
+        window_size: u16::from_be_bytes([segment[14], segment[15]]),
+        payload_offset: header_length,
+    })
+}
+
+/// Builds a TCP segment (20-byte header, no options) with the given fields and
+/// `payload`, computing the pseudo-header checksum. Returns the segment length.
+#[allow(clippy::too_many_arguments)]
+pub fn build_segment(
+    source_ipv4: [u8; 4],
+    destination_ipv4: [u8; 4],
+    source_port: u16,
+    destination_port: u16,
+    sequence_number: u32,
+    acknowledgment_number: u32,
+    flags: u8,
+    window_size: u16,
+    payload: &[u8],
+    out: &mut [u8],
+) -> usize {
+    out[0..2].copy_from_slice(&source_port.to_be_bytes());
+    out[2..4].copy_from_slice(&destination_port.to_be_bytes());
+    out[4..8].copy_from_slice(&sequence_number.to_be_bytes());
+    out[8..12].copy_from_slice(&acknowledgment_number.to_be_bytes());
+    out[12] = (5 << 4) | 0;
+    out[13] = flags;
+    out[14..16].copy_from_slice(&window_size.to_be_bytes());
+    out[16..18].copy_from_slice(&[0, 0]); // checksum
+    out[18..20].copy_from_slice(&[0, 0]); // urgent
+    let segment_length = TCP_HEADER_LENGTH + payload.len();
+    out[TCP_HEADER_LENGTH..segment_length].copy_from_slice(payload);
+    let checksum = tcp_checksum(source_ipv4, destination_ipv4, &out[..segment_length]);
+    out[16..18].copy_from_slice(&checksum.to_be_bytes());
+    segment_length
+}
 
 /// Builds a bare SYN segment (no options) into `out`, with the pseudo-header
 /// checksum. Returns the segment length (20).

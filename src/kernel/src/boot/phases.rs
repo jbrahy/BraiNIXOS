@@ -67,15 +67,114 @@ pub fn execute_boot_sequence(
     load_and_launch_server_processes(boot_step_logger);
     launch_device_server_processes(boot_step_logger);
     launch_network_server_processes(boot_step_logger);
-    let shell_thread_index = launch_shell_server_process(multiboot2_info_address, boot_step_logger);
+    let _shell_thread_index = launch_shell_server_process(multiboot2_info_address, boot_step_logger);
     log_boot_complete(boot_step_logger);
-    dispatch_shell_to_userspace(shell_thread_index, boot_step_logger);
+    // The SSH/network service is now the terminal boot activity (the serial
+    // shell is launched above but not dispatched; SSH provides remote login).
+    run_network_service(boot_step_logger);
+}
+
+/// Post-boot network service loop: listens for inbound TCP and drives the SSH
+/// server. This first milestone runs a TCP echo on port 2222 to prove the
+/// inbound server datapath (LISTEN -> ESTABLISHED -> data) end to end; the SSH
+/// transport is layered on next.
+fn run_network_service(boot_step_logger: &mut BootStepLogger) -> ! {
+    use crate::net::tcp::{parse_segment, IP_PROTOCOL_TCP};
+    use crate::net::tcp_connection::{TcpConnection, TcpState};
+
+    const SERVICE_PORT: u16 = 2222;
+    const INITIAL_SEQUENCE: u32 = 0x5348_0000; // "SH"
+
+    // SAFETY: single-core; the NIC was stored during probe_pci_devices.
+    let nic = match unsafe { *core::ptr::addr_of!(NETWORK_INTERFACE) } {
+        Some(nic) => nic,
+        None => {
+            boot_step_logger.warn("Network service: no NIC; halting");
+            loop {
+                core::hint::spin_loop();
+            }
+        }
+    };
+    let our_mac = nic.mac_address();
+    let mut connection = TcpConnection::new_listening(OUR_IPV4, SERVICE_PORT, INITIAL_SEQUENCE);
+    boot_step_logger.ok("Network service: TCP echo listening on port 2222");
+
+    let mut receive_frame = [0u8; 2048];
+    let mut segment_scratch = [0u8; 2048];
+    let mut frame_scratch = [0u8; 2048];
+    let mut delivered = [0u8; 2048];
+    loop {
+        if matches!(connection.state(), TcpState::Closed | TcpState::CloseWait) {
+            connection = TcpConnection::new_listening(OUR_IPV4, SERVICE_PORT, INITIAL_SEQUENCE);
+        }
+        if let Some(received) = nic.poll_receive(&mut receive_frame) {
+            if let Some((peer_mac, peer_ipv4, segment_range)) =
+                crate::net::extract_ipv4_tcp(&receive_frame[..received], OUR_IPV4)
+            {
+                let segment = &receive_frame[segment_range];
+                if let Some(view) = parse_segment(segment) {
+                    if view.destination_port == SERVICE_PORT {
+                        connection.set_remote_ipv4(peer_ipv4);
+                        let payload = &segment[view.payload_offset..];
+                        let outcome =
+                            connection.on_segment(&view, payload, &mut segment_scratch, &mut delivered);
+                        if let Some(response_length) = outcome.response_length {
+                            send_tcp_segment(
+                                &nic,
+                                peer_mac,
+                                our_mac,
+                                peer_ipv4,
+                                &segment_scratch[..response_length],
+                                &mut frame_scratch,
+                            );
+                        }
+                        if outcome.delivered_length > 0 {
+                            let echo_length = connection
+                                .send_data(&delivered[..outcome.delivered_length], &mut segment_scratch);
+                            send_tcp_segment(
+                                &nic,
+                                peer_mac,
+                                our_mac,
+                                peer_ipv4,
+                                &segment_scratch[..echo_length],
+                                &mut frame_scratch,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        core::hint::spin_loop();
+        let _ = IP_PROTOCOL_TCP;
+    }
+}
+
+/// Wraps a TCP segment in IPv4 + Ethernet and transmits it.
+fn send_tcp_segment(
+    nic: &crate::arch::e1000::E1000Device,
+    destination_mac: [u8; 6],
+    source_mac: [u8; 6],
+    destination_ipv4: [u8; 4],
+    tcp_segment: &[u8],
+    frame_scratch: &mut [u8],
+) {
+    let frame_length = crate::net::build_ipv4_frame(
+        destination_mac,
+        source_mac,
+        OUR_IPV4,
+        destination_ipv4,
+        crate::net::tcp::IP_PROTOCOL_TCP,
+        tcp_segment,
+        frame_scratch,
+    );
+    nic.send_frame(&frame_scratch[..frame_length]);
 }
 
 /// Loads the shell thread's saved entry point, user stack, and user page table,
 /// then SYSRETs into ring 3 through the KPTI trampoline. Never returns — this is
 /// the end of the boot path; from here the shell runs and drives the console.
 #[allow(clippy::unwrap_used)]
+#[allow(dead_code)] // retained for SSH session -> shell dispatch (next milestone)
 fn dispatch_shell_to_userspace(thread_index: usize, boot_step_logger: &mut BootStepLogger) -> ! {
     boot_step_logger.ok("Dispatching shell to userspace (ring 3)");
     // SAFETY: single-core boot; thread_index is the shell created just above and
@@ -220,6 +319,10 @@ fn probe_pci_devices(boot_step_logger: &mut BootStepLogger) {
             boot_step_logger.info_hex("e1000 MMIO base", nic.mmio_base_address());
             boot_step_logger.info_hex("e1000 MAC", mac_word);
             boot_step_logger.ok("e1000 NIC initialized (MMIO mapped, reset, MAC read)");
+            // SAFETY: single-core boot; first and only writer of this global.
+            unsafe {
+                core::ptr::write(core::ptr::addr_of_mut!(NETWORK_INTERFACE), Some(nic));
+            }
             if let Some(gateway_mac) = resolve_gateway_via_arp(&nic, mac, boot_step_logger) {
                 ping_gateway_via_icmp(&nic, mac, gateway_mac, boot_step_logger);
                 query_dns_via_udp(&nic, mac, gateway_mac, boot_step_logger);
@@ -246,6 +349,9 @@ fn probe_pci_devices(boot_step_logger: &mut BootStepLogger) {
 /// Network constants for the QEMU slirp environment.
 const OUR_IPV4: [u8; 4] = [10, 0, 2, 15];
 const GATEWAY_IPV4: [u8; 4] = [10, 0, 2, 2];
+
+/// The discovered NIC, stored at boot for the post-boot network service loop.
+static mut NETWORK_INTERFACE: Option<crate::arch::e1000::E1000Device> = None;
 
 /// ARP-resolves the slirp gateway (10.0.2.2): sends a broadcast ARP request and
 /// polls the RX ring for the reply, proving TX, RX, and ARP. Returns the
