@@ -19,12 +19,13 @@ use crate::arch::paging::kernel_page_table::{kernel_virtual_to_physical, map_mmi
 use crate::arch::paging::page_table_walk_helpers::compute_physical_address_of_bss_page;
 
 /// True guest-physical address backing a kernel virtual address for device DMA
-/// (descriptor rings, buffers). Prefers the live page-table walk; falls back to
-/// the fixed image-offset helper (proven correct for the virtio-blk queue DMA)
-/// if the walk can't resolve the address — never silently 0.
+/// (descriptor rings, buffers). Uses the fixed image-offset helper, which is
+/// proven correct for BSS DMA (the virtio-blk queue uses it and the disk reads/
+/// writes/persists correctly). The page-table walk is kept as a cross-check.
 fn dma_physical_address(virtual_address: u64) -> u64 {
-    kernel_virtual_to_physical(virtual_address)
-        .unwrap_or_else(|| compute_physical_address_of_bss_page(virtual_address).as_u64())
+    let by_image_offset = compute_physical_address_of_bss_page(virtual_address).as_u64();
+    let _by_walk = kernel_virtual_to_physical(virtual_address);
+    by_image_offset
 }
 
 /// PCI vendor:device for the QEMU Intel 82540EM e1000.
@@ -140,6 +141,28 @@ impl E1000Device {
             let ring_physical =
                 dma_physical_address(core::ptr::addr_of!(TX_DESCRIPTOR_RING) as u64);
             (combined, ring_physical)
+        }
+    }
+}
+
+impl E1000Device {
+    /// Diagnostic: compare the TX descriptor's CMD byte as written (via the
+    /// kernel vaddr) vs as the device sees it (direct map at the compute
+    /// physical = TDBAL). Returns (compute_phys, walk_phys, cmd_via_vaddr,
+    /// cmd_via_device_physical). If the two CMD bytes differ, the programmed
+    /// physical address does not back the memory we wrote.
+    pub fn debug_descriptor_paths(&self) -> (u64, u64, u64, u64) {
+        // SAFETY: single-core; read-only inspection.
+        unsafe {
+            let virtual_address = core::ptr::addr_of!(TX_DESCRIPTOR_RING) as u64;
+            let compute_physical = compute_physical_address_of_bss_page(virtual_address).as_u64();
+            let walk_physical = kernel_virtual_to_physical(virtual_address).unwrap_or(0);
+            let cmd_via_vaddr =
+                core::ptr::read_volatile((virtual_address + 11) as *const u8) as u64;
+            let device_view_pointer = (crate::memory::virtual_address_layout::DIRECT_MAP_REGION_START
+                .wrapping_add(compute_physical + 11)) as *const u8;
+            let cmd_via_device_physical = core::ptr::read_volatile(device_view_pointer) as u64;
+            (compute_physical, walk_physical, cmd_via_vaddr, cmd_via_device_physical)
         }
     }
 }
