@@ -49,7 +49,11 @@ const BOOTSTRAP_PAGE_TABLE_PAGE_COUNT: usize = 32;
 /// stays mapped after the Phase 4 CR3 swap retires the bootloader's
 /// identity map. A smaller value silently relies on the bootloader's
 /// identity map and breaks at the moment of CR3 load.
-const KERNEL_BINARY_PAGE_COUNT: u64 = 1024;
+///
+/// `boot::multiboot2_info` derives the physical allocator's kernel-binary
+/// exclusion range from this so the allocator never hands out a frame that
+/// is mapped into the kernel binary region.
+pub const KERNEL_BINARY_PAGE_COUNT: u64 = 1024;
 
 /// Physical extent the direct-map region must cover.
 ///
@@ -69,10 +73,13 @@ const DIRECT_MAP_PHYSICAL_COVERAGE_IN_BYTES: u64 = 1024 * 1024 * 1024;
 /// `src/bootloader/src/main.rs` lays out a 32 KiB stack spanning physical
 /// 0x808000..0x810000 (`bootloader_stack_bottom`..`bootloader_stack_top`);
 /// the kernel runs its entire boot sequence on it.
-const BOOT_STACK_PHYSICAL_BASE_ADDRESS: u64 = 0x0080_8000;
+///
+/// `boot::multiboot2_info` derives the physical allocator's boot-stack
+/// exclusion range from this so the live kernel stack is never handed out.
+pub const BOOT_STACK_PHYSICAL_BASE_ADDRESS: u64 = 0x0080_8000;
 
 /// Number of 4 KiB pages in the 32 KiB boot stack region.
-const BOOT_STACK_PAGE_COUNT: u64 = 8;
+pub const BOOT_STACK_PAGE_COUNT: u64 = 8;
 
 /// Page-aligned BSS-backed storage for bootstrap page table pages.
 ///

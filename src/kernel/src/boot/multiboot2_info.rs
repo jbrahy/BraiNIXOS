@@ -10,6 +10,10 @@
 #![allow(unsafe_code)]
 
 use crate::arch::interrupts::halt::disable_interrupts_and_halt;
+use crate::arch::paging::kernel_page_table::{
+    BOOT_STACK_PAGE_COUNT, BOOT_STACK_PHYSICAL_BASE_ADDRESS, KERNEL_BINARY_PAGE_COUNT,
+};
+use crate::arch::paging::page_table_walk_helpers::KERNEL_PHYSICAL_LOAD_ADDRESS;
 use crate::boot::logger::BootStepLogger;
 use crate::memory::page_type::PageType;
 use crate::memory::physical_allocator::PhysicalAllocator;
@@ -23,13 +27,35 @@ const MULTIBOOT2_BOOTLOADER_MAGIC: u32 = 0x36D76289;
 /// Physical addresses below this threshold are reserved for BIOS/bootloader.
 const RESERVED_LOW_MEMORY_BOUNDARY: u64 = 0x100000;
 
-/// Start of the kernel binary physical range (1 MB, standard multiboot2 load address).
-const KERNEL_PHYSICAL_START: u64 = 0x100000;
+/// Start of the kernel binary physical range (the multiboot2 load address).
+const KERNEL_PHYSICAL_START: u64 = KERNEL_PHYSICAL_LOAD_ADDRESS;
 
-/// End of the kernel binary physical range (conservative 2 MB upper bound).
-/// The actual end is determined by linker symbols, but for Phase 2 this
-/// conservative bound protects the kernel binary from being overwritten.
-const KERNEL_PHYSICAL_END: u64 = 0x200000;
+/// End of the kernel binary physical range, derived from the exact region the
+/// kernel page table maps as the kernel binary (`KERNEL_BINARY_PAGE_COUNT`
+/// pages from `KERNEL_PHYSICAL_LOAD_ADDRESS`). Deriving it -- rather than
+/// hardcoding a literal -- keeps the allocator's exclusion in lockstep with
+/// the mapping: every frame mapped into the kernel binary region is excluded
+/// from the free pool, so the kernel's own `.text`/`.rodata`/`.data`/`.bss`
+/// can never be handed out to a user process. (A previous 2 MiB literal left
+/// ~2.5 MiB of the kernel image -- including the multi-megabyte
+/// `PhysicalAllocator` in `.bss` -- enrolled as Free.)
+const KERNEL_PHYSICAL_END: u64 =
+    KERNEL_PHYSICAL_LOAD_ADDRESS + KERNEL_BINARY_PAGE_COUNT * PAGE_SIZE_IN_BYTES as u64;
+
+/// End of the boot stack physical range (`BOOT_STACK_PAGE_COUNT` pages from
+/// `BOOT_STACK_PHYSICAL_BASE_ADDRESS`). The boot stack is the live kernel
+/// stack for the entire boot sequence and the post-boot halt loop; handing
+/// any of its frames to the allocator would corrupt the running kernel.
+const BOOT_STACK_PHYSICAL_END: u64 =
+    BOOT_STACK_PHYSICAL_BASE_ADDRESS + BOOT_STACK_PAGE_COUNT * PAGE_SIZE_IN_BYTES as u64;
+
+/// The kernel binary region and the boot stack must not overlap; if
+/// `KERNEL_BINARY_PAGE_COUNT` ever grew past the boot stack base this would
+/// catch it at compile time.
+const _: () = assert!(
+    BOOT_STACK_PHYSICAL_BASE_ADDRESS >= KERNEL_PHYSICAL_END,
+    "kernel binary region must not overlap the boot stack",
+);
 
 /// Global physical allocator instance. Lives in boot module because
 /// addr_of_mut! is only allowlisted here (UNSAFE_CODE_POLICY.md).
@@ -130,6 +156,7 @@ fn populate_allocator_from_boot_information(
         register_memory_regions_from_map(tag);
     }
     register_kernel_binary_pages();
+    register_boot_stack_pages();
     boot_step_logger.ok("Physical allocator initialized from memory map");
 }
 
@@ -175,10 +202,7 @@ fn register_available_memory_region(region_start: u64, region_end: u64) {
 
 /// Registers a single page as Free if it is not in a reserved range.
 fn register_page_if_available(physical_address: u64) {
-    if page_is_in_reserved_low_memory(physical_address) {
-        return;
-    }
-    if page_is_in_kernel_binary_range(physical_address) {
+    if page_is_in_reserved_kernel_owned_region(physical_address) {
         return;
     }
     // SAFETY: Single-core boot, no concurrent access to GLOBAL_PHYSICAL_ALLOCATOR.
@@ -199,6 +223,16 @@ fn register_kernel_binary_pages() {
     }
 }
 
+/// Registers the live boot stack physical pages as PageType::Kernel so the
+/// allocator never hands out a frame the running kernel stack occupies.
+fn register_boot_stack_pages() {
+    let mut current_address = BOOT_STACK_PHYSICAL_BASE_ADDRESS;
+    while current_address < BOOT_STACK_PHYSICAL_END {
+        register_single_kernel_page(current_address);
+        current_address = current_address.wrapping_add(PAGE_SIZE_IN_BYTES as u64);
+    }
+}
+
 /// Registers a single page as kernel-owned in the global allocator.
 fn register_single_kernel_page(physical_address: u64) {
     // SAFETY: Single-core boot, exclusive access to GLOBAL_PHYSICAL_ALLOCATOR.
@@ -209,6 +243,14 @@ fn register_single_kernel_page(physical_address: u64) {
     unsafe { (*allocator_pointer).register_physical_page(physical_address, PageType::Kernel) };
 }
 
+/// Returns true if the page must be kept out of the free pool: BIOS/bootloader
+/// low memory, the kernel binary image, or the live boot stack.
+fn page_is_in_reserved_kernel_owned_region(physical_address: u64) -> bool {
+    page_is_in_reserved_low_memory(physical_address)
+        || page_is_in_kernel_binary_range(physical_address)
+        || page_is_in_boot_stack_range(physical_address)
+}
+
 /// Returns true if the physical address is below the 1 MB reserved boundary.
 fn page_is_in_reserved_low_memory(physical_address: u64) -> bool {
     physical_address < RESERVED_LOW_MEMORY_BOUNDARY
@@ -217,6 +259,11 @@ fn page_is_in_reserved_low_memory(physical_address: u64) -> bool {
 /// Returns true if the physical address is within the kernel binary range.
 fn page_is_in_kernel_binary_range(physical_address: u64) -> bool {
     (KERNEL_PHYSICAL_START..KERNEL_PHYSICAL_END).contains(&physical_address)
+}
+
+/// Returns true if the physical address is within the live boot stack range.
+fn page_is_in_boot_stack_range(physical_address: u64) -> bool {
+    (BOOT_STACK_PHYSICAL_BASE_ADDRESS..BOOT_STACK_PHYSICAL_END).contains(&physical_address)
 }
 
 /// Aligns a physical address up to the next page boundary.
