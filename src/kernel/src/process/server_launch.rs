@@ -204,6 +204,126 @@ fn write_capability_into_slot(
     slot.rights_bitmask = rights;
 }
 
+/// Creates a server process by ELF-loading `elf_module_bytes` into a fresh
+/// user page table. Unlike `create_server_process`, this constructor:
+///
+/// 1. Runs the strict PT_LOAD-only pre-flight gate.
+/// 2. Validates the ELF header (magic, class, endianness, type, machine).
+/// 3. Extracts and validates every PT_LOAD segment.
+/// 4. Allocates a fresh user PML4 from the bootstrap pool.
+/// 5. Allocates physical pages and maps each segment into the user PT
+///    with W^X-correct flags, then copies the segment bytes through the
+///    direct map.
+/// 6. Materializes the 16-page user stack in the same PML4.
+/// 7. Reads the entry point from the ELF header (not a hardcoded constant).
+/// 8. Creates the Thread with rcx = e_entry, rsp = stack top.
+///
+/// Enforces INV-AUTH-001 (empty CSpace), INV-MEM-002 (KPTI), and
+/// INV-MEM-003 (W^X).
+#[cfg(target_arch = "x86_64")]
+pub fn create_server_process_from_elf(
+    process_type: ProcessType,
+    elf_module_bytes: &[u8],
+) -> Result<(ServerProcessHandle, CapabilitySpace), crate::process::elf_loader::ElfLoadError> {
+    use crate::process::elf_loader::{
+        extract_entry_point, extract_loadable_segments, validate_elf_header,
+        validate_program_header_types_are_load_only,
+    };
+    validate_program_header_types_are_load_only(elf_module_bytes)?;
+    validate_elf_header(elf_module_bytes)?;
+    let entry_point = extract_entry_point(elf_module_bytes)?;
+    let segments = extract_loadable_segments(elf_module_bytes)?;
+    build_loaded_process(process_type, entry_point, elf_module_bytes, &segments)
+}
+
+#[cfg(target_arch = "x86_64")]
+fn build_loaded_process(
+    process_type: ProcessType,
+    entry_point: u64,
+    elf_module_bytes: &[u8],
+    segments: &[Option<crate::process::elf_loader::LoadableSegment>; 8],
+) -> Result<(ServerProcessHandle, CapabilitySpace), crate::process::elf_loader::ElfLoadError> {
+    let layout = build_layout_for_loaded_process(entry_point)?;
+    let user_page_map_level_4 = acquire_fresh_user_page_map_level_4();
+    load_segments_and_stack(user_page_map_level_4, elf_module_bytes, segments, &layout)?;
+    let handle = finalize_loaded_process_handle(process_type, &layout)?;
+    Ok((handle, CapabilitySpace::new()))
+}
+
+#[cfg(target_arch = "x86_64")]
+fn build_layout_for_loaded_process(
+    entry_point: u64,
+) -> Result<
+    crate::process::address_space::ProcessAddressSpaceLayout,
+    crate::process::elf_loader::ElfLoadError,
+> {
+    build_process_address_space_layout(entry_point).map_err(map_address_space_error_to_elf_load_error)
+}
+
+#[cfg(target_arch = "x86_64")]
+fn acquire_fresh_user_page_map_level_4() -> &'static mut x86_64::structures::paging::PageTable {
+    // SAFETY: Single-core boot, no concurrent access to the bootstrap pool.
+    unsafe { crate::arch::paging::kernel_page_table::allocate_user_page_map_level_4() }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn load_segments_and_stack(
+    user_page_map_level_4: &mut x86_64::structures::paging::PageTable,
+    elf_module_bytes: &[u8],
+    segments: &[Option<crate::process::elf_loader::LoadableSegment>; 8],
+    layout: &crate::process::address_space::ProcessAddressSpaceLayout,
+) -> Result<(), crate::process::elf_loader::ElfLoadError> {
+    // SAFETY: Single-core boot; exclusive access to the freshly-allocated PML4.
+    unsafe {
+        crate::process::elf_load_into_address_space::load_segments_into_user_page_table(
+            user_page_map_level_4,
+            elf_module_bytes,
+            segments,
+        )?;
+        crate::process::elf_load_into_address_space::map_stack_pages_in_user_page_table(
+            user_page_map_level_4,
+            layout,
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "x86_64")]
+fn finalize_loaded_process_handle(
+    process_type: ProcessType,
+    layout: &crate::process::address_space::ProcessAddressSpaceLayout,
+) -> Result<ServerProcessHandle, crate::process::elf_loader::ElfLoadError> {
+    let thread = build_initial_thread(
+        layout.entry_point_virtual_address,
+        layout.stack_top_virtual_address,
+    );
+    let thread_index = allocate_thread_pool_slot()
+        .ok_or(crate::process::elf_loader::ElfLoadError::PageAllocationFailed)?;
+    store_thread_in_kernel_pool(thread_index, thread);
+    Ok(ServerProcessHandle {
+        process_type,
+        thread_index,
+        thread_identifier: thread_index as ThreadIdentifier,
+    })
+}
+
+#[cfg(target_arch = "x86_64")]
+fn map_address_space_error_to_elf_load_error(
+    error: AddressSpaceError,
+) -> crate::process::elf_loader::ElfLoadError {
+    match error {
+        AddressSpaceError::EntryPointNotCanonical => {
+            crate::process::elf_loader::ElfLoadError::EntryPointNotCanonical
+        }
+        AddressSpaceError::PageAllocationFailed => {
+            crate::process::elf_loader::ElfLoadError::PageAllocationFailed
+        }
+        AddressSpaceError::MappingFailed => {
+            crate::process::elf_loader::ElfLoadError::UserPageTableWalkFailed
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
