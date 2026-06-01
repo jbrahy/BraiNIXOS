@@ -98,7 +98,7 @@ fn run_network_service(boot_step_logger: &mut BootStepLogger) -> ! {
     };
     let our_mac = nic.mac_address();
     let mut connection = TcpConnection::new_listening(OUR_IPV4, SERVICE_PORT, INITIAL_SEQUENCE);
-    let mut ssh_session = SshSession::new();
+    let mut ssh_session = SshSession::new(fresh_ssh_ephemeral_key());
     let mut banner_sent = false;
     boot_step_logger.ok("Network service: SSH server listening on port 2222");
 
@@ -110,7 +110,7 @@ fn run_network_service(boot_step_logger: &mut BootStepLogger) -> ! {
     loop {
         if matches!(connection.state(), TcpState::Closed | TcpState::CloseWait) {
             connection = TcpConnection::new_listening(OUR_IPV4, SERVICE_PORT, INITIAL_SEQUENCE);
-            ssh_session = SshSession::new();
+            ssh_session = SshSession::new(fresh_ssh_ephemeral_key());
             banner_sent = false;
         }
         let received = match nic.poll_receive(&mut receive_frame) {
@@ -156,6 +156,14 @@ fn run_network_service(boot_step_logger: &mut BootStepLogger) -> ! {
             }
         }
     }
+}
+
+/// Fresh 32-byte X25519 ephemeral private scalar from the CSPRNG (one per SSH
+/// connection).
+fn fresh_ssh_ephemeral_key() -> [u8; 32] {
+    let mut key = [0u8; 32];
+    crate::hardware_security::csprng::generate_random_bytes(&mut key);
+    key
 }
 
 /// Wraps a TCP segment in IPv4 + Ethernet and transmits it.

@@ -79,7 +79,7 @@ const TX_STATUS_DESCRIPTOR_DONE: u8 = 1 << 0;
 /// RX descriptor STATUS.DD.
 const RX_STATUS_DESCRIPTOR_DONE: u8 = 1 << 0;
 
-const RING_ENTRY_COUNT: usize = 8;
+const RING_ENTRY_COUNT: usize = 32;
 const RECEIVE_BUFFER_SIZE: usize = 2048;
 /// Each legacy descriptor (TX and RX) is 16 bytes.
 const DESCRIPTOR_SIZE: usize = 16;

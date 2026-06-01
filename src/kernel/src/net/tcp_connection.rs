@@ -141,7 +141,11 @@ impl TcpConnection {
             self.state = TcpState::CloseWait;
             response_length = Some(self.emit(TCP_FLAG_ACK | TCP_FLAG_FIN, &[], response_out));
             self.send_next = self.send_next.wrapping_add(1);
-        } else if delivered_length > 0 {
+        } else if !inbound_payload.is_empty() {
+            // ACK every data-bearing segment with our current receive_next. For
+            // accepted in-order data this advances the window; for a duplicate or
+            // out-of-order segment it is a duplicate ACK that prompts the peer to
+            // retransmit the byte we are actually missing (no reassembly buffer).
             response_length = Some(self.emit(TCP_FLAG_ACK, &[], response_out));
         }
         SegmentOutcome { response_length, delivered_length }

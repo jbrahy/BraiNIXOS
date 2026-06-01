@@ -6,6 +6,12 @@
 /// The server's identification string (CR LF terminated), sent on connect.
 pub const SERVER_IDENTIFICATION: &[u8] = b"SSH-2.0-BraiNIX_0.1\r\n";
 
+/// The server identification without the trailing CR LF — the form hashed into
+/// the SSH exchange hash (V_S).
+pub fn server_identification_without_crlf() -> &'static [u8] {
+    b"SSH-2.0-BraiNIX_0.1"
+}
+
 /// True if `client_identification` (CR/LF already stripped) announces SSH 2.0.
 pub fn client_version_is_supported(client_identification: &[u8]) -> bool {
     client_identification.starts_with(b"SSH-2.0-")

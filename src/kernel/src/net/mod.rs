@@ -161,7 +161,15 @@ pub fn extract_ipv4_tcp(
     peer_mac.copy_from_slice(&frame[6..12]);
     let mut peer_ipv4 = [0u8; 4];
     peer_ipv4.copy_from_slice(&frame[ip + 12..ip + 16]);
-    Some((peer_mac, peer_ipv4, (ip + ihl)..frame.len()))
+    // Use the IPv4 total_length to find the real end of the segment — small
+    // frames are zero-padded to the 60-byte Ethernet minimum, and that padding
+    // must NOT be treated as TCP payload.
+    let ip_total_length = u16::from_be_bytes([frame[ip + 2], frame[ip + 3]]) as usize;
+    let segment_end = (ip + ip_total_length).min(frame.len());
+    if segment_end < ip + ihl {
+        return None;
+    }
+    Some((peer_mac, peer_ipv4, (ip + ihl)..segment_end))
 }
 
 /// Assembles an Ethernet+IPv4+TCP SYN frame into `out`. Returns the frame length.
