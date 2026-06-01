@@ -175,16 +175,25 @@ fi
 # Background inbound-connectivity probe: once the guest's network service is up,
 # connect to the forwarded port and exchange a line, proving the inbound TCP
 # server datapath. Result is written for printing after QEMU exits.
-rm -f /tmp/inbound_tcp_result.txt
+rm -f /tmp/inbound_tcp_result.txt /tmp/ssh_probe.log
 (
-    sleep 75
-    probe_payload="brainix-inbound-probe"
-    if command -v nc >/dev/null 2>&1; then
-        reply="$(printf '%s\n' "${probe_payload}" | timeout 8 nc -w 5 127.0.0.1 2222 2>/dev/null | head -c 100)"
-    else
-        reply="$(printf '%s\n' "${probe_payload}" | timeout 8 python3 -c 'import socket,sys; s=socket.create_connection(("127.0.0.1",2222),5); s.sendall(sys.stdin.buffer.read()); s.settimeout(4); print(s.recv(100).decode("latin1"),end="")' 2>/dev/null)"
-    fi
-    printf 'INBOUND_TCP_SENT: %s\nINBOUND_TCP_REPLY: %s\n' "${probe_payload}" "${reply}" > /tmp/inbound_tcp_result.txt
+    sleep 55
+    echo "PROBE_STARTED" > /tmp/inbound_tcp_result.txt
+    # Drive a real ssh client through version + KEXINIT on a clean connection.
+    # ssh will hang awaiting the ECDH reply, so run it in the background and
+    # hard-kill it after a fixed window, then read what it logged.
+    ssh -vv -p 2222 \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o BatchMode=yes -o ConnectTimeout=8 \
+        root@127.0.0.1 > /tmp/ssh_probe.log 2>&1 &
+    ssh_pid=$!
+    sleep 12
+    kill -9 "${ssh_pid}" 2>/dev/null || true
+    sleep 1
+    echo "SSH_NEGOTIATION:" >> /tmp/inbound_tcp_result.txt
+    grep -iE 'remote software version|kex: algorithm|host key alg|server->client cipher|expecting SSH2_MSG_KEX|SSH2_MSG_KEXINIT' \
+        /tmp/ssh_probe.log >> /tmp/inbound_tcp_result.txt 2>/dev/null || true
+    echo "PROBE_DONE" >> /tmp/inbound_tcp_result.txt
 ) &
 # Honor KEEP_RUNNING=1 (set by bin/run-brainx.sh in its default "always have
 # the latest version running" mode): omit the 300s `timeout` wrapper so qemu
