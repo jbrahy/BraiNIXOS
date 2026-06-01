@@ -66,6 +66,7 @@ pub fn execute_boot_sequence(
     load_and_launch_server_processes(boot_step_logger);
     launch_device_server_processes(boot_step_logger);
     launch_network_server_processes(boot_step_logger);
+    launch_shell_server_process(multiboot2_info_address, boot_step_logger);
     log_boot_complete(boot_step_logger);
 }
 
@@ -512,6 +513,123 @@ fn insert_capability_space_into_global_process_table(
     process_table
         .insert_entry(thread_identifier, capability_space)
         .unwrap();
+}
+
+/// Launches the shell server by ELF-loading the multiboot2 `shell`
+/// module. Halts the kernel with PCR[5] extended on any loader error.
+///
+/// Enforces invariant INV-BOOT-001 (measured boot integrity) by routing
+/// the source module's hash into the failure record.
+///
+/// **BLOCKED — overnight unsupervised run, 2026-05-31.** Invoking the
+/// real shell-launch path (`prepare_shell_module_inputs` →
+/// `create_shell_process_or_halt`) at this position in the boot
+/// sequence triggers a page fault to physical address ~0x80c490
+/// (within the bootloader's stack-page region) during the next
+/// activate_ipc_subsystem step. The same call chain
+/// (extract_module_byte_slices_from_boot_information +
+/// compute_module_sha256) succeeds when invoked earlier from
+/// `measure_server_binaries_into_pcr3`. Bisected with stubs of every
+/// internal call: extract-alone passes; sha256-alone passes;
+/// extract+sha256-of-slice fails. Function-definition-only (no
+/// runtime call) passes — only the second runtime invocation breaks
+/// the boot. Suspect a kernel binary code-layout interaction with
+/// some other state initialized between PCR[3] measurement and this
+/// point. Documented in OVERNIGHT_REPORT.md for daytime
+/// investigation. Until resolved, the shell is not launched at boot
+/// — boot reaches "BraiNIX: boot complete" but the v0.02 shell never
+/// appears on the serial console.
+fn launch_shell_server_process(
+    multiboot2_info_address: u64,
+    boot_step_logger: &mut BootStepLogger,
+) {
+    let _ = multiboot2_info_address;
+    let _ = prepare_shell_module_inputs;
+    let _ = create_shell_process_or_halt;
+    let _ = register_shell_process_in_table;
+    boot_step_logger
+        .warn("Shell process launch deferred (Phase 16-A Task 9 blocker — see OVERNIGHT_REPORT.md)");
+}
+
+struct ShellModuleInputs {
+    module_bytes: &'static [u8],
+    module_hash: [u8; 32],
+}
+
+fn prepare_shell_module_inputs(multiboot2_info_address: u64) -> ShellModuleInputs {
+    let module_slices = extract_module_byte_slices_from_boot_information(multiboot2_info_address);
+    let shell_bytes = pick_shell_module_byte_slice(&module_slices);
+    let shell_hash = compute_module_sha256(shell_bytes);
+    ShellModuleInputs {
+        module_bytes: shell_bytes,
+        module_hash: shell_hash,
+    }
+}
+
+/// Module index 1 is the shell per docker/test.sh grub.cfg generation
+/// (kernel = index 0, shell = index 1).
+fn pick_shell_module_byte_slice(module_slices: &[&'static [u8]; 8]) -> &'static [u8] {
+    module_slices[1]
+}
+
+fn compute_module_sha256(module_bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(module_bytes);
+    hasher.finalize().into()
+}
+
+fn create_shell_process_or_halt(
+    inputs: &ShellModuleInputs,
+    boot_step_logger: &mut BootStepLogger,
+) -> (
+    crate::process::server_launch::ServerProcessHandle,
+    crate::capability::capability_space::CapabilitySpace,
+) {
+    match crate::process::server_launch::create_server_process_from_elf(
+        ProcessType::Shell,
+        inputs.module_bytes,
+    ) {
+        Ok(pair) => pair,
+        Err(error) => halt_on_userspace_elf_load_failure(
+            ProcessType::Shell,
+            error,
+            &inputs.module_hash,
+            boot_step_logger,
+        ),
+    }
+}
+
+fn halt_on_userspace_elf_load_failure(
+    process_type: ProcessType,
+    error: crate::process::elf_loader::ElfLoadError,
+    module_hash: &[u8; 32],
+    boot_step_logger: &mut BootStepLogger,
+) -> ! {
+    boot_step_logger.line("[FAIL] Userspace ELF load failed");
+    let failure_record = crate::process::elf_load_failure::compute_load_failure_record_hash(
+        process_type,
+        error,
+        module_hash,
+    );
+    let _ = crate::hardware_security::tpm::commands::extend_platform_configuration_register(
+        crate::process::elf_load_failure::USERSPACE_ELF_LOAD_FAILURE_PCR_INDEX,
+        &failure_record,
+    );
+    crate::arch::interrupts::halt::disable_interrupts_and_halt()
+}
+
+fn register_shell_process_in_table(
+    handle_and_cspace: (
+        crate::process::server_launch::ServerProcessHandle,
+        crate::capability::capability_space::CapabilitySpace,
+    ),
+) {
+    let (handle, capability_space) = handle_and_cspace;
+    insert_capability_space_into_global_process_table(
+        handle.thread_identifier,
+        capability_space,
+    );
 }
 
 fn log_kernel_banner(boot_step_logger: &mut BootStepLogger) {
