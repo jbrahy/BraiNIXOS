@@ -438,7 +438,9 @@ pub fn syscall_serial_write_byte(byte_value: u8) -> i64 {
         core::arch::asm!(
             "syscall",
             in("rax") SYSCALL_NUMBER_SERIAL_WRITE_BYTE,
-            in("rdi") byte_value as u64,
+            // Message Register 0 = r8 (IPC ABI §8). The kernel reads the byte
+            // from KERNEL_SYSCALL_MESSAGE_REGISTER_ZERO_VALUE, sourced from r8.
+            in("r8") byte_value as u64,
             lateout("rax") return_value,
             out("rcx") _,
             out("r11") _,

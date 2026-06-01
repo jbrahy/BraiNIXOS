@@ -203,14 +203,21 @@ unsafe fn write_zero_bytes_through_user_mapping(
     Ok(())
 }
 
+#[allow(clippy::arithmetic_side_effects)]
 unsafe fn write_one_byte_to_user_address(
     user_page_map_level_4: &mut PageTable,
     destination_virtual_address: u64,
     byte_value: u8,
 ) -> Result<(), ElfLoadError> {
-    let physical_address =
+    // resolve_mapped_physical_address returns the FRAME base (page-offset bits
+    // masked off). Add the intra-page offset so each byte lands at its true
+    // physical address — otherwise every byte of a page overwrites frame+0,
+    // leaving the page zero-filled except for the last byte written.
+    let frame_physical_address =
         resolve_user_virtual_to_physical(user_page_map_level_4, destination_virtual_address)?;
-    let direct_map_pointer = DIRECT_MAP_REGION_START.wrapping_add(physical_address) as *mut u8;
+    let page_offset = destination_virtual_address & (PAGE_SIZE_IN_BYTES as u64 - 1);
+    let byte_physical_address = frame_physical_address + page_offset;
+    let direct_map_pointer = DIRECT_MAP_REGION_START.wrapping_add(byte_physical_address) as *mut u8;
     core::ptr::write_volatile(direct_map_pointer, byte_value);
     Ok(())
 }

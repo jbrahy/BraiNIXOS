@@ -66,8 +66,33 @@ pub fn execute_boot_sequence(
     load_and_launch_server_processes(boot_step_logger);
     launch_device_server_processes(boot_step_logger);
     launch_network_server_processes(boot_step_logger);
-    launch_shell_server_process(multiboot2_info_address, boot_step_logger);
+    let shell_thread_index = launch_shell_server_process(multiboot2_info_address, boot_step_logger);
     log_boot_complete(boot_step_logger);
+    dispatch_shell_to_userspace(shell_thread_index, boot_step_logger);
+}
+
+/// Loads the shell thread's saved entry point, user stack, and user page table,
+/// then SYSRETs into ring 3 through the KPTI trampoline. Never returns — this is
+/// the end of the boot path; from here the shell runs and drives the console.
+#[allow(clippy::unwrap_used)]
+fn dispatch_shell_to_userspace(thread_index: usize, boot_step_logger: &mut BootStepLogger) -> ! {
+    boot_step_logger.ok("Dispatching shell to userspace (ring 3)");
+    // SAFETY: single-core boot; thread_index is the shell created just above and
+    // is < MAXIMUM_THREADS. The accessor borrows the kernel thread pool exclusively.
+    let shell_thread = unsafe { kernel_ipc_state::kernel_thread_at_mut(thread_index) }.unwrap();
+    let entry_point = shell_thread.register_save_area.register_rcx;
+    let user_stack_top = shell_thread.register_save_area.register_rsp;
+    let user_page_table = shell_thread.user_page_table_physical_address;
+    // SAFETY: the shell's user PML4 maps its entry point, stack, and (via
+    // map_trampoline_into_user_page_table) the supervisor trampoline pages.
+    unsafe {
+        crate::arch::syscall_trampoline::enter_userspace(
+            thread_index as u32,
+            entry_point,
+            user_stack_top,
+            user_page_table,
+        )
+    }
 }
 
 /// Constructs the kernel and user page table hierarchies and verifies guard pages.
@@ -543,11 +568,13 @@ fn insert_capability_space_into_global_process_table(
 fn launch_shell_server_process(
     multiboot2_info_address: u64,
     boot_step_logger: &mut BootStepLogger,
-) {
+) -> usize {
     let module_inputs = prepare_shell_module_inputs(multiboot2_info_address);
     let handle_and_cspace = create_shell_process_or_halt(&module_inputs, boot_step_logger);
+    let shell_thread_index = handle_and_cspace.0.thread_index;
     register_shell_process_in_table(handle_and_cspace);
-    boot_step_logger.ok("Shell process created and registered (Ready; not yet scheduled)");
+    boot_step_logger.ok("Shell process created and registered (Ready)");
+    shell_thread_index
 }
 
 struct ShellModuleInputs {

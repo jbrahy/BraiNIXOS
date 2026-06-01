@@ -7,7 +7,8 @@
 //! Security properties enforced:
 //! - r11 saved to kernel stack (SYSCALL clobbers r11 with RFLAGS)
 //! - rcx saved to kernel stack (SYSCALL clobbers rcx with return RIP)
-//! - All non-return registers zeroed before SYSRET (no leakage between processes)
+//! - Caller-saved argument registers restored and callee-saved registers
+//!   preserved (the user's own values) before SYSRET — no kernel state leaks
 //! - Return RIP (rcx) validated as canonical before SYSRET (Intel errata, D-11)
 //! - Non-canonical RIP falls back to IRETQ
 //!
@@ -44,10 +45,39 @@ pub fn install_syscall_entry_point() {
     // Invariant: INV-IPC-001 (all IPC routes through this entry point).
     // Evidence: test_syscall_entry_stub_registers_lstar_msr.
     unsafe {
+        enable_syscall_extensions_in_efer();
         write_lstar_msr_with_entry_point();
         write_star_msr_with_segment_selectors();
         write_sfmask_msr_to_clear_interrupt_flag();
     }
+}
+
+/// Sets IA32_EFER.SCE (bit 0) so SYSCALL/SYSRET are valid opcodes.
+///
+/// Without EFER.SCE the `syscall` and `sysret` instructions raise #UD. Long-mode
+/// boot sets EFER.LME/NXE but leaves SCE clear; this read-modify-write turns it on
+/// while preserving LME/LMA/NXE in the high and low halves.
+///
+/// # Safety
+///
+/// Ring 0 required. rdmsr/wrmsr on IA32_EFER (0xC0000080) preserve all bits except
+/// the explicitly set SCE bit.
+unsafe fn enable_syscall_extensions_in_efer() {
+    // SAFETY: Ring 0 MSR read-modify-write of IA32_EFER = 0xC0000080. Reads the
+    // current EFER (edx:eax), ORs SCE (bit 0) into eax, writes it back unchanged
+    // otherwise — preserving LME/LMA/NXE.
+    // - Precondition: CPU in ring 0; long mode active.
+    // - Invariant: INV-IPC-001 (SYSCALL entry must be usable).
+    // - Evidence: live SYSRET to ring 3 no longer #UDs.
+    core::arch::asm!(
+        "rdmsr",
+        "or eax, 1",
+        "wrmsr",
+        in("ecx") 0xC000_0080u32,
+        out("eax") _,
+        out("edx") _,
+        options(nostack, preserves_flags),
+    );
 }
 
 /// Writes the SYSCALL entry point address to IA32_LSTAR (0xC0000082).
@@ -84,10 +114,11 @@ unsafe fn write_lstar_msr_with_entry_point() {
 ///
 /// Ring 0 required. Selector values must match the live GDT layout.
 unsafe fn write_star_msr_with_segment_selectors() {
-    // Bits [63:48] = user CS base (0x18), bits [47:32] = kernel CS (0x08).
-    // SYSRET uses [63:48] | 3 for user CS and [63:48] + 8 for user SS.
-    // SYSCALL uses [47:32] for kernel CS and [47:32] + 8 for kernel SS.
-    let star_register_value: u64 = 0x0018_0008_u64 << 32;
+    // Bits [63:48] = SYSRET selector base (0x10), bits [47:32] = SYSCALL CS (0x08).
+    // SYSCALL: kernel CS = 0x08, kernel SS = 0x08 + 8 = 0x10 (kernel data).
+    // SYSRET (64-bit): user CS = 0x10 + 16 = 0x20 (user code, RPL 3), user SS =
+    // 0x10 + 8 = 0x18 (user data, RPL 3). Matches the GDT append order.
+    let star_register_value: u64 = 0x0010_0008_u64 << 32;
     // SAFETY: Ring 0 MSR write; IA32_STAR = 0xC0000081.
     // Precondition: GDT is loaded with kernel CS=0x08, user CS=0x18.
     // Invariant: INV-IPC-001.
@@ -178,6 +209,20 @@ global_asm!(
     "mov %rax, %cr3",                                 // -> kernel page table (kernel now mapped)
     "mov SYSCALL_TRAMPOLINE_SCRATCH+8(%rip), %rsp",  // kernel RSP0
     "mov SYSCALL_TRAMPOLINE_SCRATCH+32(%rip), %rax", // restore rax
+    // Preserve the user's callee-saved registers (rbx, rbp, r13-r15) across the
+    // syscall. Userspace treats `syscall` like a function call and relies on
+    // these surviving (e.g. a shell loop counter in rbx). Restoring the user's
+    // OWN values on exit leaks no kernel state, replacing the prior zero-on-exit.
+    // The leading 8-byte pad keeps the kernel stack 16-byte aligned for the C
+    // ABI `call`s below (5 register pushes would otherwise misalign it).
+    // These six slots sit ABOVE the ten argument pushes, so the hardcoded
+    // [rsp+0..72] offsets used during dispatch remain correct.
+    "sub $8, %rsp",
+    "push %rbx",
+    "push %rbp",
+    "push %r13",
+    "push %r14",
+    "push %r15",
     // SYSCALL clobbers rcx (return RIP) and r11 (RFLAGS). Save them first.
     "push %rcx",
     "push %r11",
@@ -236,12 +281,15 @@ global_asm!(
     "add $8, %rsp",
     "pop %r11",
     "pop %rcx",
-    // Zero all non-return registers before SYSRET (D-11 — no information leakage).
-    "xor %rbx, %rbx",
-    "xor %rbp, %rbp",
-    "xor %r13, %r13",
-    "xor %r14, %r14",
-    "xor %r15, %r15",
+    // Restore the user's callee-saved registers saved on entry, then discard the
+    // alignment pad (D-11: these are the caller's own values, so no kernel state
+    // leaks to userspace).
+    "pop %r15",
+    "pop %r14",
+    "pop %r13",
+    "pop %rbp",
+    "pop %rbx",
+    "add $8, %rsp",
     // KPTI exit: rax holds the return code, rcx the return RIP, r11 the RFLAGS.
     // Swap back to the user page table and the user stack, then SYSRET.
     "mov %rax, SYSCALL_TRAMPOLINE_SCRATCH+32(%rip)", // save return code
@@ -263,7 +311,13 @@ global_asm!(
     "mov %rdx, SYSCALL_TRAMPOLINE_SCRATCH+16(%rip)", // record user CR3 for later exits
     "mov %rsi, SYSCALL_TRAMPOLINE_SCRATCH+24(%rip)", // user rsp
     "mov %rdi, %rcx",                                 // SYSRET loads RIP from rcx
-    "mov $0x202, %r11",                               // RFLAGS: IF set (bit 9) + reserved bit 1
+    // RFLAGS for the first SYSRET to ring 3: reserved bit 1 only, IF CLEAR.
+    // KPTI runs userspace on a page table that does NOT map the IDT or the
+    // interrupt entry stubs, so any hardware interrupt taken in ring 3 would
+    // fault during delivery and cascade to a triple fault. Until a CR3-swapping
+    // interrupt trampoline is mapped into every user page table, userspace runs
+    // with interrupts masked and does I/O by polling via synchronous syscalls.
+    "mov $0x002, %r11",
     "mov %rdx, %cr3",                                 // -> user page table
     "mov SYSCALL_TRAMPOLINE_SCRATCH+24(%rip), %rsp",  // load user rsp
     "xor %rax, %rax",

@@ -126,12 +126,29 @@ fn allocate_bootstrap_page_table() -> &'static mut PageTable {
 }
 
 /// Allocates a bootstrap page table and sets a parent entry to point at it.
-fn allocate_and_link_bootstrap_table(parent_entry: &mut PageTableEntry) -> &'static mut PageTable {
+///
+/// `intermediate_flags` carries the USER_ACCESSIBLE bit down from the leaf
+/// mapping: the x86-64 walk ANDs U/S across every level, so a user leaf is only
+/// reachable from ring 3 if every table on its path is also user-accessible.
+fn allocate_and_link_bootstrap_table(
+    parent_entry: &mut PageTableEntry,
+    intermediate_flags: PageTableFlags,
+) -> &'static mut PageTable {
     let new_table = allocate_bootstrap_page_table();
     let physical_address = compute_page_table_physical_address(new_table);
-    let flags = compute_intermediate_page_table_flags();
-    parent_entry.set_addr(physical_address, flags);
+    parent_entry.set_addr(physical_address, intermediate_flags);
     new_table
+}
+
+/// Derives the intermediate-table flags for a leaf mapping. Always
+/// PRESENT | WRITABLE; adds USER_ACCESSIBLE iff the leaf itself is user-accessible
+/// (kernel mappings keep supervisor-only intermediates — defense in depth).
+fn compute_intermediate_flags_for_leaf(leaf_flags: PageTableFlags) -> PageTableFlags {
+    let mut flags = compute_intermediate_page_table_flags();
+    if leaf_flags.contains(PageTableFlags::USER_ACCESSIBLE) {
+        flags |= PageTableFlags::USER_ACCESSIBLE;
+    }
+    flags
 }
 
 /// Ensures the PML4 entry at the given index points to a PDPT.
@@ -141,9 +158,10 @@ fn allocate_and_link_bootstrap_table(parent_entry: &mut PageTableEntry) -> &'sta
 fn ensure_page_directory_pointer_table_exists(
     page_map_level_4: &mut PageTable,
     pml4_index: usize,
+    intermediate_flags: PageTableFlags,
 ) -> &'static mut PageTable {
     if page_map_level_4[pml4_index].is_unused() {
-        allocate_and_link_bootstrap_table(&mut page_map_level_4[pml4_index])
+        allocate_and_link_bootstrap_table(&mut page_map_level_4[pml4_index], intermediate_flags)
     } else {
         // SAFETY: physical address was stored by allocate_and_link_bootstrap_table above.
         // - Precondition: entry is non-empty, meaning we stored a BSS bootstrap table address.
@@ -157,9 +175,13 @@ fn ensure_page_directory_pointer_table_exists(
 fn ensure_page_directory_exists(
     page_directory_pointer_table: &mut PageTable,
     pdpt_index: usize,
+    intermediate_flags: PageTableFlags,
 ) -> &'static mut PageTable {
     if page_directory_pointer_table[pdpt_index].is_unused() {
-        allocate_and_link_bootstrap_table(&mut page_directory_pointer_table[pdpt_index])
+        allocate_and_link_bootstrap_table(
+            &mut page_directory_pointer_table[pdpt_index],
+            intermediate_flags,
+        )
     } else {
         // SAFETY: physical address was stored by allocate_and_link_bootstrap_table above.
         // - Precondition: entry is non-empty; we stored a BSS bootstrap table address.
@@ -175,9 +197,13 @@ fn ensure_page_directory_exists(
 fn ensure_page_table_exists(
     page_directory: &mut PageTable,
     page_directory_index: usize,
+    intermediate_flags: PageTableFlags,
 ) -> &'static mut PageTable {
     if page_directory[page_directory_index].is_unused() {
-        allocate_and_link_bootstrap_table(&mut page_directory[page_directory_index])
+        allocate_and_link_bootstrap_table(
+            &mut page_directory[page_directory_index],
+            intermediate_flags,
+        )
     } else {
         // SAFETY: physical address was stored by allocate_and_link_bootstrap_table above.
         // - Precondition: entry is non-empty; we stored a BSS bootstrap table address.
@@ -195,12 +221,13 @@ fn ensure_page_table_exists(
 fn resolve_page_directory_for_address(
     page_map_level_4: &mut PageTable,
     virtual_address: u64,
+    intermediate_flags: PageTableFlags,
 ) -> &'static mut PageTable {
     let pml4_index = extract_page_map_level_4_index(virtual_address);
     let pdpt_index = extract_page_directory_pointer_table_index(virtual_address);
     let page_directory_pointer_table =
-        ensure_page_directory_pointer_table_exists(page_map_level_4, pml4_index);
-    ensure_page_directory_exists(page_directory_pointer_table, pdpt_index)
+        ensure_page_directory_pointer_table_exists(page_map_level_4, pml4_index, intermediate_flags);
+    ensure_page_directory_exists(page_directory_pointer_table, pdpt_index, intermediate_flags)
 }
 
 /// Walks the full PML4 -> PDPT -> PD -> PT hierarchy for a virtual address.
@@ -209,11 +236,14 @@ fn resolve_page_directory_for_address(
 fn resolve_page_table_for_address(
     page_map_level_4: &mut PageTable,
     virtual_address: u64,
+    intermediate_flags: PageTableFlags,
 ) -> (&'static mut PageTable, usize) {
-    let page_directory = resolve_page_directory_for_address(page_map_level_4, virtual_address);
+    let page_directory =
+        resolve_page_directory_for_address(page_map_level_4, virtual_address, intermediate_flags);
     let page_directory_index = extract_page_directory_index(virtual_address);
     let page_table_index = extract_page_table_index(virtual_address);
-    let page_table = ensure_page_table_exists(page_directory, page_directory_index);
+    let page_table =
+        ensure_page_table_exists(page_directory, page_directory_index, intermediate_flags);
     (page_table, page_table_index)
 }
 
@@ -228,8 +258,9 @@ fn map_single_page(
     flags: PageTableFlags,
 ) -> Result<(), MappingError> {
     validate_page_table_flags_enforce_write_xor_execute(flags)?;
+    let intermediate_flags = compute_intermediate_flags_for_leaf(flags);
     let (page_table, page_table_index) =
-        resolve_page_table_for_address(page_map_level_4, virtual_address);
+        resolve_page_table_for_address(page_map_level_4, virtual_address, intermediate_flags);
     write_page_table_entry(page_table, page_table_index, physical_address, flags);
     Ok(())
 }
@@ -261,8 +292,13 @@ pub unsafe fn resolve_mapped_physical_address(
     page_map_level_4: &mut PageTable,
     virtual_address: u64,
 ) -> Result<u64, MappingError> {
-    let (page_table, page_table_index) =
-        resolve_page_table_for_address(page_map_level_4, virtual_address);
+    // Read-only walk: the leaf was already mapped, so every table on the path
+    // exists and ensure_* never allocates — these flags are inert here.
+    let (page_table, page_table_index) = resolve_page_table_for_address(
+        page_map_level_4,
+        virtual_address,
+        compute_intermediate_page_table_flags(),
+    );
     let entry = &page_table[page_table_index];
     if entry.is_unused() {
         return Err(MappingError::InvalidAddress);

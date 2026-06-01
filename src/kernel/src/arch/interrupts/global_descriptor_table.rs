@@ -39,9 +39,20 @@ fn populate_global_descriptor_table(task_state_segment: &'static TaskStateSegmen
     // - Evidence: test_gdt_loaded_with_kernel_segments.
     // Allowlist: src/kernel/src/arch/interrupts/ — GDT segment descriptor setup.
     unsafe {
+        // Append order is load-bearing for SYSCALL/SYSRET (see STAR in
+        // syscall_entry.rs): kernel_code=0x08, kernel_data=0x10, user_data=0x18,
+        // user_code=0x20, tss=0x28. SYSCALL loads kernel SS = 0x08+8 = 0x10;
+        // SYSRET (STAR base 0x10) loads SS = 0x10+8 = 0x18 (user data) and
+        // CS = 0x10+16 = 0x20 (user code).
         let kernel_code_selector = (*core::ptr::addr_of_mut!(GLOBAL_DESCRIPTOR_TABLE))
             .append(Descriptor::kernel_code_segment());
         core::ptr::addr_of_mut!(KERNEL_CODE_SEGMENT_SELECTOR).write(kernel_code_selector);
+        let _kernel_data_selector = (*core::ptr::addr_of_mut!(GLOBAL_DESCRIPTOR_TABLE))
+            .append(Descriptor::kernel_data_segment());
+        let _user_data_selector = (*core::ptr::addr_of_mut!(GLOBAL_DESCRIPTOR_TABLE))
+            .append(Descriptor::user_data_segment());
+        let _user_code_selector = (*core::ptr::addr_of_mut!(GLOBAL_DESCRIPTOR_TABLE))
+            .append(Descriptor::user_code_segment());
         let task_state_segment_selector = (*core::ptr::addr_of_mut!(GLOBAL_DESCRIPTOR_TABLE))
             .append(Descriptor::tss_segment(task_state_segment));
         core::ptr::addr_of_mut!(TASK_STATE_SEGMENT_SELECTOR).write(task_state_segment_selector);
