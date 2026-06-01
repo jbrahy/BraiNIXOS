@@ -17,6 +17,7 @@
 //! - `module_loader` -- Discovers multiboot2 modules and orchestrates loading
 
 pub mod address_space;
+pub mod elf_load_failure;
 pub mod elf_loader;
 pub mod module_loader;
 pub mod process_table;
