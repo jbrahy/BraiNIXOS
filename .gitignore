@@ -32,6 +32,12 @@ tpm-state/
 *.pfx
 dev-signing-key*
 prod-signing-key*
+
+# Exception: vendored crates ship crypto test fixtures (public test vectors,
+# e.g. ed25519's pubkey.pem / pkcs8-*.pem). The offline build verifies every
+# vendored file against `.cargo-checksum.json`, so these MUST be committed.
+# Re-includes vendored .pem files only; real keys elsewhere stay ignored.
+!vendor/**/*.pem
 signing-key*
 private-key*
 
