@@ -73,6 +73,25 @@ const SAVED_MULTIBOOT2_INFO_POINTER_ADDRESS: u64 = 0x0081_0000;
 /// Null-terminated identifier used in grub.cfg `module2` lines.
 const KERNEL_MODULE_NAME: &[u8] = b"kernel";
 
+/// Identifier of the shell server module in grub.cfg `module2` lines.
+const SHELL_MODULE_NAME: &[u8] = b"shell";
+
+/// Scratch physical address where the bootloader relocates the shell
+/// server module before loading the kernel ELF. Chosen at 16 MiB: above
+/// the kernel's PT_LOAD destination range (which extends through its
+/// multi-megabyte `.bss` to roughly 0x46E000), above the boot stack
+/// (0x808000-0x810000) and the multiboot2 info scratch (0xC00000), and
+/// well inside the 32 MiB identity-mapped window.
+///
+/// Why this is necessary: GRUB loads the shell module contiguously after
+/// the kernel module, at a low physical address (observed 0x3DD000) that
+/// falls inside the kernel image's runtime `.bss`. Once the kernel runs,
+/// its static data overwrites those bytes, so the shell ELF is corrupt by
+/// the time the boot sequence tries to load it. Relocating the module to
+/// safe scratch and rewriting its multiboot2 module tag preserves it; the
+/// kernel reads the shell transparently from the new address.
+const SAFE_SHELL_MODULE_SCRATCH_ADDRESS: u64 = 0x0100_0000;
+
 /// Scratch physical address where the bootloader copies the multiboot2
 /// information structure before loading the kernel ELF. Chosen at 12 MiB:
 /// above the bootloader image (0x800000-0x80A000), above the shell load
@@ -108,8 +127,50 @@ pub unsafe extern "C" fn load_kernel_module_and_jump_to_entry() -> ! {
     let parsed_image = parse_kernel_image(kernel_module);
     let safe_information_address =
         copy_multiboot2_info_to_safe_scratch(original_information_address);
+    relocate_shell_module_to_safe_scratch(safe_information_address);
     load_kernel_image(kernel_module, &parsed_image);
     jump_to_kernel_entry(parsed_image.entry_point_address, safe_information_address);
+}
+
+/// Relocates the shell server module out of the kernel's runtime memory
+/// footprint and rewrites its multiboot2 module tag (in the already-staged
+/// scratch info structure) to point at the relocated bytes.
+///
+/// Must run AFTER `copy_multiboot2_info_to_safe_scratch` (so the tag we
+/// rewrite is the copy the kernel will read) and BEFORE `load_kernel_image`
+/// (so the shell bytes are still intact at their original address when we
+/// copy them). A missing shell module is not an error -- the bootloader
+/// simply leaves the tag untouched.
+///
+/// # Safety
+/// Same contract as the multiboot2 walkers: `information_structure_address`
+/// is the scratch copy, identity-mapped and well-formed.
+unsafe fn relocate_shell_module_to_safe_scratch(information_structure_address: u64) {
+    let tag_address = match multiboot2_info::find_module_tag_address_by_name(
+        information_structure_address,
+        SHELL_MODULE_NAME,
+    ) {
+        Some(address) => address,
+        None => return,
+    };
+    copy_shell_module_and_rewrite_tag(tag_address);
+}
+
+#[allow(clippy::arithmetic_side_effects)]
+unsafe fn copy_shell_module_and_rewrite_tag(tag_address: u64) {
+    let module_start = u64::from(core::ptr::read_volatile((tag_address + 8) as *const u32));
+    let module_end = u64::from(core::ptr::read_volatile((tag_address + 12) as *const u32));
+    let module_size = module_end - module_start;
+    copy_bytes_byte_at_a_time(module_start, SAFE_SHELL_MODULE_SCRATCH_ADDRESS, module_size);
+    rewrite_module_tag_addresses(tag_address, module_size);
+}
+
+#[allow(clippy::arithmetic_side_effects)]
+unsafe fn rewrite_module_tag_addresses(tag_address: u64, module_size: u64) {
+    let relocated_start = SAFE_SHELL_MODULE_SCRATCH_ADDRESS as u32;
+    let relocated_end = (SAFE_SHELL_MODULE_SCRATCH_ADDRESS + module_size) as u32;
+    core::ptr::write_volatile((tag_address + 8) as *mut u32, relocated_start);
+    core::ptr::write_volatile((tag_address + 12) as *mut u32, relocated_end);
 }
 
 unsafe fn read_saved_multiboot2_info_pointer() -> u64 {

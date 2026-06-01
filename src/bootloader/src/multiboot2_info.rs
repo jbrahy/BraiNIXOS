@@ -68,6 +68,46 @@ pub unsafe fn find_module_by_name(
     walk_tags_until_match(&mut tag_address, end_address, target_name)
 }
 
+/// Like `find_module_by_name`, but returns the address of the matching
+/// module tag itself rather than its decoded location. The caller can
+/// read and rewrite the tag's `mod_start`/`mod_end` fields (at byte
+/// offsets +8 and +12) to relocate the module's bytes elsewhere.
+///
+/// # Safety
+/// Same contract as `find_module_by_name`.
+pub unsafe fn find_module_tag_address_by_name(
+    information_structure_address: u64,
+    target_name: &[u8],
+) -> Option<u64> {
+    let total_size_bytes = read_total_size(information_structure_address);
+    let mut tag_address = information_structure_address + u64::from(MULTIBOOT2_FIXED_HEADER_BYTES);
+    let end_address = information_structure_address + u64::from(total_size_bytes);
+    walk_tags_until_module_tag_match(&mut tag_address, end_address, target_name)
+}
+
+unsafe fn walk_tags_until_module_tag_match(
+    tag_address: &mut u64,
+    end_address: u64,
+    target_name: &[u8],
+) -> Option<u64> {
+    while *tag_address < end_address {
+        if tag_matches_module_name(*tag_address, target_name) {
+            return Some(*tag_address);
+        }
+        advance_tag_address(tag_address);
+    }
+    None
+}
+
+unsafe fn tag_matches_module_name(tag_address: u64, target_name: &[u8]) -> bool {
+    if read_u32_at(tag_address) != MULTIBOOT2_TAG_TYPE_MODULE {
+        return false;
+    }
+    let module_start = read_u32_at(tag_address + 8);
+    let module_end = read_u32_at(tag_address + 12);
+    module_end > module_start && tag_string_matches(tag_address, target_name)
+}
+
 unsafe fn read_total_size(information_structure_address: u64) -> u32 {
     read_u32_at(information_structure_address)
 }
