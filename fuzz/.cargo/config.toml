@@ -1,0 +1,13 @@
+# Fuzz crate uses its own vendored dependency tree.
+# libfuzzer-sys and transitive deps are vendored here separately from
+# the main workspace vendor directory, which does not include fuzz deps.
+#
+# Using a distinct source name "fuzz-vendored-sources" to avoid collision
+# with the parent workspace config's "vendored-sources" source replacement.
+# Absolute path used so resolution is not relative to .cargo/ subdirectory.
+
+[source.crates-io]
+replace-with = "fuzz-vendored-sources"
+
+[source."fuzz-vendored-sources"]
+directory = "/Users/jbrahy/OtherProjects/brainix/fuzz/vendor"

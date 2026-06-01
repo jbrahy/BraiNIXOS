@@ -1,0 +1,310 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "dev"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 0. Style gate — fastest feedback, runs first
+  # ---------------------------------------------------------------------------
+  style:
+    name: Style Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (pinned nightly)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-01
+          components: rustfmt, clippy, rust-src
+
+      - name: cargo check (bare-metal crates)
+        run: cargo check -p brainix-kernel -p brainix-bootloader --features brainix-kernel/kernel-binary --target x86_64-unknown-none
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy (bare-metal target)
+        run: cargo clippy -p brainix-kernel -p brainix-bootloader --features brainix-kernel/kernel-binary --target x86_64-unknown-none -- -D warnings
+
+      - name: cargo clippy (host target)
+        run: cargo clippy --workspace --exclude brainix-capability-verify --exclude brainix-kernel --exclude brainix-bootloader --exclude brainix-ipc-core --exclude brainix-bootloader-verify -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  # 1. Supply chain audit — runs after style gate
+  # ---------------------------------------------------------------------------
+  supply-chain:
+    name: Supply Chain Audit
+    runs-on: ubuntu-latest
+    needs: [style]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (nightly, pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-01
+          components: rust-src
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Install cargo-vet
+        uses: taiki-e/install-action@cargo-vet
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: cargo deny (license + advisories)
+        run: cargo deny check
+
+      - name: cargo vet (trusted audits)
+        run: cargo vet
+
+      - name: cargo audit (CVE check)
+        run: cargo audit
+
+  # ---------------------------------------------------------------------------
+  # 2. Unit tests — runs on host (std), covers capability/IPC logic
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: supply-chain
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (nightly)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-01
+          components: rust-src
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-unit-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run capability-verify unit tests (hosted Kani shim)
+        run: cargo test -p capability-verify --verbose
+
+      - name: Run kernel security boot tests (host target)
+        run: cargo test -p brainix-kernel --verbose
+
+  # ---------------------------------------------------------------------------
+  # 3. Kernel cross-compile — verifies no_std bare-metal build
+  # ---------------------------------------------------------------------------
+  kernel-build:
+    name: Kernel Cross-Compile
+    runs-on: ubuntu-latest
+    needs: supply-chain
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (nightly + x86_64-unknown-none)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-01
+          targets: x86_64-unknown-none
+          components: rust-src, llvm-tools-preview
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-kernel-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build kernel (bare metal)
+        working-directory: src/kernel
+        run: cargo build --target x86_64-unknown-none --release --features kernel-binary
+
+      - name: Build bootloader
+        working-directory: src/bootloader
+        run: cargo build --target x86_64-unknown-none --release
+
+  # ---------------------------------------------------------------------------
+  # 4. Formal verification — Kani on capability-verify shim crate
+  # ---------------------------------------------------------------------------
+  kani:
+    name: Kani Verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: model-checking/kani-github-action@v1
+        with:
+          working-directory: .
+          args: --package brainix-capability-verify
+
+  # ---------------------------------------------------------------------------
+  # 5a. Formal verification — Prusti on brainix-ipc-core shim crate (D-07, D-08)
+  # ---------------------------------------------------------------------------
+  prusti:
+    name: Prusti Verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Prusti verification on brainix-ipc-core
+        uses: viperproject/prusti-action@v1
+        with:
+          path: src/brainix-ipc-core
+
+  # ---------------------------------------------------------------------------
+  # 5. QEMU integration test — boots kernel, asserts serial output
+  # ---------------------------------------------------------------------------
+  integration-test:
+    name: QEMU Integration Test
+    runs-on: ubuntu-latest
+    needs: [kernel-build, kani]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU + swtpm + GRUB2 ISO tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            qemu-system-x86 \
+            swtpm \
+            swtpm-tools \
+            ovmf \
+            grub-pc-bin \
+            grub-common \
+            xorriso
+
+      - name: Install Rust (nightly + x86_64-unknown-none)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-01
+          targets: x86_64-unknown-none
+          components: rust-src
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build kernel
+        working-directory: src/kernel
+        run: cargo build --target x86_64-unknown-none --release --features kernel-binary
+
+      - name: Build bootloader
+        working-directory: src/bootloader
+        run: cargo build --target x86_64-unknown-none --release
+
+      - name: Create GRUB2 boot ISO
+        run: |
+          mkdir -p iso/boot/grub
+          cp target/x86_64-unknown-none/release/brainix-bootloader iso/boot/
+          cat > iso/boot/grub/grub.cfg << 'GRUBEOF'
+          set timeout=0
+          menuentry "BraiNIX" {
+              multiboot2 /boot/brainix-bootloader
+              boot
+          }
+          GRUBEOF
+          grub-mkrescue -o brainix.iso iso/
+
+      - name: Initialize swtpm (clean state)
+        run: |
+          rm -rf /tmp/swtpm-test
+          mkdir -p /tmp/swtpm-test
+          swtpm_setup \
+            --tpm2 \
+            --tpmstate /tmp/swtpm-test \
+            --createek \
+            --decryption \
+            --create-ek-cert \
+            --create-platform-cert \
+            --lock-nvram \
+            --overwrite
+          swtpm socket \
+            --tpm2 \
+            --tpmstate dir=/tmp/swtpm-test \
+            --ctrl type=unixio,path=/tmp/swtpm-test.ctrl \
+            --server type=unixio,path=/tmp/swtpm-test.sock \
+            --flags not-need-init,startup-clear \
+            --daemon
+
+      - name: Boot kernel in QEMU (headless, 30s timeout)
+        timeout-minutes: 2
+        run: |
+          timeout 30 qemu-system-x86_64 \
+            -machine q35,accel=tcg \
+            -cpu qemu64,+smep,+smap \
+            -m 512M \
+            -nographic \
+            -serial stdio \
+            -device virtio-net-pci,netdev=net0 \
+            -netdev user,id=net0 \
+            -chardev socket,id=chrtpm,path=/tmp/swtpm-test.sock \
+            -tpmdev emulator,id=tpm0,chardev=chrtpm \
+            -device tpm-tis,tpmdev=tpm0 \
+            -cdrom brainix.iso \
+            2>&1 | tee /tmp/boot.log || true
+
+      - name: Assert boot success
+        run: |
+          grep -q "BraiNIX: boot complete" /tmp/boot.log || \
+            (echo "FAIL: boot complete message not found" && cat /tmp/boot.log && exit 1)
+          echo "PASS: kernel booted successfully"
+
+      - name: Upload boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-log
+          path: /tmp/boot.log
+
+  # ---------------------------------------------------------------------------
+  # 6. Security scan — CVE results to GitHub Security tab
+  # ---------------------------------------------------------------------------
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-01
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Run cargo audit
+        run: cargo audit --json > audit-results.json || true
+
+      - name: Upload audit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cargo-audit-results
+          path: audit-results.json

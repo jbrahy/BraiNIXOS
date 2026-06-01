@@ -1,0 +1,110 @@
+# =============================================================================
+# BraiNIX — x86-64 security-first microkernel
+# =============================================================================
+
+# Rust build artifacts
+/target/
+src/kernel/target/
+src/bootloader/target/
+src/servers/*/target/
+src/capability-verify/target/
+
+# QEMU runtime artifacts
+*.img
+*.iso
+*.qcow2
+*.qcow
+qemu-*.pid
+qemu-*.log
+serial.log
+
+# TPM state (swtpm) — never commit, contains boot secrets
+swtpm/
+*.tpm
+*.tpm2
+tpm-state/
+
+# Signing keys — NEVER commit private keys
+*.key
+*.pem
+*.p8
+*.p12
+*.pfx
+dev-signing-key*
+prod-signing-key*
+
+# Exception: vendored crates ship crypto test fixtures (public test vectors,
+# e.g. ed25519's pubkey.pem / pkcs8-*.pem). The offline build verifies every
+# vendored file against `.cargo-checksum.json`, so these MUST be committed.
+# Re-includes vendored .pem files only; real keys elsewhere stay ignored.
+!vendor/**/*.pem
+signing-key*
+private-key*
+
+# Build output artifacts (covered by /target/ but explicit for clarity)
+/build/
+/dist/
+
+# IDE and editor artifacts
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swa
+*~
+.DS_Store
+Thumbs.db
+
+# Secrets and credentials — NEVER commit
+.env
+.env.*
+credentials.md
+secrets.toml
+
+# Docker build cache
+.docker-*
+docker-compose.override.yml
+
+# Test output
+/tests/integration/output/
+*.test.log
+
+# Cargo vet — supply-chain/ IS committed (audits and config)
+# Do NOT ignore supply-chain/
+
+# Vendor directory IS committed for reproducible offline builds
+# Do NOT ignore /vendor/
+
+# GSD planning — committed per config (commit_docs=true)
+# To keep planning local-only, uncomment:
+# .planning/
+
+# Stray rlib artifacts (produced by cargo test on some toolchain/host combinations)
+*.rlib
+
+# Compiled bootloader binary (built artifact, not source)
+iso/boot/brainix-bootloader
+iso/boot/kernel.elf
+iso/boot/shell.elf
+
+# Nested cargo target dirs (fuzz/, etc.) — top-level /target/ already ignored
+fuzz/target/
+
+# the build toolchain session data
+.assistant/
+
+# GSD internal state
+.planning/.next-call-count
+
+# Prompt scratch files
+prompts/
+
+# OS-specific
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini

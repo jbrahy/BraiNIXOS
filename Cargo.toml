@@ -1,0 +1,30 @@
+[workspace]
+members = [
+    "src/kernel",
+    "src/bootloader",
+    "src/bootloader-verify",
+    "src/servers/*",
+    "src/capability-verify",
+    "src/brainix-ipc-core",
+    "userland/shell/0.01",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+expect_used = "deny"
+arithmetic_side_effects = "deny"
+cognitive_complexity = "deny"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

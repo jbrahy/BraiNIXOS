@@ -1,0 +1,16 @@
+[package]
+name = "brainix-linkd"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+brainix-libsyscall = { path = "../libsyscall" }
+
+[dev-dependencies]
+brainix-devd-nic = { path = "../devd-nic" }
+brainix-ipd = { path = "../ipd" }
+brainix-transportd = { path = "../transportd" }
+
+[lints]
+workspace = true

@@ -1,0 +1,22 @@
+# bin/dependencies/activate/shell
+#
+# Build-environment dependencies for the brainix-shell crate
+# (userland/shell/0.01).
+#
+# Status at v0.01 (skeleton milestone): the shell crate has no external
+# environment requirements beyond what 000-base sets up. This file is a
+# deliberate placeholder so the dependency-tracking convention exists from
+# day one; any future additions (parser generator, fuzz harness, fixture
+# tools, test data generators) must be recorded here rather than silently
+# assumed to be on PATH.
+#
+# How to add a new dependency for the shell crate:
+#   1. Install the dependency in a location that exists on all BraiNIX dev
+#      machines (a rustup-installed cargo subcommand, a Homebrew cellar
+#      path, a vendored binary under /opt/brainix, etc.).
+#   2. Append an `export PATH="/path/to/new/tool:${PATH}"` line below, or
+#      `export TOOL_VAR=...` as appropriate.
+#   3. Document what the tool is used for in a comment above the export.
+#   4. Commit this file along with any code that requires the new dependency.
+
+:

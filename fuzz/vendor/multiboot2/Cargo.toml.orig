@@ -1,0 +1,51 @@
+[package]
+name = "multiboot2"
+description = """
+Convenient and safe parsing of Multiboot2 Boot Information (MBI)
+structures and the contained information tags. Usable in `no_std` environments,
+such as a kernel. An optional builder feature also allows the construction of
+the corresponding structures.
+"""
+version = "0.24.1"
+authors = [
+  "Philipp Oppermann <dev@phil-opp.com>",
+  "Calvin Lee <cyrus296@gmail.com>",
+  "Isaac Woods",
+  "Philipp Schuster <phip1611@gmail.com>"
+]
+categories = [
+  "no-std",
+  "no-std::no-alloc",
+  "parsing",
+]
+keywords = [
+  "Multiboot2",
+  "kernel",
+  "boot",
+  "bootloader",
+]
+# without this, sometimes crates.io doesn't show the preview of the README
+# I expeciended this multiple times in the past
+readme = "README.md"
+homepage = "https://github.com/rust-osdev/multiboot2/tree/main/multiboot2"
+repository = "https://github.com/rust-osdev/multiboot2"
+documentation = "https://docs.rs/multiboot2"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["builder"]
+alloc = ["multiboot2-common/alloc"]
+builder = ["alloc", "multiboot2-common/builder"]
+
+[dependencies]
+bitflags = { workspace = true }
+log = { workspace = true }
+multiboot2-common = { workspace = true }
+ptr_meta = { workspace = true }
+thiserror = { workspace = true }
+uefi-raw = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true

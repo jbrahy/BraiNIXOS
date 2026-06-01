@@ -1,0 +1,15 @@
+[package]
+name = "brainix-bootloader-verify"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+# This crate uses std (NOT no_std). It is a host-compilable shim that
+# wraps multiboot2 parsing for fuzz testing. It is never compiled into
+# the kernel or bootloader binaries.
+
+[dependencies]
+multiboot2 = "0.24.1"
+
+[lints]
+workspace = true

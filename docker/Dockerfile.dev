@@ -1,0 +1,120 @@
+# BraiNIX development environment
+#
+# Contains: Rust nightly (pinned), QEMU x86_64, OpenSSH server, build tools.
+# Run via:  bin/deploy-docker.sh
+#
+# When Phase 1 adds a kernel entry point, deploy-docker.sh launches QEMU
+# inside this container and exposes the serial console on port 4444.
+
+FROM ubuntu:22.04
+
+ARG RUST_NIGHTLY=nightly-2025-12-01
+ARG USERNAME=dev
+ARG UID=1000
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CARGO_HOME=/home/${USERNAME}/.cargo
+ENV RUSTUP_HOME=/home/${USERNAME}/.rustup
+ENV PATH=/home/${USERNAME}/.cargo/bin:${PATH}
+
+# System packages
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    curl \
+    git \
+    openssh-server \
+    openssh-client \
+    qemu-system-x86 \
+    ovmf \
+    swtpm \
+    swtpm-tools \
+    tpm2-tools \
+    socat \
+    grub-pc-bin \
+    grub-common \
+    xorriso \
+    \
+    # Routing & link-layer
+    iproute2 \
+    net-tools \
+    iptables \
+    bridge-utils \
+    \
+    # Connectivity & reachability
+    iputils-ping \
+    iputils-tracepath \
+    traceroute \
+    mtr-tiny \
+    nmap \
+    netcat-openbsd \
+    iperf3 \
+    \
+    # Name resolution
+    dnsutils \
+    ldnsutils \
+    whois \
+    \
+    # Packet capture & decode
+    tcpdump \
+    tshark \
+    \
+    # Misc HTTP / TLS clients (curl already above)
+    wget \
+    openssl \
+    \
+    && rm -rf /var/lib/apt/lists/*
+
+# SSH server setup
+RUN mkdir /var/run/sshd \
+    && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config \
+    && sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config \
+    && echo "AllowUsers ${USERNAME}" >> /etc/ssh/sshd_config
+
+# Dev user
+RUN useradd -m -u ${UID} -s /bin/bash ${USERNAME} \
+    && mkdir -p /home/${USERNAME}/.ssh \
+    && chmod 700 /home/${USERNAME}/.ssh \
+    && chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.ssh
+
+# Root elevation: set a known root password so `su -` works for promotion
+# from the dev user. Password: "brainix". This is a dev-only container that
+# (a) lives only on the developer's local Docker daemon, (b) has SSH gated by
+# the dev user's public key, and (c) has no other externally reachable
+# surfaces. Treat the password as a convenience, not a secret.
+RUN echo 'root:brainix' | chpasswd
+
+# MOTD shown on every interactive shell so the root password is discoverable
+# without grepping the Dockerfile.
+RUN printf '%s\n' \
+    '================================================================' \
+    ' BraiNIX dev container' \
+    '   `su -`     → root shell  (password: brainix)' \
+    '   `exit`     → back to dev user' \
+    '   /home/dev/brainix is the host repo mount' \
+    '================================================================' \
+    > /etc/motd \
+    && sed -i 's/^#\?PrintMotd .*/PrintMotd yes/' /etc/ssh/sshd_config \
+    && echo '[ -f /etc/motd ] && cat /etc/motd' >> /etc/bash.bashrc
+
+# Rust toolchain — installed as dev user
+USER ${USERNAME}
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain ${RUST_NIGHTLY} \
+    && /home/${USERNAME}/.cargo/bin/rustup component add \
+        rust-src rustfmt clippy llvm-tools-preview \
+    && /home/${USERNAME}/.cargo/bin/rustup target add x86_64-unknown-none
+
+WORKDIR /home/${USERNAME}/brainix
+
+USER root
+
+# Mount point for authorized_keys — populated at runtime by deploy-docker.sh
+VOLUME /home/${USERNAME}/.ssh/authorized_keys
+
+EXPOSE 22 4444
+
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

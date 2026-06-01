@@ -1,0 +1,24 @@
+[build]
+target = "x86_64-unknown-none"
+
+[target.x86_64-unknown-none]
+# The built-in x86_64-unknown-none target already disables the red zone,
+# all SSE/AVX features, and enables soft-float via its target spec.
+# See: rust-lang/rust compiler/rustc_target/src/spec/targets/x86_64_unknown_none.rs
+# Setting redundant -C target-feature flags risks ABI validation conflicts
+# on nightlies after 2025-02-04 (rust-lang/rust#136544).
+# The intent of D-07 (no red zone, no SSE in kernel code) is fully satisfied.
+# -Z cf-protection=branch causes LLVM errors in sha2/curve25519-dalek on soft-float target.
+# ENDBR64 will be inserted manually in assembly stubs (Plan 02).
+#
+# --cfg 'curve25519_dalek_backend="serial"': forces the serial (non-SIMD) backend in
+# curve25519-dalek. Without this, the build script auto-selects SIMD for x86_64, which
+# conflicts with the soft-float ABI of x86_64-unknown-none (no SSE/AVX permitted).
+rustflags = ["--cfg", "curve25519_dalek_backend=\"serial\""]
+runner = "qemu-system-x86_64 -nographic -serial stdio"
+
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"

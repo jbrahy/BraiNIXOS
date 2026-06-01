@@ -1,0 +1,392 @@
+[1m=== BraiNIX Test Suite ===[0m
+Toolchain: nightly-2025-12-01
+Host target: aarch64-apple-darwin
+
+[1m--- Unit tests (host: aarch64-apple-darwin) ---[0m
+   Compiling brainix-libsyscall v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/libsyscall)
+   Compiling typenum v1.19.0
+   Compiling libc v0.2.185
+   Compiling generic-array v0.14.7
+   Compiling cpufeatures v0.2.17
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling inout v0.1.4
+   Compiling cipher v0.4.4
+   Compiling digest v0.10.7
+   Compiling curve25519-dalek v4.1.3
+   Compiling sha2 v0.10.9
+   Compiling chacha20 v0.9.1
+   Compiling ed25519-dalek v2.2.0
+   Compiling brainix-kernel v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.61s
+     Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/brainix_kernel-02a62d7e2a9f8567)
+
+running 296 tests
+test capability::device_capability::tests::test_cross_device_mmio_access_returns_capability_error ... ok
+test capability::device_capability::tests::test_device_capability_is_scoped_to_specific_mmio_range ... ok
+test capability::device_capability::tests::test_is_mmio_address_within_device_bounds_returns_true_for_valid_range ... ok
+test capability::device_capability::tests::test_mmio_bounds_check_accepts_exact_full_range ... ok
+test capability::device_capability::tests::test_mmio_bounds_check_rejects_overflow_attack ... ok
+test capability::device_capability::tests::test_mmio_bounds_check_rejects_zero_base_when_device_is_nonzero ... ok
+test capability::irq_capability::tests::test_bind_irq_fills_table_returns_full_error ... ok
+test capability::irq_capability::tests::test_bind_irq_to_endpoint_rejects_duplicate_binding ... ok
+test capability::irq_capability::tests::test_bind_irq_to_endpoint_succeeds_for_valid_irq ... ok
+test capability::irq_capability::tests::test_device_irq_capability_is_not_global ... ok
+test capability::irq_capability::tests::test_irq_binding_table_starts_all_inactive ... ok
+test capability::irq_capability::tests::test_lookup_binding_for_unbound_irq_returns_none ... ok
+test capability::tests::test_audit_log_entry_contains_slot_index ... ok
+test capability::tests::test_audit_log_records_derivation_event ... ok
+test capability::tests::test_audit_ring_buffer_appends_entries_in_order ... ok
+test capability::tests::test_audit_ring_buffer_starts_empty ... ok
+test capability::tests::test_audit_ring_buffer_wraps_at_capacity ... ok
+test capability::tests::test_derived_capability_cannot_have_rights_not_in_parent ... ok
+test capability::tests::test_new_capability_space_all_slots_read_as_null ... ok
+test capability::tests::test_revoked_parent_makes_all_children_unusable ... ok
+test capability::tests::test_revoked_slot_reads_as_null_not_stale_data ... ok
+test capability::tests::test_temporal_capability_expires_after_time_window ... ok
+test capability::tests::test_temporal_capability_expires_after_use_count_is_reached ... ok
+test capability::tests::test_temporal_capability_whichever_bound_reached_first_expires ... ok
+test capability::tests::test_ungranted_slot_returns_error ... ok
+test device_table::tests::test_build_disk_device_capability_data_has_correct_fields ... ok
+test device_table::tests::test_build_nic_device_capability_data_has_correct_fields ... ok
+test hardware_security::attestation_gate::tests::integration_swtpm_attestation_chain_completes_with_expected_pcr_values ... ignored, Requires QEMU + swtpm — run via docker/test.sh in CI
+test hardware_security::attestation_gate::tests::test_advancing_open_gate_returns_gate_already_open_error ... ok
+test hardware_security::attestation_gate::tests::test_attestation_gate_completes_with_mock_tpm_responses ... ok
+test hardware_security::attestation_gate::tests::test_attestation_gate_default_timeout_is_sixty_seconds ... ok
+test hardware_security::attestation_gate::tests::test_attestation_gate_does_not_allow_traffic_in_closed_state ... ok
+test hardware_security::attestation_gate::tests::test_attestation_gate_does_not_transition_directly_from_closed_to_open ... ok
+test hardware_security::attestation_gate::tests::test_attestation_gate_follows_required_transition_sequence ... ok
+test hardware_security::attestation_gate::tests::test_attestation_gate_moves_to_failed_on_verification_failure ... ok
+test hardware_security::attestation_gate::tests::test_attestation_gate_only_allows_traffic_in_open_state ... ok
+test hardware_security::attestation_gate::tests::test_attestation_gate_starts_in_closed_state ... ok
+test hardware_security::attestation_gate::tests::test_attestation_gate_timeout_from_any_state_moves_to_failed ... ok
+test hardware_security::attestation_gate::tests::test_attestation_gate_timeout_transitions_to_failed ... ok
+test hardware_security::binary_signing::tests::test_dev_build_marker_is_refused_by_production_signature_check ... ok
+test hardware_security::binary_signing::tests::test_development_and_production_key_sets_are_distinct ... ok
+test hardware_security::binary_signing::tests::test_reject_binary_with_development_marker_accepts_dev_build_without_marker ... ok
+test hardware_security::binary_signing::tests::test_select_verification_key_set_returns_development_key_for_dev_build ... ok
+test hardware_security::binary_signing::tests::test_select_verification_key_set_returns_production_key_for_production_build ... ok
+test hardware_security::binary_signing::tests::test_verify_binary_signature_rejects_invalid_signature ... ok
+test hardware_security::cpu_feature_detection::tests::test_enhanced_ibrs_detection_from_msr_when_bit_is_clear ... ok
+test hardware_security::cpu_feature_detection::tests::test_enhanced_ibrs_detection_from_msr_when_bit_is_set ... ok
+test hardware_security::cpu_feature_detection::tests::test_ibrs_ibpb_detection_from_cpuid_when_bit_is_clear ... ok
+test hardware_security::cpu_feature_detection::tests::test_ibrs_ibpb_detection_from_cpuid_when_bit_is_set ... ok
+test hardware_security::cpu_feature_detection::tests::test_indirect_branch_tracking_detection_from_cpuid_when_bit_is_set ... ok
+test hardware_security::cpu_feature_detection::tests::test_rdrand_detection_from_cpuid_when_bit_is_clear ... ok
+test hardware_security::cpu_feature_detection::tests::test_rdrand_detection_from_cpuid_when_bit_is_set ... ok
+test hardware_security::cpu_feature_detection::tests::test_rdseed_detection_from_cpuid_when_bit_is_clear ... ok
+test hardware_security::cpu_feature_detection::tests::test_rdseed_detection_from_cpuid_when_bit_is_set ... ok
+test hardware_security::cpu_feature_detection::tests::test_secure_memory_encryption_detection_from_cpuid_when_bit_is_set ... ok
+test hardware_security::cpu_feature_detection::tests::test_total_memory_encryption_detection_from_cpuid_when_bit_is_set ... ok
+test hardware_security::csprng::tests::test_boot_halts_when_rdrand_is_unavailable ... ok
+test hardware_security::csprng::tests::test_derive_initial_key_mixes_rdseed_into_key ... ok
+test hardware_security::csprng::tests::test_derive_initial_key_produces_nonzero_key_from_nonzero_samples ... ok
+test hardware_security::csprng::tests::test_derive_reseeded_key_uses_domain_separator ... ok
+test hardware_security::csprng::tests::test_reseed_from_tpm_changes_key ... ok
+test hardware_security::entropy_source::tests::test_should_halt_when_rdrand_is_absent ... ok
+test hardware_security::entropy_source::tests::test_should_not_halt_when_rdrand_is_present ... ok
+test hardware_security::indirect_branch_tracking::tests::test_control_flow_enforcement_bit_is_cr4_bit_23 ... ok
+test hardware_security::indirect_branch_tracking::tests::test_indirect_branch_tracking_is_not_active_on_host_target ... ok
+test hardware_security::indirect_branch_tracking::tests::test_set_indirect_branch_tracking_bit_preserves_existing_cr4_bits ... ok
+test hardware_security::iommu_detection::tests::test_iommu_policy_development_warns_on_absent ... ok
+test hardware_security::iommu_detection::tests::test_iommu_policy_present_always_passes ... ok
+test hardware_security::iommu_detection::tests::test_iommu_policy_production_halts_on_absent ... ok
+test hardware_security::kernel_config_blob::tests::test_changing_dev_build_marker_changes_hash ... ok
+test hardware_security::kernel_config_blob::tests::test_changing_memory_encryption_mode_changes_hash ... ok
+test hardware_security::kernel_config_blob::tests::test_changing_spectre_mode_changes_hash ... ok
+test hardware_security::kernel_config_blob::tests::test_config_blob_hash_is_deterministic ... ok
+test hardware_security::kernel_config_blob::tests::test_config_blob_hash_is_nonzero ... ok
+test hardware_security::kernel_config_blob::tests::test_config_blob_hash_returns_32_bytes ... ok
+test hardware_security::kernel_config_blob::tests::test_spectre_v1_lfence_barriers_applied_is_always_one ... ok
+test hardware_security::kernel_write_protection::tests::test_align_address_down_already_aligned_is_unchanged ... ok
+test hardware_security::kernel_write_protection::tests::test_align_address_down_to_page_boundary ... ok
+test hardware_security::kernel_write_protection::tests::test_align_address_up_already_aligned_is_unchanged ... ok
+test hardware_security::kernel_write_protection::tests::test_align_address_up_to_page_boundary ... ok
+test hardware_security::kernel_write_protection::tests::test_kernel_text_pages_are_read_only_after_init ... ok
+test hardware_security::kernel_write_protection::tests::test_write_protect_page_range_does_not_panic ... ok
+test hardware_security::memory_encryption::tests::test_detect_and_enable_memory_encryption_enables_tme_on_supported_cpu ... ok
+test hardware_security::memory_encryption::tests::test_detect_memory_encryption_support_returns_amd_sme_when_bit_is_set ... ok
+test hardware_security::memory_encryption::tests::test_detect_memory_encryption_support_returns_intel_tme_when_bit_is_set ... ok
+test hardware_security::memory_encryption::tests::test_detect_memory_encryption_support_returns_unavailable_when_no_bits_set ... ok
+test hardware_security::memory_encryption::tests::test_enforce_policy_returns_development_warning_when_unavailable_in_development ... ok
+test hardware_security::memory_encryption::tests::test_enforce_policy_returns_enabled_amd_sme_when_sme_mode ... ok
+test hardware_security::memory_encryption::tests::test_enforce_policy_returns_enabled_intel_tme_when_tme_mode ... ok
+test hardware_security::memory_encryption::tests::test_enforce_policy_returns_production_fatal_halt_when_unavailable_in_production ... ok
+test hardware_security::memory_encryption::tests::test_msr_address_constants_match_specification ... ok
+test hardware_security::pcr_measurement::tests::test_changing_config_blob_changes_pcr1 ... ok
+test hardware_security::pcr_measurement::tests::test_compute_config_blob_measurement_is_deterministic ... ok
+test hardware_security::pcr_measurement::tests::test_compute_config_blob_measurement_is_nonzero ... ok
+test hardware_security::pcr_measurement::tests::test_compute_config_blob_measurement_returns_32_bytes ... ok
+test hardware_security::pcr_measurement::tests::test_compute_kernel_binary_measurement_is_deterministic ... ok
+test hardware_security::pcr_measurement::tests::test_compute_kernel_binary_measurement_is_nonzero ... ok
+test hardware_security::pcr_measurement::tests::test_compute_kernel_binary_measurement_returns_32_bytes ... ok
+test hardware_security::pcr_measurement::tests::test_different_rodata_bytes_produce_different_pcr0 ... ok
+test hardware_security::pcr_measurement::tests::test_different_text_bytes_produce_different_pcr0 ... ok
+test hardware_security::server_measurement::tests::test_compute_server_binary_hash_differs_for_different_input ... ok
+test hardware_security::server_measurement::tests::test_compute_server_binary_hash_is_deterministic ... ok
+test hardware_security::server_measurement::tests::test_measure_server_binary_into_pcr3_succeeds_on_host_target ... ok
+test hardware_security::spectre_mitigation::tests::test_mitigation_mode_serializes_to_u8_for_config_blob ... ok
+test hardware_security::spectre_mitigation::tests::test_select_spectre_v2_mitigation_mode_returns_enhanced_ibrs_when_supported ... ok
+test hardware_security::spectre_mitigation::tests::test_select_spectre_v2_mitigation_mode_returns_retpoline_when_eibrs_absent ... ok
+test hardware_security::tpm::commands::tests::test_extend_platform_configuration_register_returns_ok_on_host_target ... ok
+test hardware_security::tpm::commands::tests::test_generate_tpm_quote_returns_ok_on_host_target ... ok
+test hardware_security::tpm::commands::tests::test_get_random_bytes_from_tpm_returns_ok_on_host_target ... ok
+test hardware_security::tpm::commands::tests::test_get_random_command_code_constant_is_correct ... ok
+test hardware_security::tpm::commands::tests::test_parse_get_random_response_extracts_32_bytes_from_valid_response ... ok
+test hardware_security::tpm::commands::tests::test_parse_tpm_response_header_validates_response_code_field ... ok
+test hardware_security::tpm::commands::tests::test_pcr_extend_command_code_constant_is_correct ... ok
+test hardware_security::tpm::commands::tests::test_read_monotonic_counter_from_nv_returns_ok_on_host_target ... ok
+test hardware_security::tpm::commands::tests::test_serialize_get_random_command_produces_correct_byte_sequence_for_32_bytes ... ok
+test hardware_security::tpm::commands::tests::test_serialize_nv_read_command_produces_correct_byte_sequence_for_nv_index ... ok
+test hardware_security::tpm::commands::tests::test_serialize_pcr_extend_command_produces_correct_byte_sequence_for_pcr_zero ... ok
+test hardware_security::tpm::commands::tests::test_write_command_header_produces_big_endian_layout ... ok
+test hardware_security::tpm::monotonic_counter::tests::test_brainix_monotonic_counter_nv_index_constant_is_correct ... ok
+test hardware_security::tpm::monotonic_counter::tests::test_lower_monotonic_counter_is_rejected_on_boot ... ok
+test hardware_security::tpm::monotonic_counter::tests::test_rollback_detected_error_carries_binary_and_stored_values ... ok
+test hardware_security::tpm::monotonic_counter::tests::test_should_reject_rollback_accepts_equal_or_higher_binary_value ... ok
+test hardware_security::tpm::monotonic_counter::tests::test_should_reject_rollback_rejects_any_lower_binary_value ... ok
+test hardware_security::tpm::monotonic_counter::tests::test_verify_and_update_monotonic_counter_succeeds_on_host_with_zero_binary_value ... ok
+test hardware_security::tpm::quote::tests::fuzz_tpm_quote_parsing_with_adversarial_input ... ok
+test hardware_security::tpm::quote::tests::test_parse_tpm_quote_response_extracts_nonce_echo ... ok
+test hardware_security::tpm::quote::tests::test_parse_tpm_quote_response_extracts_pcr_digest ... ok
+test hardware_security::tpm::registers::tests::test_is_tpm_status_bit_set_returns_true_for_command_ready_on_host ... ok
+test hardware_security::tpm::registers::tests::test_request_tpm_locality_returns_ok_on_host_target ... ok
+test hardware_security::tpm::registers::tests::test_tpm_access_register_offset_is_zero ... ok
+test hardware_security::tpm::registers::tests::test_tpm_base_address_is_correct_tis_mmio_value ... ok
+test hardware_security::tpm::registers::tests::test_tpm_status_command_ready_bit_is_bit_six ... ok
+test hardware_security::tpm::registers::tests::test_tpm_status_go_bit_is_bit_five ... ok
+test hardware_security::tpm::registers::tests::test_wait_for_command_ready_returns_ok_on_host_target ... ok
+test hardware_security::tpm::registers::tests::test_wait_for_data_available_returns_ok_on_host_target ... ok
+test ipc::bounded_queue::tests::circular_wraparound_reuses_slots ... ok
+test ipc::bounded_queue::tests::enqueue_at_capacity_returns_queue_full ... ok
+test ipc::bounded_queue::tests::enqueue_then_dequeue_preserves_fifo_order ... ok
+test ipc::bounded_queue::tests::new_queue_is_empty ... ok
+test ipc::cap_reply::tests::consume_cap_reply_second_time_returns_already_used ... ok
+test ipc::cap_reply::tests::consume_cap_reply_zeroes_slot_and_returns_ok ... ok
+test ipc::cap_reply::tests::install_cap_reply_places_slot_at_designated_index ... ok
+test ipc::cap_reply::tests::install_cap_reply_when_slot_occupied_returns_reply_slot_occupied ... ok
+test ipc::endpoint::tests::enqueue_receiver_then_dequeue_returns_thread_identifier ... ok
+test ipc::endpoint::tests::enqueue_sender_then_dequeue_returns_thread_identifier ... ok
+test ipc::endpoint::tests::new_endpoint_has_no_waiting_threads ... ok
+test ipc::endpoint::tests::sender_queue_full_returns_queue_full_error ... ok
+test ipc::notification::tests::multiple_signals_accumulate_via_bitwise_or ... ok
+test ipc::notification::tests::new_notification_has_no_pending_signals ... ok
+test ipc::notification::tests::signal_sets_bits_and_poll_clears_them ... ok
+test ipc::notify_operations::tests::notify_poll_clears_bitmap_and_returns_value ... ok
+test ipc::notify_operations::tests::notify_signal_ors_bits_into_bitmap ... ok
+test ipc::notify_operations::tests::notify_wait_returns_immediately_when_signals_pending ... ok
+test ipc::notify_operations::tests::notify_wait_with_no_signals_and_expired_timeout_returns_timeout_error ... ok
+test ipc::notify_operations::tests::notify_wait_with_reserved_timeout_returns_invalid_timeout ... ok
+test ipc::rendezvous::tests::rendezvous_with_grant_right_transfers_capability_to_receiver ... ok
+test ipc::rendezvous::tests::rendezvous_with_occupied_destination_returns_slot_occupied ... ok
+test ipc::rendezvous::tests::rendezvous_without_capability_copies_message_registers ... ok
+test ipc::rendezvous::tests::rendezvous_without_grant_right_returns_grant_right_not_held ... ok
+test ipc::tests::integration_server_that_never_receives_does_not_hold_caller_indefinitely ... ok
+test ipc::tests::property_ipc_cannot_increase_capability_rights ... ok
+test ipc::tests::test_cycle_detection_returns_would_deadlock ... ok
+test ipc::tests::test_ipc_timeout_unblocks_sender_with_timeout_error ... ok
+test ipc::tests::test_reply_capability_is_single_use ... ok
+test ipc::tests::test_send_blocks_until_receiver_calls_receive ... ok
+test ipc::tests::test_transferred_capability_has_no_additional_rights ... ok
+test ipc::timeout::tests::compute_deadline_adds_ticks_to_current ... ok
+test ipc::timeout::tests::compute_deadline_overflow_returns_invalid_timeout ... ok
+test ipc::timeout::tests::compute_deadline_reserved_value_returns_invalid_timeout ... ok
+test ipc::timeout::tests::compute_deadline_with_nonzero_current_tick ... ok
+test ipc::timeout::tests::has_timed_out_returns_false_before_deadline ... ok
+test ipc::timeout::tests::has_timed_out_returns_true_after_deadline ... ok
+test ipc::timeout::tests::has_timed_out_returns_true_at_deadline ... ok
+test ipc::wait_for_graph::tests::new_graph_has_no_wait_edges ... ok
+test ipc::wait_for_graph::tests::single_edge_does_not_form_cycle ... ok
+test ipc::wait_for_graph::tests::thread_waiting_on_different_endpoint_does_not_form_cycle ... ok
+test ipc::wait_for_graph::tests::two_thread_cycle_is_detected ... ok
+test memory::bounded_stack::tests::test_bounded_stack_count_and_is_empty ... ok
+test memory::bounded_stack::tests::test_bounded_stack_pop_returns_none_on_empty ... ok
+test memory::bounded_stack::tests::test_bounded_stack_push_and_pop_lifo_order ... ok
+test memory::bounded_stack::tests::test_bounded_stack_push_returns_error_on_full ... ok
+test memory::page_type::tests::test_is_free_returns_true_only_for_free ... ok
+test memory::page_type::tests::test_kernel_owned_returns_true_for_kernel ... ok
+test memory::page_type::tests::test_kernel_page_is_not_user_allocatable ... ok
+test memory::physical_allocator::tests::property_no_two_allocations_return_same_physical_address ... ok
+test memory::physical_allocator::tests::test_allocated_page_is_zeroed_before_return ... ok
+test memory::physical_allocator::tests::test_allocation_from_empty_returns_out_of_memory ... ok
+test memory::physical_allocator::tests::test_double_free_is_detected_and_refused ... ok
+test memory::physical_allocator::tests::test_kernel_page_cannot_be_deallocated ... ok
+test memory::physical_allocator::tests::test_kernel_page_is_not_returned_after_kernel_allocation ... ok
+test memory::physical_allocator::tests::test_kernel_tagged_page_is_not_returned_by_user_allocator ... ok
+test memory::pool_allocator::tests::test_deallocation_zeroes_all_bytes_of_multi_byte_type ... ok
+test memory::pool_allocator::tests::test_pool_allocator_all_slots_are_unique ... ok
+test memory::pool_allocator::tests::test_pool_allocator_allocated_count_tracks_correctly ... ok
+test memory::pool_allocator::tests::test_pool_allocator_deallocate_makes_slot_reusable ... ok
+test memory::pool_allocator::tests::test_pool_allocator_double_deallocate_returns_error ... ok
+test memory::pool_allocator::tests::test_pool_allocator_exhaustion_returns_pool_exhausted ... ok
+test memory::pool_allocator::tests::test_pool_allocator_returns_valid_reference_on_allocate ... ok
+test memory::virtual_address_layout::tests::test_direct_map_region_constants ... ok
+test memory::virtual_address_layout::tests::test_guard_page_is_one_page_below_stack_bottom ... ok
+test memory::virtual_address_layout::tests::test_initial_stack_layout_ordering ... ok
+test memory::virtual_address_layout::tests::test_is_kernel_virtual_address ... ok
+test memory::virtual_address_layout::tests::test_kernel_binary_virtual_address_matches_linker_script ... ok
+test memory::virtual_address_layout::tests::test_kernel_stack_region_constants ... ok
+test memory::virtual_address_layout::tests::test_pool_region_constants ... ok
+test memory::virtual_address_layout::tests::test_user_space_is_lower_half ... ok
+test process::address_space::tests::test_build_process_address_space_layout_sets_entry_point ... ok
+test process::address_space::tests::test_compute_guard_page_address_is_one_page_below_stack_bottom ... ok
+test process::address_space::tests::test_compute_stack_bottom_returns_correct_address ... ok
+test process::address_space::tests::test_entry_point_at_canonical_upper_bound_passes ... ok
+test process::address_space::tests::test_entry_point_at_code_base_passes_canonical_check ... ok
+test process::address_space::tests::test_entry_point_one_above_canonical_upper_bound_fails ... ok
+test process::address_space::tests::test_guard_page_address_matches_libsyscall_constant ... ok
+test process::address_space::tests::test_kernel_space_entry_point_rejected ... ok
+test process::elf_loader::tests::test_big_endian_encoding_returns_not_little_endian ... ok
+test process::elf_loader::tests::test_binary_shorter_than_64_bytes_returns_binary_too_small ... ok
+test process::elf_loader::tests::test_class_not_64_bit_returns_not_64_bit ... ok
+test process::elf_loader::tests::test_machine_not_x86_64_returns_not_x86_64 ... ok
+test process::elf_loader::tests::test_program_header_offset_beyond_binary_length_returns_segment_out_of_bounds ... ok
+test process::elf_loader::tests::test_segment_with_bss_region_reports_correct_zero_fill_size ... ok
+test process::elf_loader::tests::test_shared_library_type_returns_not_executable ... ok
+test process::elf_loader::tests::test_valid_elf64_header_passes_validation ... ok
+test process::elf_loader::tests::test_writable_and_executable_segment_is_rejected ... ok
+test process::elf_loader::tests::test_wrong_magic_returns_invalid_magic ... ok
+test process::module_loader::tests::test_auditd_process_type_is_in_spawn_whitelist ... ok
+test process::module_loader::tests::test_device_server_process_type_is_not_in_spawn_whitelist ... ok
+test process::module_loader::tests::test_identify_auditd_from_auditd_command_line ... ok
+test process::module_loader::tests::test_identify_init_from_init_command_line ... ok
+test process::module_loader::tests::test_identify_returns_none_for_empty_command_line ... ok
+test process::module_loader::tests::test_identify_returns_none_for_unknown_command_line ... ok
+test process::module_loader::tests::test_identify_spawnd_from_spawnd_command_line ... ok
+test process::module_loader::tests::test_init_process_type_is_in_spawn_whitelist ... ok
+test process::module_loader::tests::test_network_server_process_type_is_not_in_spawn_whitelist ... ok
+test process::module_loader::tests::test_spawnd_process_type_is_in_spawn_whitelist ... ok
+test process::module_loader::tests::test_validate_server_module_binary_with_invalid_bytes_returns_error ... ok
+test process::module_loader::tests::test_validate_server_module_binary_with_valid_elf_succeeds ... ok
+test process::server_launch::tests::test_allocate_thread_pool_slot_returns_distinct_indices ... ok
+test process::server_launch::tests::test_build_initial_thread_sets_rcx_to_entry_point ... ok
+test process::server_launch::tests::test_build_initial_thread_sets_rsp_to_stack_top ... ok
+test process::server_launch::tests::test_build_initial_thread_state_is_ready ... ok
+test process::server_launch::tests::test_create_server_process_with_canonical_entry_point_returns_ok ... ok
+test process::server_launch::tests::test_create_server_process_with_kernel_entry_point_returns_error ... ok
+test process::server_launch::tests::test_create_server_process_with_null_entry_point_returns_error ... ok
+test process::server_launch::tests::test_grant_initial_capability_creates_valid_slot ... ok
+test process::tests::integration_no_privileged_process_exists_after_boot_sequence ... ok
+test process::tests::test_audit_log_pages_are_write_protected_after_initialization ... ok
+test process::tests::test_audit_log_write_to_prior_entry_returns_error ... ok
+test process::tests::test_auditd_cannot_write_to_audit_log ... ok
+test process::tests::test_init_process_exits_after_handing_off_authority ... ok
+test process::tests::test_spawnd_refuses_process_type_not_in_whitelist ... ok
+test scheduler::context_switch::tests::test_process_scheduler_tick_with_budget_and_slot_not_expired_returns_continue ... ok
+test scheduler::context_switch::tests::test_process_scheduler_tick_with_budget_reaching_zero_returns_preempt ... ok
+test scheduler::context_switch::tests::test_process_scheduler_tick_with_budget_zero_and_slot_expired_returns_preempt_and_switch ... ok
+test scheduler::context_switch::tests::test_process_scheduler_tick_with_slot_expired_returns_switch ... ok
+test scheduler::context_switch::tests::test_select_next_thread_to_run_returns_highest_priority_thread ... ok
+test scheduler::context_switch::tests::test_select_next_thread_to_run_returns_none_when_queue_is_empty ... ok
+test scheduler::measurement::tests::test_compute_partition_table_hash_is_deterministic ... ok
+test scheduler::measurement::tests::test_compute_partition_table_hash_is_nonzero ... ok
+test scheduler::measurement::tests::test_compute_partition_table_hash_matches_slots_version ... ok
+test scheduler::measurement::tests::test_compute_partition_table_hash_returns_32_bytes ... ok
+test scheduler::measurement::tests::test_partition_table_hash_changes_when_table_changes ... ok
+test scheduler::smt_isolation::tests::test_check_smt_isolation_returns_ok_for_same_domain_pair ... ok
+test scheduler::smt_isolation::tests::test_check_smt_isolation_returns_violation_for_cross_domain_pair ... ok
+test scheduler::smt_isolation::tests::test_different_domain_threads_are_not_smt_compatible ... ok
+test scheduler::smt_isolation::tests::test_same_domain_threads_are_smt_compatible ... ok
+test scheduler::tests::integration_hostile_cpu_consumer_does_not_starve_other_domains ... ok
+test scheduler::tests::test_check_budget_exhaustion_returns_continue_when_nonzero ... ok
+test scheduler::tests::test_check_budget_exhaustion_returns_preempt_when_zero ... ok
+test scheduler::tests::test_compute_major_frame_total_ticks_sums_all_slot_durations ... ok
+test scheduler::tests::test_decrement_budget_reduces_by_one ... ok
+test scheduler::tests::test_decrement_budget_saturates_at_zero ... ok
+test scheduler::tests::test_decrement_budget_to_zero_returns_zero ... ok
+test scheduler::tests::test_domain_does_not_run_outside_its_assigned_slot ... ok
+test scheduler::tests::test_is_budget_exhausted_returns_false_when_nonzero ... ok
+test scheduler::tests::test_is_budget_exhausted_returns_true_when_zero ... ok
+test scheduler::tests::test_major_frame_total_ticks_constant_matches_computed ... ok
+test scheduler::tests::test_partition_table_has_at_least_two_domain_slots ... ok
+test scheduler::tests::test_partition_table_slots_have_nonzero_durations ... ok
+test scheduler::tests::test_priority_inheritance_boosts_low_priority_thread_while_holding_resource ... ok
+test scheduler::tests::test_process_is_preempted_when_budget_is_exhausted ... ok
+test scheduler::tests::test_reset_budget_sets_new_value ... ok
+test scheduler::tests::test_run_queue_insert_and_select_highest_priority ... ok
+test scheduler::tests::test_run_queue_is_empty_initially ... ok
+test scheduler::tests::test_run_queue_rejects_insert_when_full ... ok
+test scheduler::tests::test_run_queue_remove_makes_thread_unselectable ... ok
+test scheduler::tests::test_run_queue_returns_threads_in_priority_order ... ok
+test scheduler::time_partitioning::tests::test_advance_slot_returns_continue_before_expiry ... ok
+test scheduler::time_partitioning::tests::test_advance_slot_returns_switch_when_slot_duration_elapses ... ok
+test scheduler::time_partitioning::tests::test_is_thread_eligible_returns_false_when_domain_does_not_match ... ok
+test scheduler::time_partitioning::tests::test_is_thread_eligible_returns_true_when_domain_matches ... ok
+test scheduler::time_partitioning::tests::test_major_frame_wraps_to_slot_zero_after_last_slot ... ok
+test syscall::audit_read::tests::test_validate_audit_read_capability_with_read_right_succeeds ... ok
+test syscall::audit_read::tests::test_validate_audit_read_capability_with_write_right_returns_error ... ok
+test syscall::audit_read::tests::test_validate_audit_read_capability_with_wrong_type_returns_error ... ok
+test syscall::audit_read::tests::test_validate_audit_read_capability_without_read_right_returns_error ... ok
+test syscall::process_exit::tests::test_process_exit_revokes_capability_space ... ok
+
+test result: ok. 295 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+[0;32mPASS[0m  unit tests (295+ expected)
+
+[1m--- cargo check (x86_64-unknown-none) ---[0m
+   Compiling typenum v1.19.0
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling thiserror v2.0.18
+   Compiling const_fn v0.4.12
+   Compiling rustversion v1.0.22
+    Checking brainix-libsyscall v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/libsyscall)
+    Checking generic-array v0.14.7
+    Checking crypto-common v0.1.7
+    Checking block-buffer v0.10.4
+    Checking inout v0.1.4
+    Checking cipher v0.4.4
+    Checking digest v0.10.7
+    Checking curve25519-dalek v4.1.3
+    Checking sha2 v0.10.9
+    Checking chacha20 v0.9.1
+    Checking ed25519-dalek v2.2.0
+    Checking x86_64 v0.15.4
+   Compiling syn v2.0.117
+   Compiling ptr_meta_derive v0.3.1
+   Compiling thiserror-impl v2.0.18
+    Checking ptr_meta v0.3.1
+    Checking multiboot2-common v0.3.0
+    Checking multiboot2 v0.24.1
+    Checking brainix-kernel v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.06s
+[0;32mPASS[0m  bare-metal cargo check
+
+[1m--- cargo fmt ---[0m
+[0;32mPASS[0m  cargo fmt --check
+
+[1m--- cargo clippy (bare-metal) ---[0m
+   Compiling brainix-bootloader v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/bootloader)
+    Checking brainix-libsyscall v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/libsyscall)
+    Checking brainix-kernel v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.49s
+[0;32mPASS[0m  cargo clippy bare-metal
+
+[1m--- cargo clippy (host) ---[0m
+    Checking brainix-init v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/init)
+    Checking brainix-auditd v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/auditd)
+    Checking brainix-spawnd v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/spawnd)
+    Checking brainix-devd-disk v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/devd-disk)
+    Checking brainix-ipd v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/ipd)
+    Checking brainix-linkd v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/linkd)
+    Checking brainix-devd-nic v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/devd-nic)
+    Checking brainix-transportd v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/transportd)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+[0;32mPASS[0m  cargo clippy host
+
+[1m--- Device server crates (brainix-devd-nic, brainix-devd-disk) ---[0m
+    Checking brainix-devd-disk v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/devd-disk)
+    Checking brainix-devd-nic v0.1.0 (/Users/jbrahy/OtherProjects/brainix/src/servers/devd-nic)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+[0;32mPASS[0m  device server crates compile
+
+[1m--- Fuzz target registration ---[0m
+[0;32mPASS[0m  fuzz target registered: fuzz_devd_nic_ipc_boundary_cannot_reach_kernel_memory
+
+[1m--- grub.cfg device server entries ---[0m
+[0;32mPASS[0m  grub.cfg contains devd-nic and devd-disk entries
+
+[1m--- Syscall dispatch (DEVICE_MAP_MMIO=9, IRQ_BIND=10) ---[0m
+[0;32mPASS[0m  device syscall dispatch wired in src/kernel/src/syscall/dispatch.rs
+
+[1m[0;32mAll checks passed.[0m
