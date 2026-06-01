@@ -14,7 +14,7 @@ fn main() {
     if target_triple != "x86_64-unknown-none" {
         return;
     }
-    let manifest_directory = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let manifest_directory = env!("CARGO_MANIFEST_DIR");
     println!("cargo:rerun-if-changed=linker.ld");
     println!("cargo:rustc-link-arg-bin=brainix=-T{}/linker.ld", manifest_directory);
     println!("cargo:rustc-link-arg-bin=brainix=-nostdlib");
