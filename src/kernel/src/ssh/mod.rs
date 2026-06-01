@@ -67,6 +67,11 @@ pub struct SshSession {
     /// The authenticated user's login name, once authenticated.
     authenticated_user: [u8; 32],
     authenticated_user_length: usize,
+    /// The peer's channel id for the session channel.
+    client_channel: u32,
+    /// Current shell input line accumulated from CHANNEL_DATA.
+    shell_line: [u8; 256],
+    shell_line_length: usize,
     /// Verifies (username, password) against the credential store. Injected so
     /// the pure session stays host-testable (the kernel passes a fn wrapping
     /// boot::credential_store::verify_login).
@@ -114,6 +119,9 @@ impl SshSession {
             client_to_server_keys: None,
             authenticated_user: [0u8; 32],
             authenticated_user_length: 0,
+            client_channel: 0,
+            shell_line: [0u8; 256],
+            shell_line_length: 0,
             password_verifier: deny_all_passwords,
         }
     }
@@ -151,8 +159,10 @@ impl SshSession {
                 SshPhase::AwaitingClientKexInit => self.process_client_kexinit(out, &mut written),
                 SshPhase::AwaitingKexEcdhInit => self.process_kex_ecdh_init(out, &mut written),
                 SshPhase::AwaitingClientNewKeys => self.process_client_newkeys(),
-                SshPhase::Authenticating => self.process_authenticating(out, &mut written),
-                SshPhase::Authenticated | SshPhase::Rejected => false,
+                SshPhase::Authenticating | SshPhase::Authenticated => {
+                    self.process_authenticating(out, &mut written)
+                }
+                SshPhase::Rejected => false,
             };
             if !progressed {
                 break;
@@ -398,8 +408,164 @@ impl SshSession {
                     SSH_MSG_USERAUTH_FAILURE,
                 );
             }
+            crate::ssh::packet::SSH_MSG_CHANNEL_OPEN => self.handle_channel_open(payload, out, written),
+            crate::ssh::packet::SSH_MSG_CHANNEL_REQUEST => {
+                self.handle_channel_request(payload, out, written)
+            }
+            crate::ssh::packet::SSH_MSG_CHANNEL_DATA => self.handle_channel_data(payload, out, written),
+            crate::ssh::packet::SSH_MSG_CHANNEL_CLOSE => {
+                self.send_channel_close(out, written);
+            }
             _ => {}
         }
+    }
+
+    /// CHANNEL_OPEN(session) -> CHANNEL_OPEN_CONFIRMATION.
+    fn handle_channel_open(&mut self, payload: &[u8], out: &mut [u8], written: &mut usize) {
+        use crate::ssh::packet::SSH_MSG_CHANNEL_OPEN_CONFIRMATION;
+        // byte(90) string(channel_type) uint32(sender_channel) uint32(window) uint32(max).
+        let channel_type = read_ssh_string(&payload[1..]);
+        let sender_offset = 1 + 4 + channel_type.len();
+        if payload.len() < sender_offset + 4 {
+            return;
+        }
+        self.client_channel = read_u32(&payload[sender_offset..]);
+        let mut response = [0u8; 32];
+        response[0] = SSH_MSG_CHANNEL_OPEN_CONFIRMATION;
+        write_u32(&mut response, 1, self.client_channel); // recipient = their channel
+        write_u32(&mut response, 5, 0); // our channel id = 0
+        write_u32(&mut response, 9, 0x0010_0000); // initial window
+        write_u32(&mut response, 13, 0x0000_8000); // max packet
+        self.send_encrypted(&response[..17], out, written);
+    }
+
+    /// CHANNEL_REQUEST: pty-req -> success; shell/exec -> success + greeting.
+    fn handle_channel_request(&mut self, payload: &[u8], out: &mut [u8], written: &mut usize) {
+        use crate::ssh::packet::SSH_MSG_CHANNEL_SUCCESS;
+        // byte(98) uint32(recipient) string(request_type) boolean(want_reply) ...
+        if payload.len() < 5 {
+            return;
+        }
+        let request_type = read_ssh_string(&payload[5..]);
+        let want_reply_offset = 5 + 4 + request_type.len();
+        let want_reply = payload.get(want_reply_offset).copied().unwrap_or(0) != 0;
+        if want_reply {
+            let mut response = [0u8; 8];
+            response[0] = SSH_MSG_CHANNEL_SUCCESS;
+            write_u32(&mut response, 1, self.client_channel);
+            self.send_encrypted(&response[..5], out, written);
+        }
+        if request_type == b"shell" || request_type == b"exec" {
+            self.send_shell_greeting(out, written);
+        }
+    }
+
+    /// CHANNEL_DATA: the interactive shell — echo input, run a command on Enter.
+    fn handle_channel_data(&mut self, payload: &[u8], out: &mut [u8], written: &mut usize) {
+        // byte(94) uint32(recipient) string(data).
+        if payload.len() < 5 {
+            return;
+        }
+        let data = read_ssh_string(&payload[5..]);
+        for &byte in data {
+            if byte == b'\r' || byte == b'\n' {
+                self.send_channel_text(b"\r\n", out, written);
+                self.run_shell_command(out, written);
+                self.shell_line_length = 0;
+                if self.phase == SshPhase::Rejected {
+                    return;
+                }
+                self.send_channel_text(b"brainix$ ", out, written);
+            } else if (byte == 0x7f || byte == 0x08) && self.shell_line_length > 0 {
+                self.shell_line_length -= 1;
+                self.send_channel_text(b"\x08 \x08", out, written);
+            } else if byte.is_ascii_graphic() || byte == b' ' {
+                if self.shell_line_length < self.shell_line.len() {
+                    self.shell_line[self.shell_line_length] = byte;
+                    self.shell_line_length += 1;
+                    self.send_channel_text(&[byte], out, written);
+                }
+            }
+        }
+    }
+
+    fn send_shell_greeting(&mut self, out: &mut [u8], written: &mut usize) {
+        self.send_channel_text(b"\r\nWelcome to BraiNIX over SSH.\r\n", out, written);
+        self.send_channel_text(b"Logged in as ", out, written);
+        let user_length = self.authenticated_user_length;
+        let mut user = [0u8; 32];
+        user[..user_length].copy_from_slice(&self.authenticated_user[..user_length]);
+        self.send_channel_text(&user[..user_length], out, written);
+        self.send_channel_text(b".  Type 'help' or 'exit'.\r\n", out, written);
+        self.send_channel_text(b"brainix$ ", out, written);
+    }
+
+    /// Runs the accumulated shell line as a (tiny) built-in command.
+    fn run_shell_command(&mut self, out: &mut [u8], written: &mut usize) {
+        let mut line = [0u8; 256];
+        let length = self.shell_line_length;
+        line[..length].copy_from_slice(&self.shell_line[..length]);
+        let command = trim_ascii(&line[..length]);
+        if command == b"exit" || command == b"logout" {
+            self.send_channel_text(b"logout\r\n", out, written);
+            self.close_session(out, written);
+        } else if command == b"whoami" {
+            let user_length = self.authenticated_user_length;
+            let mut user = [0u8; 32];
+            user[..user_length].copy_from_slice(&self.authenticated_user[..user_length]);
+            self.send_channel_text(&user[..user_length], out, written);
+            self.send_channel_text(b"\r\n", out, written);
+        } else if command == b"help" {
+            self.send_channel_text(b"commands: whoami, uname, help, exit\r\n", out, written);
+        } else if command == b"uname" {
+            self.send_channel_text(b"BraiNIX x86_64\r\n", out, written);
+        } else if command.is_empty() {
+            // nothing
+        } else if command.starts_with(b"echo ") {
+            self.send_channel_text(&command[5..], out, written);
+            self.send_channel_text(b"\r\n", out, written);
+        } else {
+            self.send_channel_text(command, out, written);
+            self.send_channel_text(b": command not found\r\n", out, written);
+        }
+    }
+
+    fn close_session(&mut self, out: &mut [u8], written: &mut usize) {
+        use crate::ssh::packet::SSH_MSG_CHANNEL_REQUEST;
+        // exit-status 0.
+        let mut request = [0u8; 32];
+        request[0] = SSH_MSG_CHANNEL_REQUEST;
+        write_u32(&mut request, 1, self.client_channel);
+        let mut offset = write_ssh_string(&mut request, 5, b"exit-status");
+        request[offset] = 0; // want_reply = false
+        offset += 1;
+        write_u32(&mut request, offset, 0); // exit code 0
+        offset += 4;
+        self.send_encrypted(&request[..offset], out, written);
+        self.send_channel_close(out, written);
+        self.phase = SshPhase::Rejected; // session done; the loop will reset
+    }
+
+    fn send_channel_close(&mut self, out: &mut [u8], written: &mut usize) {
+        use crate::ssh::packet::{SSH_MSG_CHANNEL_CLOSE, SSH_MSG_CHANNEL_EOF};
+        let mut eof = [0u8; 8];
+        eof[0] = SSH_MSG_CHANNEL_EOF;
+        write_u32(&mut eof, 1, self.client_channel);
+        self.send_encrypted(&eof[..5], out, written);
+        let mut close = [0u8; 8];
+        close[0] = SSH_MSG_CHANNEL_CLOSE;
+        write_u32(&mut close, 1, self.client_channel);
+        self.send_encrypted(&close[..5], out, written);
+    }
+
+    /// Sends `text` as a CHANNEL_DATA message on the session channel.
+    fn send_channel_text(&mut self, text: &[u8], out: &mut [u8], written: &mut usize) {
+        use crate::ssh::packet::SSH_MSG_CHANNEL_DATA;
+        let mut message = [0u8; 512];
+        message[0] = SSH_MSG_CHANNEL_DATA;
+        write_u32(&mut message, 1, self.client_channel);
+        let end = write_ssh_string(&mut message, 5, text);
+        self.send_encrypted(&message[..end], out, written);
     }
 
     /// Parses a USERAUTH_REQUEST and replies SUCCESS for a correct password,
@@ -463,6 +629,32 @@ fn write_ssh_string(out: &mut [u8], offset: usize, data: &[u8]) -> usize {
     out[offset..offset + 4].copy_from_slice(&(data.len() as u32).to_be_bytes());
     out[offset + 4..offset + 4 + data.len()].copy_from_slice(data);
     offset + 4 + data.len()
+}
+
+/// Reads a big-endian uint32 at the start of `data`.
+fn read_u32(data: &[u8]) -> u32 {
+    if data.len() < 4 {
+        return 0;
+    }
+    u32::from_be_bytes([data[0], data[1], data[2], data[3]])
+}
+
+/// Writes a big-endian uint32 at `offset`.
+fn write_u32(out: &mut [u8], offset: usize, value: u32) {
+    out[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+}
+
+/// Trims leading/trailing ASCII whitespace.
+fn trim_ascii(data: &[u8]) -> &[u8] {
+    let mut start = 0;
+    let mut end = data.len();
+    while start < end && data[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    while end > start && data[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    &data[start..end]
 }
 
 impl Default for SshSession {

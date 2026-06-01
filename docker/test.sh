@@ -175,34 +175,29 @@ fi
 # Background inbound-connectivity probe: once the guest's network service is up,
 # connect to the forwarded port and exchange a line, proving the inbound TCP
 # server datapath. Result is written for printing after QEMU exits.
-rm -f /tmp/inbound_tcp_result.txt /tmp/ssh_probe.log
+rm -f /tmp/inbound_tcp_result.txt /tmp/ssh_login.log
 (
     sleep 55
     echo "PROBE_STARTED" > /tmp/inbound_tcp_result.txt
-    # Drive a real ssh client through version + KEXINIT on a clean connection.
-    # ssh will hang awaiting the ECDH reply, so run it in the background and
-    # hard-kill it after a fixed window, then read what it logged.
-    ssh -vv -p 2222 \
-        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -o BatchMode=yes -o ConnectTimeout=8 \
-        root@127.0.0.1 > /tmp/ssh_probe.log 2>&1 &
-    ssh_pid=$!
-    sleep 22
-    kill -9 "${ssh_pid}" 2>/dev/null || true
+    # Real password login (root / brainxos) via SSH_ASKPASS, running shell
+    # commands over the session channel, then quitting. ssh runs detached
+    # (setsid + askpass, no controlling tty); hard-killed after a fixed window.
+    printf '#!/bin/sh\necho brainxos\n' > /tmp/askpass.sh
+    chmod +x /tmp/askpass.sh
+    printf 'whoami\nuname\nexit\n' > /tmp/ssh_input.txt
+    setsid sh -c 'DISPLAY=none SSH_ASKPASS=/tmp/askpass.sh SSH_ASKPASS_REQUIRE=force \
+        ssh -v -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+        -o ConnectTimeout=8 root@127.0.0.1 < /tmp/ssh_input.txt > /tmp/ssh_login.log 2>&1' &
+    sleep 20
+    pkill -9 -f 'ssh -v -p 2222' 2>/dev/null || true
     sleep 1
-    echo "SSH_HANDSHAKE_LOG:" >> /tmp/inbound_tcp_result.txt
-    grep -iE 'remote software version|kex: algorithm|Server host key|NEWKEYS|SERVICE_ACCEPT|Authentications that can continue|Permission denied|userauth|Next authentication method' \
-        /tmp/ssh_probe.log >> /tmp/inbound_tcp_result.txt 2>/dev/null || true
-    # Actual password login attempt (root / brainxos) if sshpass is available.
-    if command -v sshpass >/dev/null 2>&1; then
-        login_out="$(sshpass -p brainxos timeout 16 ssh -p 2222 \
-            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -o PreferredAuthentications=password -o PubkeyAuthentication=no \
-            -o ConnectTimeout=8 root@127.0.0.1 'echo BRAINIX_SSH_LOGIN_OK' 2>&1 | tail -5)"
-        echo "SSH_PASSWORD_LOGIN: ${login_out}" >> /tmp/inbound_tcp_result.txt
-    else
-        echo "SSH_PASSWORD_LOGIN: (sshpass not installed)" >> /tmp/inbound_tcp_result.txt
-    fi
+    echo "SSH_LOGIN_LOG:" >> /tmp/inbound_tcp_result.txt
+    grep -iE 'Server host key|SERVICE_ACCEPT|Authenticated to|Welcome to BraiNIX|Logged in as|BraiNIX x86|command not found|Permission denied|Authentications that can continue' \
+        /tmp/ssh_login.log >> /tmp/inbound_tcp_result.txt 2>/dev/null || true
+    echo "SSH_SESSION_OUTPUT:" >> /tmp/inbound_tcp_result.txt
+    tail -20 /tmp/ssh_login.log | tr -cd '[:print:]\n' >> /tmp/inbound_tcp_result.txt 2>/dev/null || true
+    echo "" >> /tmp/inbound_tcp_result.txt
     echo "PROBE_DONE" >> /tmp/inbound_tcp_result.txt
 ) &
 # Honor KEEP_RUNNING=1 (set by bin/run-brainx.sh in its default "always have

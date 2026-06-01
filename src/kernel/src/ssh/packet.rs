@@ -15,6 +15,14 @@ pub const SSH_MSG_KEX_ECDH_REPLY: u8 = 31;
 pub const SSH_MSG_USERAUTH_REQUEST: u8 = 50;
 pub const SSH_MSG_USERAUTH_FAILURE: u8 = 51;
 pub const SSH_MSG_USERAUTH_SUCCESS: u8 = 52;
+pub const SSH_MSG_CHANNEL_OPEN: u8 = 90;
+pub const SSH_MSG_CHANNEL_OPEN_CONFIRMATION: u8 = 91;
+pub const SSH_MSG_CHANNEL_DATA: u8 = 94;
+pub const SSH_MSG_CHANNEL_EOF: u8 = 96;
+pub const SSH_MSG_CHANNEL_CLOSE: u8 = 97;
+pub const SSH_MSG_CHANNEL_REQUEST: u8 = 98;
+pub const SSH_MSG_CHANNEL_SUCCESS: u8 = 99;
+pub const SSH_MSG_CHANNEL_FAILURE: u8 = 100;
 
 /// Block size for the unencrypted packet length rounding.
 const UNENCRYPTED_BLOCK_SIZE: usize = 8;
