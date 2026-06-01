@@ -51,6 +51,29 @@ const BOOTSTRAP_PAGE_TABLE_PAGE_COUNT: usize = 32;
 /// identity map and breaks at the moment of CR3 load.
 const KERNEL_BINARY_PAGE_COUNT: u64 = 1024;
 
+/// Physical extent the direct-map region must cover.
+///
+/// The direct map has to reach every physical frame the
+/// `PhysicalAllocator` can return. That allocator tracks up to its maximum
+/// supported physical range (1 GiB) and hands out the highest free frame
+/// first (LIFO over an ascending enrollment), so the very first
+/// `allocate_user_page` returns a frame near the top of installed RAM. A
+/// direct map smaller than RAM faults the instant such a frame is zeroed
+/// or written through `DIRECT_MAP_REGION_START + phys`. One GiB of 2 MiB
+/// huge pages fits in a single page directory, so this costs no extra
+/// direct-map bootstrap tables versus the previous 128 MiB value.
+const DIRECT_MAP_PHYSICAL_COVERAGE_IN_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Physical base of the boot stack the bootloader hands to the kernel.
+///
+/// `src/bootloader/src/main.rs` lays out a 32 KiB stack spanning physical
+/// 0x808000..0x810000 (`bootloader_stack_bottom`..`bootloader_stack_top`);
+/// the kernel runs its entire boot sequence on it.
+const BOOT_STACK_PHYSICAL_BASE_ADDRESS: u64 = 0x0080_8000;
+
+/// Number of 4 KiB pages in the 32 KiB boot stack region.
+const BOOT_STACK_PAGE_COUNT: u64 = 8;
+
 /// Page-aligned BSS-backed storage for bootstrap page table pages.
 ///
 /// Each entry is a full 4096-byte page table. Aligned to 4096 bytes so
@@ -353,10 +376,36 @@ fn map_pool_region(page_map_level_4: &mut PageTable) -> Result<(), MappingError>
 fn map_all_kernel_regions(page_map_level_4: &mut PageTable, boot_step_logger: &mut BootStepLogger) {
     map_kernel_binary_region(page_map_level_4).expect("kernel binary region mapping failed");
     map_kernel_stack_region(page_map_level_4).expect("kernel stack region mapping failed");
+    map_boot_stack_identity_region(page_map_level_4).expect("boot stack identity mapping failed");
     map_pool_region(page_map_level_4).expect("pool region mapping failed");
     map_local_apic_mmio_region(page_map_level_4).expect("LAPIC MMIO region mapping failed");
     map_tpm_tis_mmio_region(page_map_level_4).expect("TPM TIS MMIO region mapping failed");
-    map_direct_map_region(page_map_level_4, 128 * 1024 * 1024, boot_step_logger);
+    map_direct_map_region(
+        page_map_level_4,
+        DIRECT_MAP_PHYSICAL_COVERAGE_IN_BYTES,
+        boot_step_logger,
+    );
+}
+
+/// Identity-maps the boot stack's physical region into the kernel PML4.
+///
+/// The bootloader's boot stack lives at physical 0x808000..0x810000 and the
+/// kernel executes its whole boot sequence on it. `initialize_ipc_subsystem`
+/// rebases RSP onto the direct-map view of this region at the CR3 swap, but
+/// frame-pointer-relative locals and `&stack` references materialized before
+/// the swap keep their low identity addresses. Without an identity mapping in
+/// the kernel PML4 those pointers fault the instant the CR3 load retires the
+/// bootloader's identity map. Mapping the region at its identity address keeps
+/// every stack pointer -- low identity or direct-map -- valid across the swap.
+fn map_boot_stack_identity_region(page_map_level_4: &mut PageTable) -> Result<(), MappingError> {
+    let data_flags = compute_kernel_data_page_flags();
+    map_page_range(
+        page_map_level_4,
+        BOOT_STACK_PHYSICAL_BASE_ADDRESS,
+        BOOT_STACK_PHYSICAL_BASE_ADDRESS,
+        BOOT_STACK_PAGE_COUNT,
+        data_flags,
+    )
 }
 
 /// Identity-maps the local APIC MMIO page (0xFEE00000) into the kernel PML4.
