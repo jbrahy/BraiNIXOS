@@ -49,7 +49,8 @@ fn extract_single_module_byte_slice(start_address: u32, end_address: u32) -> &'s
     if end_address < start_address {
         return &[];
     }
-    let byte_count = (end_address - start_address) as usize;
+    // The guard above guarantees end >= start, so this never wraps.
+    let byte_count = end_address.wrapping_sub(start_address) as usize;
     let direct_map_pointer =
         DIRECT_MAP_REGION_START.wrapping_add(u64::from(start_address)) as *const u8;
     // SAFETY: GRUB-provided module addresses are within physical RAM and

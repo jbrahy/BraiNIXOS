@@ -180,6 +180,10 @@ fn load_and_launch_server_processes(boot_step_logger: &mut BootStepLogger) {
 /// Creates the init server process and grants CapSpawn + CapAuditRead.
 ///
 /// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+// Boot-time, infallible by construction: canonical entry point and the thread
+// pool has capacity for every boot server. A failure here is an unrecoverable
+// boot fault, so `unwrap` (panic = abort) is the correct response.
+#[allow(clippy::unwrap_used)]
 fn launch_init_server_process() {
     let (handle, mut capability_space) =
         create_server_process(ProcessType::Init, 0x0000_0000_0040_0000).unwrap();
@@ -206,6 +210,7 @@ fn grant_init_audit_read_capability(capability_space: &mut CapabilitySpace) {
 /// Creates the spawnd server process and grants CapSpawn only.
 ///
 /// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+#[allow(clippy::unwrap_used)] // boot-time, infallible by construction (see launch_init_server_process)
 fn launch_spawnd_server_process() {
     let (handle, mut capability_space) =
         create_server_process(ProcessType::Spawnd, 0x0000_0000_0040_0000).unwrap();
@@ -221,6 +226,7 @@ fn launch_spawnd_server_process() {
 /// Creates the auditd server process and grants CapAuditRead (read-only) only.
 ///
 /// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+#[allow(clippy::unwrap_used)] // boot-time, infallible by construction (see launch_init_server_process)
 fn launch_auditd_server_process() {
     let (handle, mut capability_space) =
         create_server_process(ProcessType::Auditd, 0x0000_0000_0040_0000).unwrap();
@@ -322,6 +328,7 @@ fn launch_device_server_processes(boot_step_logger: &mut BootStepLogger) {
 /// devd-disk (launch_device_server_processes enforces this order). If this order
 /// changes, the slot assignments swap silently — this is a known structural gap
 /// to be resolved when distinct ProcessType variants are introduced in a future phase.
+#[allow(clippy::unwrap_used)] // boot-time, infallible by construction (see launch_init_server_process)
 fn launch_devd_nic_server_process() {
     let (handle, mut capability_space) =
         create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000).unwrap();
@@ -360,6 +367,7 @@ fn wire_nic_device_data_into_slot(capability_space: &mut CapabilitySpace) {
 /// devd-nic (launch_device_server_processes enforces this order). If this order
 /// changes, the slot assignments swap silently — this is a known structural gap
 /// to be resolved when distinct ProcessType variants are introduced in a future phase.
+#[allow(clippy::unwrap_used)] // boot-time, infallible by construction (see launch_init_server_process)
 fn launch_devd_disk_server_process() {
     let (handle, mut capability_space) =
         create_server_process(ProcessType::DeviceServer, 0x0000_0000_0040_0000).unwrap();
@@ -402,6 +410,7 @@ fn launch_network_server_processes(boot_step_logger: &mut BootStepLogger) {
 ///
 /// Enforces INV-DEV-002: linkd receives only its assigned authority.
 /// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+#[allow(clippy::unwrap_used)] // boot-time, infallible by construction (see launch_init_server_process)
 fn launch_linkd_server_process() {
     let (handle, mut linkd_capability_space) =
         create_server_process(ProcessType::NetworkServer, 0x0000_0000_0040_0000).unwrap();
@@ -436,6 +445,7 @@ fn grant_linkd_outbound_and_frame_capabilities(linkd_capability_space: &mut Capa
 ///
 /// Enforces INV-DEV-002: ipd receives only its assigned authority.
 /// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+#[allow(clippy::unwrap_used)] // boot-time, infallible by construction (see launch_init_server_process)
 fn launch_ipd_server_process() {
     let (handle, mut ipd_capability_space) =
         create_server_process(ProcessType::NetworkServer, 0x0000_0000_0040_0000).unwrap();
@@ -460,6 +470,7 @@ fn grant_ipd_outbound_capability(ipd_capability_space: &mut CapabilitySpace) {
 /// Enforces D-04: two-layer containment — transportd cannot reach devd-nic.
 /// Enforces INV-DEV-002: transportd receives minimum possible authority.
 /// Enforces T-10-02-01: CSpace inserted into ProcessTable after capability grant.
+#[allow(clippy::unwrap_used)] // boot-time, infallible by construction (see launch_init_server_process)
 fn launch_transportd_server_process() {
     let (handle, mut transportd_capability_space) =
         create_server_process(ProcessType::NetworkServer, 0x0000_0000_0040_0000).unwrap();
@@ -501,6 +512,7 @@ fn grant_endpoint_capability_with_index(
 ///
 /// Enforces T-10-02-01: every server launch ends with CSpace in the ProcessTable.
 /// Enforces INV-AUTH-001: no authority exists without explicit table registration.
+#[allow(clippy::unwrap_used)]
 fn insert_capability_space_into_global_process_table(
     thread_identifier: ThreadIdentifier,
     capability_space: CapabilitySpace,

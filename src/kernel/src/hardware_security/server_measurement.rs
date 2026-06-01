@@ -42,6 +42,9 @@ pub fn measure_server_binary_into_pcr3(binary_bytes: &[u8]) -> Result<(), TpmErr
 /// devd-nic, devd-disk, linkd, ipd, transportd. TPM errors are tolerated during
 /// development — swtpm may not be present on host. Any change to any server
 /// binary changes PCR[3].
+// Eight explicit named parameters -- one per measured server binary -- are
+// intentional per CODE_STANDARDS (named over packed); the count is fixed by D-02.
+#[allow(clippy::too_many_arguments)]
 pub fn measure_all_server_binaries(
     init_binary: &[u8],
     spawnd_binary: &[u8],

@@ -163,6 +163,9 @@ fn increment_thread_pool_slot_counter() {
 /// Precondition: `thread_index < MAXIMUM_THREADS` (guaranteed by `allocate_thread_pool_slot`).
 /// Invariant: D-03 (thread stored, not dropped). Single-core boot, no concurrent access.
 /// Evidence: test_create_server_process_with_canonical_entry_point_returns_ok.
+// `expect` is justified: `thread_index` comes from `allocate_thread_pool_slot`,
+// which returns only indices < MAXIMUM_THREADS, so the accessor never returns None.
+#[allow(clippy::expect_used)]
 fn store_thread_in_kernel_pool(thread_index: usize, thread: Thread) {
     // SAFETY: Single-core boot. thread_index from monotonic counter < MAXIMUM_THREADS.
     // Precondition: allocate_thread_pool_slot returns index < 32 (8 boot servers).

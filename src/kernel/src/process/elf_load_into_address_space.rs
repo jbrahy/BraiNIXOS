@@ -135,6 +135,7 @@ unsafe fn allocate_one_user_page() -> Result<u64, ElfLoadError> {
         .map_err(|_| ElfLoadError::PageAllocationFailed)
 }
 
+#[allow(clippy::arithmetic_side_effects)]
 fn align_down_to_page_boundary(address: u64) -> u64 {
     address & !(PAGE_SIZE_IN_BYTES as u64 - 1)
 }

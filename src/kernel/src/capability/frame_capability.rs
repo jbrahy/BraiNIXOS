@@ -49,7 +49,7 @@ impl FrameCapabilityData {
     /// Enforces INV-MEM-005: memory ownership is explicit.
     /// Verified by: test_frame_capability_validates_page_alignment
     pub fn validate_frame_alignment(physical_address: u64) -> bool {
-        physical_address % 4096 == 0
+        physical_address.is_multiple_of(4096)
     }
 }
 

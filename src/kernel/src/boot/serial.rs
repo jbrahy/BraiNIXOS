@@ -143,6 +143,5 @@ pub fn read_serial_byte_non_blocking() -> Option<u8> {
 /// Returns true if the COM1 line-status data-ready bit is set.
 fn serial_input_has_data_ready() -> bool {
     let line_status = read_port_byte(SERIAL_LINE_STATUS_REGISTER);
-    let data_ready_bit_is_set = (line_status & SERIAL_LINE_STATUS_DATA_READY_BIT) != 0;
-    data_ready_bit_is_set
+    (line_status & SERIAL_LINE_STATUS_DATA_READY_BIT) != 0
 }

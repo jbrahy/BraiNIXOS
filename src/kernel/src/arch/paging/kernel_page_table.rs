@@ -41,8 +41,8 @@ const BOOTSTRAP_PAGE_TABLE_PAGE_COUNT: usize = 32;
 
 /// Total number of 4KB pages in the kernel binary region to map.
 ///
-/// Must cover the kernel ELF's full LOAD extent: .text + .rodata + .data
-/// + .bss. The current build's last PT_LOAD ends near physical 0x46D000
+/// Must cover the kernel ELF's full LOAD extent (.text, .rodata, .data,
+/// .bss). The current build's last PT_LOAD ends near physical 0x46D000
 /// (~3.5 MiB above KERNEL_PHYSICAL_LOAD_ADDRESS), driven mostly by the
 /// PhysicalAllocator's fixed-size tracking tables and other BSS
 /// statics. Round to 1024 pages (4 MiB) so the kernel's own data
