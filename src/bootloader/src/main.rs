@@ -328,10 +328,13 @@ global_asm!(
     // Coverage rationale (16 * 2 MiB = 32 MiB):
     //   - pd_low[0]: low memory + kernel entry (.text at 0x100370). The
     //     higher-half view maps the kernel's virt 0xFFFFFFFF80100000.
-    //   - pd_low[1]: kernel .rodata/.data and start of .bss (kernel .bss
-    //     ends at 0x3CBAFE).
-    //   - pd_low[2]: shell module load region (Phase 14-02 placed shell
-    //     at 0x400000).
+    //   - pd_low[1]: kernel .rodata/.data and most of .bss. GRUB also
+    //     places the shell module in this 2 MiB span (observed ~0x3DD000)
+    //     before `relocate_shell_module_to_safe_scratch` moves it to
+    //     SAFE_SHELL_MODULE_SCRATCH_ADDRESS (0x1000000, pd_low[8]).
+    //   - pd_low[2]: tail of the kernel .bss (the kernel image's last
+    //     PT_LOAD ends near 0x46D000, driven by the multi-megabyte static
+    //     PhysicalAllocator tables).
     //   - pd_low[4]: bootloader's own image (.text/.data/.bss live at
     //     0x800000 after the relocate in src/bootloader/linker.ld).
     //   - pd_low[5..16]: headroom for GRUB to place the multiboot2

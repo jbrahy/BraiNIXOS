@@ -42,13 +42,15 @@ const BOOTSTRAP_PAGE_TABLE_PAGE_COUNT: usize = 32;
 /// Total number of 4KB pages in the kernel binary region to map.
 ///
 /// Must cover the kernel ELF's full LOAD extent: .text + .rodata + .data
-/// + .bss. The current build's last PT_LOAD ends at physical 0x3CBAFE
-/// (3.5 MiB above KERNEL_PHYSICAL_LOAD_ADDRESS), driven mostly by the
+/// + .bss. The current build's last PT_LOAD ends near physical 0x46D000
+/// (~3.5 MiB above KERNEL_PHYSICAL_LOAD_ADDRESS), driven mostly by the
 /// PhysicalAllocator's fixed-size tracking tables and other BSS
 /// statics. Round to 1024 pages (4 MiB) so the kernel's own data
 /// stays mapped after the Phase 4 CR3 swap retires the bootloader's
 /// identity map. A smaller value silently relies on the bootloader's
-/// identity map and breaks at the moment of CR3 load.
+/// identity map and breaks at the moment of CR3 load. The compile-time
+/// overlap assertion in `boot::multiboot2_info` guards against this
+/// region growing into the boot stack at 0x808000.
 ///
 /// `boot::multiboot2_info` derives the physical allocator's kernel-binary
 /// exclusion range from this so the allocator never hands out a frame that
