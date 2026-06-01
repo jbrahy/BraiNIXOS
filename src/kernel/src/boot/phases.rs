@@ -223,6 +223,7 @@ fn probe_pci_devices(boot_step_logger: &mut BootStepLogger) {
             if let Some(gateway_mac) = resolve_gateway_via_arp(&nic, mac, boot_step_logger) {
                 ping_gateway_via_icmp(&nic, mac, gateway_mac, boot_step_logger);
                 query_dns_via_udp(&nic, mac, gateway_mac, boot_step_logger);
+                open_tcp_connection(&nic, mac, gateway_mac, boot_step_logger);
             }
             discover_ipv6_router(&nic, mac, boot_step_logger);
         }
@@ -395,6 +396,61 @@ fn discover_ipv6_router(
         core::hint::spin_loop();
     }
     boot_step_logger.warn("IPv6: no router advertisement received");
+}
+
+/// Opens a TCP connection to a public DNS-over-TCP server (1.1.1.1:53) through
+/// slirp's NAT: sends a SYN and polls for the SYN-ACK (or RST), proving the TCP
+/// datapath and the start of the 3-way handshake.
+fn open_tcp_connection(
+    nic: &crate::arch::e1000::E1000Device,
+    our_mac: [u8; 6],
+    gateway_mac: [u8; 6],
+    boot_step_logger: &mut BootStepLogger,
+) {
+    const REMOTE_IPV4: [u8; 4] = [1, 1, 1, 1];
+    const REMOTE_PORT: u16 = 53;
+    const LOCAL_PORT: u16 = 0xD00D;
+    const INITIAL_SEQUENCE: u32 = 0x0000_1000;
+    // External destination → next hop is the gateway's MAC.
+    let mut frame = [0u8; 128];
+    let length = crate::net::build_tcp_syn_frame(
+        gateway_mac,
+        our_mac,
+        OUR_IPV4,
+        REMOTE_IPV4,
+        LOCAL_PORT,
+        REMOTE_PORT,
+        INITIAL_SEQUENCE,
+        &mut frame,
+    );
+    if !nic.send_frame(&frame[..length]) {
+        boot_step_logger.warn("TCP: SYN transmit did not complete");
+        return;
+    }
+    let mut reply = [0u8; 2048];
+    for _attempt in 0..20_000_000u64 {
+        if let Some(received) = nic.poll_receive(&mut reply) {
+            match crate::net::classify_tcp_response(
+                &reply[..received],
+                REMOTE_IPV4,
+                REMOTE_PORT,
+                LOCAL_PORT,
+            ) {
+                crate::net::tcp::HandshakeResponse::SynAck => {
+                    boot_step_logger
+                        .ok("Networking: TCP SYN-ACK received (handshake, TCP works)");
+                    return;
+                }
+                crate::net::tcp::HandshakeResponse::Reset => {
+                    boot_step_logger.ok("Networking: TCP RST received (TCP datapath works)");
+                    return;
+                }
+                crate::net::tcp::HandshakeResponse::Other => {}
+            }
+        }
+        core::hint::spin_loop();
+    }
+    boot_step_logger.warn("TCP: no handshake response (needs outbound internet via slirp)");
 }
 
 /// Sanity-logs the loaded credential store: confirms the default password

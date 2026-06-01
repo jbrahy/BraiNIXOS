@@ -8,6 +8,7 @@
 pub mod icmp;
 pub mod ipv4;
 pub mod ipv6;
+pub mod tcp;
 pub mod udp;
 
 /// Ethernet header length.
@@ -98,6 +99,68 @@ pub fn build_udp_ipv4_frame(
     let udp_start = ip_start + ipv4::IPV4_HEADER_LENGTH;
     out[udp_start..udp_start + datagram_length].copy_from_slice(&datagram[..datagram_length]);
     udp_start + datagram_length
+}
+
+/// Assembles an Ethernet+IPv4+TCP SYN frame into `out`. Returns the frame length.
+pub fn build_tcp_syn_frame(
+    destination_mac: [u8; 6],
+    source_mac: [u8; 6],
+    source_ipv4: [u8; 4],
+    destination_ipv4: [u8; 4],
+    source_port: u16,
+    destination_port: u16,
+    sequence_number: u32,
+    out: &mut [u8],
+) -> usize {
+    write_ethernet_header(out, destination_mac, source_mac, ipv4::ETHERTYPE_IPV4);
+    let mut segment = [0u8; tcp::TCP_HEADER_LENGTH];
+    let segment_length = tcp::build_syn(
+        source_ipv4,
+        destination_ipv4,
+        source_port,
+        destination_port,
+        sequence_number,
+        &mut segment,
+    );
+    let header = ipv4::build_header(
+        source_ipv4,
+        destination_ipv4,
+        tcp::IP_PROTOCOL_TCP,
+        segment_length as u16,
+        source_port,
+    );
+    let ip_start = ETHERNET_HEADER_LENGTH;
+    out[ip_start..ip_start + ipv4::IPV4_HEADER_LENGTH].copy_from_slice(&header);
+    let tcp_start = ip_start + ipv4::IPV4_HEADER_LENGTH;
+    out[tcp_start..tcp_start + segment_length].copy_from_slice(&segment[..segment_length]);
+    tcp_start + segment_length
+}
+
+/// Classifies a received frame as a TCP handshake response from
+/// `expected_source_ipv4` on the given ports (SYN-ACK, RST, or Other).
+pub fn classify_tcp_response(
+    frame: &[u8],
+    expected_source_ipv4: [u8; 4],
+    expected_source_port: u16,
+    expected_destination_port: u16,
+) -> tcp::HandshakeResponse {
+    if frame.len() < ETHERNET_HEADER_LENGTH {
+        return tcp::HandshakeResponse::Other;
+    }
+    if u16::from_be_bytes([frame[12], frame[13]]) != ipv4::ETHERTYPE_IPV4 {
+        return tcp::HandshakeResponse::Other;
+    }
+    let ip_packet = &frame[ETHERNET_HEADER_LENGTH..];
+    let payload_offset =
+        match ipv4::parse_payload_offset(ip_packet, tcp::IP_PROTOCOL_TCP, expected_source_ipv4) {
+            Some(offset) => offset,
+            None => return tcp::HandshakeResponse::Other,
+        };
+    tcp::classify_handshake_response(
+        &ip_packet[payload_offset..],
+        expected_source_port,
+        expected_destination_port,
+    )
 }
 
 /// True if `frame` is an Ethernet/IPv4/UDP datagram from `expected_source_ipv4`
