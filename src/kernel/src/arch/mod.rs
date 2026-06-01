@@ -17,3 +17,6 @@ pub mod pci;
 
 #[cfg(target_arch = "x86_64")]
 pub mod virtio_blk;
+
+#[cfg(target_arch = "x86_64")]
+pub mod e1000;

@@ -208,6 +208,22 @@ fn probe_pci_devices(boot_step_logger: &mut BootStepLogger) {
     });
     boot_step_logger.ok("PCI bus 0 enumerated (device topology logged)");
 
+    match crate::arch::e1000::initialize_nic() {
+        Some(nic) => {
+            let mac = nic.mac_address();
+            let mac_word = ((mac[0] as u64) << 40)
+                | ((mac[1] as u64) << 32)
+                | ((mac[2] as u64) << 24)
+                | ((mac[3] as u64) << 16)
+                | ((mac[4] as u64) << 8)
+                | (mac[5] as u64);
+            boot_step_logger.info_hex("e1000 MMIO base", nic.mmio_base_address());
+            boot_step_logger.info_hex("e1000 MAC", mac_word);
+            boot_step_logger.ok("e1000 NIC initialized (MMIO mapped, reset, MAC read)");
+        }
+        None => boot_step_logger.warn("e1000 NIC not found"),
+    }
+
     match crate::arch::virtio_blk::initialize_block_device() {
         Some(device) => {
             boot_step_logger.info_hex("virtio-blk io_base", device.io_base_port() as u64);

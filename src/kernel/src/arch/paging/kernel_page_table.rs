@@ -502,6 +502,27 @@ fn identity_map_strong_uncacheable_page(
     )
 }
 
+/// Identity-maps `page_count` strong-uncacheable MMIO pages starting at
+/// `physical_base_address` into the live kernel PML4. Used to map a device's
+/// register BAR (discovered at runtime via PCI) so the kernel can drive it.
+///
+/// # Safety
+/// Single-core boot; `physical_base_address` must be a real device MMIO BAR.
+/// Newly-present mappings need no TLB shootdown (x86 does not cache
+/// not-present entries).
+pub unsafe fn map_mmio_region_into_kernel(
+    physical_base_address: u64,
+    page_count: usize,
+) -> Result<(), MappingError> {
+    let page_map_level_4 = acquire_kernel_page_map_level_4_reference();
+    for page_index in 0..page_count {
+        let page_physical =
+            physical_base_address.wrapping_add((page_index as u64).wrapping_mul(4096));
+        identity_map_strong_uncacheable_page(page_map_level_4, page_physical)?;
+    }
+    Ok(())
+}
+
 /// Acquires a mutable reference to the kernel PML4 during single-threaded boot.
 fn acquire_kernel_page_map_level_4_reference() -> &'static mut PageTable {
     // SAFETY: KERNEL_PAGE_MAP_LEVEL_4 is accessed only during single-threaded boot.
