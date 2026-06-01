@@ -185,6 +185,10 @@ pub fn initialize_nic() -> Option<E1000Device> {
     }
     let mmio_base_address = (bar0 & 0xFFFF_FFF0) as u64;
 
+    // Enable memory-space decoding + bus-master DMA: without Bus Master the NIC
+    // cannot read TX descriptors/buffers and silently drops all transmits.
+    crate::arch::pci::enable_memory_space_and_bus_master(location);
+
     // SAFETY: mmio_base_address is the NIC's real BAR from PCI enumeration.
     unsafe { map_mmio_region_into_kernel(mmio_base_address, E1000_REGISTER_SPACE_PAGES).ok()? };
 
