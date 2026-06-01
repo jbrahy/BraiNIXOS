@@ -20,7 +20,6 @@ const PROGRAM_HEADER_TYPE_LOAD: u32 = 1;
 const PROGRAM_HEADER_ENTRY_SIZE: usize = 56;
 const SEGMENT_FLAG_EXECUTABLE: u32 = 1;
 const SEGMENT_FLAG_WRITABLE: u32 = 2;
-#[cfg(test)]
 const SEGMENT_FLAG_READABLE: u32 = 4;
 /// Errors that can occur when validating a server binary ELF header.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -249,6 +248,65 @@ fn reject_one_header_if_not_load(
         return Err(ElfLoadError::UnsupportedProgramHeaderType);
     }
     Ok(())
+}
+
+/// Semantic page-permission request for a userspace mapping, expressed in
+/// toolchain-agnostic form. The kernel's user-page-table writer converts
+/// this into the platform's actual page-table flags (on x86_64, into
+/// `PageTableFlags::PRESENT | USER_ACCESSIBLE` plus optional `WRITABLE`
+/// and `NO_EXECUTE`).
+///
+/// Defined here in `no_std` toolchain-neutral form so the W^X policy
+/// enforcement and its tests live in the same module as the ELF parser,
+/// without forcing this file to depend on the x86_64 crate (which is
+/// only available on bare-metal targets).
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct UserPageMappingPermissions {
+    /// True when the mapping must permit writes.
+    pub writable: bool,
+    /// True when the mapping must permit instruction fetch.
+    pub executable: bool,
+}
+
+/// W^X-respecting translator. Maps ELF segment-permission bits
+/// (PF_R, PF_W, PF_X) to a `UserPageMappingPermissions` request the
+/// page-table writer can apply. Enforces W^X by rejecting any
+/// (PF_W & PF_X) combination. Requires PF_R: a non-readable segment is
+/// not produced by our toolchain and is treated as malformed.
+///
+/// Enforces invariant INV-MEM-003 (W^X global).
+/// Verified by: `flag_translator_*` tests.
+pub fn translate_segment_flags_to_user_page_permissions(
+    segment_flags: u32,
+) -> Result<UserPageMappingPermissions, ElfLoadError> {
+    reject_writable_and_executable_combination(segment_flags)?;
+    reject_non_readable_segment(segment_flags)?;
+    Ok(build_user_page_permissions_for_segment(segment_flags))
+}
+
+fn reject_writable_and_executable_combination(
+    segment_flags: u32,
+) -> Result<(), ElfLoadError> {
+    let is_writable = segment_flags & SEGMENT_FLAG_WRITABLE != 0;
+    let is_executable = segment_flags & SEGMENT_FLAG_EXECUTABLE != 0;
+    if is_writable && is_executable {
+        return Err(ElfLoadError::WritableAndExecutableSegment);
+    }
+    Ok(())
+}
+
+fn reject_non_readable_segment(segment_flags: u32) -> Result<(), ElfLoadError> {
+    if segment_flags & SEGMENT_FLAG_READABLE == 0 {
+        return Err(ElfLoadError::UnsupportedSegmentFlags);
+    }
+    Ok(())
+}
+
+fn build_user_page_permissions_for_segment(segment_flags: u32) -> UserPageMappingPermissions {
+    UserPageMappingPermissions {
+        writable: segment_flags & SEGMENT_FLAG_WRITABLE != 0,
+        executable: segment_flags & SEGMENT_FLAG_EXECUTABLE != 0,
+    }
 }
 
 /// Validates that the ELF header is correct then extracts the entry point virtual address.
@@ -682,5 +740,53 @@ mod tests {
             validate_program_header_types_are_load_only(&elf_bytes),
             Err(ElfLoadError::UnsupportedProgramHeaderType)
         );
+    }
+
+    #[test]
+    fn flag_translator_maps_read_only_to_read_only_permissions() {
+        let permissions =
+            translate_segment_flags_to_user_page_permissions(SEGMENT_FLAG_READABLE).unwrap();
+        assert_eq!(
+            permissions,
+            UserPageMappingPermissions { writable: false, executable: false }
+        );
+    }
+
+    #[test]
+    fn flag_translator_maps_read_execute_to_executable_permissions() {
+        let permissions = translate_segment_flags_to_user_page_permissions(
+            SEGMENT_FLAG_READABLE | SEGMENT_FLAG_EXECUTABLE,
+        )
+        .unwrap();
+        assert_eq!(
+            permissions,
+            UserPageMappingPermissions { writable: false, executable: true }
+        );
+    }
+
+    #[test]
+    fn flag_translator_maps_read_write_to_writable_permissions() {
+        let permissions = translate_segment_flags_to_user_page_permissions(
+            SEGMENT_FLAG_READABLE | SEGMENT_FLAG_WRITABLE,
+        )
+        .unwrap();
+        assert_eq!(
+            permissions,
+            UserPageMappingPermissions { writable: true, executable: false }
+        );
+    }
+
+    #[test]
+    fn flag_translator_rejects_writable_and_executable_combination() {
+        let result = translate_segment_flags_to_user_page_permissions(
+            SEGMENT_FLAG_READABLE | SEGMENT_FLAG_WRITABLE | SEGMENT_FLAG_EXECUTABLE,
+        );
+        assert_eq!(result, Err(ElfLoadError::WritableAndExecutableSegment));
+    }
+
+    #[test]
+    fn flag_translator_rejects_non_readable_segment() {
+        let result = translate_segment_flags_to_user_page_permissions(SEGMENT_FLAG_WRITABLE);
+        assert_eq!(result, Err(ElfLoadError::UnsupportedSegmentFlags));
     }
 }
