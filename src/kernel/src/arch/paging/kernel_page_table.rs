@@ -202,6 +202,53 @@ fn map_single_page(
     Ok(())
 }
 
+/// Public wrapper around `map_single_page` for callers that need to map
+/// into an arbitrary PML4 root (e.g., a per-process user page table).
+///
+/// # Safety
+/// Caller must hold exclusive access to `page_map_level_4` (single-threaded
+/// boot or process-creation hot path). Behaves identically to the private
+/// `map_single_page` — W^X is validated; intermediate page-table pages are
+/// allocated from the same BSS bootstrap pool the kernel side uses.
+pub unsafe fn map_single_page_in_root(
+    page_map_level_4: &mut PageTable,
+    virtual_address: u64,
+    physical_address: PhysAddr,
+    flags: PageTableFlags,
+) -> Result<(), MappingError> {
+    map_single_page(page_map_level_4, virtual_address, physical_address, flags)
+}
+
+/// Walks `page_map_level_4` for `virtual_address` and returns the physical
+/// address of the 4 KiB page it maps. Returns `MappingError::InvalidAddress`
+/// if the leaf entry is unused (the virtual address is not mapped).
+///
+/// # Safety
+/// Caller must hold exclusive access to `page_map_level_4`.
+pub unsafe fn resolve_mapped_physical_address(
+    page_map_level_4: &mut PageTable,
+    virtual_address: u64,
+) -> Result<u64, MappingError> {
+    let (page_table, page_table_index) =
+        resolve_page_table_for_address(page_map_level_4, virtual_address);
+    let entry = &page_table[page_table_index];
+    if entry.is_unused() {
+        return Err(MappingError::InvalidAddress);
+    }
+    Ok(entry.addr().as_u64())
+}
+
+/// Allocates one bootstrap page-table page from BSS and returns a mutable
+/// reference. Used by per-process user-page-table construction to obtain
+/// a fresh user PML4 root that lives in long-lived BSS storage.
+///
+/// # Safety
+/// Single-threaded boot only; concurrent calls would race the bootstrap
+/// allocator's index counter.
+pub unsafe fn allocate_user_page_map_level_4() -> &'static mut PageTable {
+    allocate_bootstrap_page_table()
+}
+
 /// Writes a validated page table entry.
 ///
 /// # Safety contract

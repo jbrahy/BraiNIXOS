@@ -18,6 +18,8 @@
 
 pub mod address_space;
 pub mod elf_load_failure;
+#[cfg(target_arch = "x86_64")]
+pub mod elf_load_into_address_space;
 pub mod elf_loader;
 pub mod module_loader;
 pub mod process_table;
