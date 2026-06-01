@@ -83,6 +83,7 @@ version = "0.1.0"
 dependencies = [
  "brainix-libsyscall",
  "chacha20",
+ "curve25519-dalek",
  "ed25519-dalek",
  "multiboot2",
  "sha2",
