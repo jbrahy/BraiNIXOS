@@ -194,19 +194,19 @@ fn probe_pci_devices(boot_step_logger: &mut BootStepLogger) {
     use crate::arch::pci::{
         for_each_device_on_bus_zero, read_base_address_register, VIRTIO_PCI_VENDOR_ID,
     };
+    let _ = VIRTIO_PCI_VENDOR_ID;
     for_each_device_on_bus_zero(|location| {
-        if location.vendor_id != VIRTIO_PCI_VENDOR_ID {
-            return;
-        }
+        // Pack vendor:device into one word, and log BAR0 so both the virtio
+        // disk and the Intel e1000 NIC (vendor 0x8086) topology are visible.
+        let vendor_device = ((location.vendor_id as u64) << 16) | (location.device_id as u64);
         let bus_device_function = ((location.bus as u64) << 16)
             | ((location.device as u64) << 8)
             | (location.function as u64);
-        boot_step_logger.info_hex("virtio dev (bus<<16|dev<<8|fn)", bus_device_function);
-        boot_step_logger.info_hex("  device_id", location.device_id as u64);
+        boot_step_logger.info_hex("PCI dev (bus<<16|dev<<8|fn)", bus_device_function);
+        boot_step_logger.info_hex("  vendor:device", vendor_device);
         boot_step_logger.info_hex("  BAR0", read_base_address_register(location, 0) as u64);
-        boot_step_logger.info_hex("  BAR4", read_base_address_register(location, 4) as u64);
     });
-    boot_step_logger.ok("PCI bus 0 enumerated (virtio device topology logged)");
+    boot_step_logger.ok("PCI bus 0 enumerated (device topology logged)");
 
     match crate::arch::virtio_blk::initialize_block_device() {
         Some(device) => {
