@@ -523,6 +523,22 @@ pub unsafe fn map_mmio_region_into_kernel(
     Ok(())
 }
 
+/// Translates a kernel virtual address to its physical address by walking the
+/// live kernel PML4. Robust to non-contiguous .bss placement (unlike the fixed
+/// image-offset `compute_physical_address_of_bss_page`), so it gives the TRUE
+/// physical address a device must DMA to. Returns `None` if unmapped.
+///
+/// # Safety-adjacent
+/// Single-core boot; the kernel PML4 is the active address space.
+pub fn kernel_virtual_to_physical(virtual_address: u64) -> Option<u64> {
+    let page_map_level_4 = acquire_kernel_page_map_level_4_reference();
+    // SAFETY: kernel PML4 is valid and active; resolve walks it read-only (the
+    // address is already mapped, so no intermediate tables are allocated).
+    let frame_base = unsafe { resolve_mapped_physical_address(page_map_level_4, virtual_address) }
+        .ok()?;
+    Some(frame_base | (virtual_address & 0xFFF))
+}
+
 /// Acquires a mutable reference to the kernel PML4 during single-threaded boot.
 fn acquire_kernel_page_map_level_4_reference() -> &'static mut PageTable {
     // SAFETY: KERNEL_PAGE_MAP_LEVEL_4 is accessed only during single-threaded boot.

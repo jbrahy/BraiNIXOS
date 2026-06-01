@@ -31,6 +31,8 @@ pub mod ipc;
 
 pub mod memory;
 
+pub mod net;
+
 pub mod thread;
 
 pub mod scheduler;
