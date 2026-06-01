@@ -18,6 +18,7 @@ BraiNIX uses four TPM 2.0 Platform Configuration Registers (PCRs) to record the 
 | PCR[1] | Bootloader binary hash | Platform firmware or UEFI Secure Boot | Before bootloader handoff |
 | PCR[2] | Kernel `.text`/`.rodata` hash + scheduler partition table hash | Bootloader | Before jumping to kernel entry point |
 | PCR[3] | Server binary hashes (each server hashed individually, extended in load order) | Kernel | Before spawning each server process |
+| PCR[5] | Userspace-ELF-load failure record (SHA-256 of `(process_type, error_variant, source_module_hash)`) | Kernel | Exactly once, only if `create_server_process_from_elf` returns an error during boot; kernel halts immediately after |
 
 ### PCR Extension Semantics
 
@@ -51,6 +52,23 @@ PCR[3] receives one measurement per server binary, extended in the order the ker
 6. Device server binary hashes (in device enumeration order)
 
 The ordering is deterministic: the kernel always spawns servers in the same order (defined by the server manifest compiled into the kernel).
+
+### PCR[5] Detailed Contents
+
+PCR[5] is the **userspace-ELF-load failure record slot**. It is extended exactly once if and only if `create_server_process_from_elf` returns an error during boot. The kernel halts immediately after extending PCR[5] (and writing a `[FAIL]` line to the serial console).
+
+The extension payload is `SHA-256(process_type_byte || error_variant_byte || source_module_hash)`, where:
+
+- `process_type_byte` is `process_type as u8` (the failing server's `ProcessType` enum value),
+- `error_variant_byte` is a stable 1..=13 tag for each `ElfLoadError` variant (see `process::elf_load_failure::error_variant_to_byte`),
+- `source_module_hash` is the SHA-256 of the multiboot2 module bytes the kernel attempted to load.
+
+A remote attester reading PCR[5]:
+
+- **All-zero:** no userspace-ELF-load failure occurred during this boot.
+- **Non-zero:** the system attempted boot and a load failure occurred. The exact tuple cannot be recovered from the PCR alone; the attester correlates the value against a precomputed table of `(ProcessType, ElfLoadError, module_hash)` failure records to identify the specific cause.
+
+Claimed by the spec at `docs/superpowers/specs/2026-05-31-userspace-elf-loading-design.md` (Phase 16-A) and implemented in `src/kernel/src/process/elf_load_failure.rs`.
 
 ---
 
