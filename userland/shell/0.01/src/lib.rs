@@ -20,5 +20,6 @@ pub mod entry;
 pub mod history;
 pub mod input_decoder;
 pub mod line_buffer;
+pub mod login;
 
 pub use entry::shell_main;
