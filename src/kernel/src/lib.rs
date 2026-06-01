@@ -13,6 +13,8 @@ pub mod arch;
 #[cfg(target_arch = "x86_64")]
 pub mod boot;
 
+pub mod auth;
+
 pub mod capability;
 
 /// Device table constants and builder functions (pure data, host-testable).
