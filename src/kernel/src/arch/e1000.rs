@@ -66,8 +66,9 @@ const CONTROL_SET_LINK_UP: u32 = 1 << 6;
 const TRANSMIT_CONTROL_VALUE: u32 = (1 << 1) | (1 << 3) | (15 << 4) | (64 << 12);
 // IPG values for e1000 copper (IPGT=10, IPGR1=8, IPGR2=6).
 const TRANSMIT_IPG_VALUE: u32 = 10 | (8 << 10) | (6 << 20);
-// RCTL: EN | BAM (accept broadcast) | SECRC (strip CRC); BSIZE 2048 (bits clear).
-const RECEIVE_CONTROL_VALUE: u32 = (1 << 1) | (1 << 15) | (1 << 26);
+// RCTL: EN | MPE (accept multicast — needed for IPv6 NDP/RA to 33:33::*) |
+// BAM (accept broadcast) | SECRC (strip CRC); BSIZE 2048 (size bits clear).
+const RECEIVE_CONTROL_VALUE: u32 = (1 << 1) | (1 << 4) | (1 << 15) | (1 << 26);
 
 // TX descriptor CMD bits.
 const TX_CMD_END_OF_PACKET: u8 = 1 << 0;

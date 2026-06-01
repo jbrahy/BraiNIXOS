@@ -224,6 +224,7 @@ fn probe_pci_devices(boot_step_logger: &mut BootStepLogger) {
                 ping_gateway_via_icmp(&nic, mac, gateway_mac, boot_step_logger);
                 query_dns_via_udp(&nic, mac, gateway_mac, boot_step_logger);
             }
+            discover_ipv6_router(&nic, mac, boot_step_logger);
         }
         None => boot_step_logger.warn("e1000 NIC not found"),
     }
@@ -368,6 +369,32 @@ fn query_dns_via_udp(
         core::hint::spin_loop();
     }
     boot_step_logger.warn("UDP/DNS: no response from DNS server");
+}
+
+/// Sends an IPv6 Router Solicitation and polls for a Router Advertisement,
+/// proving the IPv6 + ICMPv6/NDP datapath end-to-end.
+fn discover_ipv6_router(
+    nic: &crate::arch::e1000::E1000Device,
+    our_mac: [u8; 6],
+    boot_step_logger: &mut BootStepLogger,
+) {
+    let mut frame = [0u8; 128];
+    let length = crate::net::ipv6::build_router_solicitation_frame(our_mac, &mut frame);
+    if !nic.send_frame(&frame[..length]) {
+        boot_step_logger.warn("IPv6: router solicitation transmit did not complete");
+        return;
+    }
+    let mut reply = [0u8; 2048];
+    for _attempt in 0..10_000_000u64 {
+        if let Some(received) = nic.poll_receive(&mut reply) {
+            if crate::net::ipv6::is_router_advertisement(&reply[..received]) {
+                boot_step_logger.ok("Networking: IPv6 router advertisement received (IPv6/NDP works)");
+                return;
+            }
+        }
+        core::hint::spin_loop();
+    }
+    boot_step_logger.warn("IPv6: no router advertisement received");
 }
 
 /// Sanity-logs the loaded credential store: confirms the default password
