@@ -207,6 +207,15 @@ fn probe_pci_devices(boot_step_logger: &mut BootStepLogger) {
         boot_step_logger.info_hex("  BAR4", read_base_address_register(location, 4) as u64);
     });
     boot_step_logger.ok("PCI bus 0 enumerated (virtio device topology logged)");
+
+    match crate::arch::virtio_blk::initialize_block_device() {
+        Some(device) => {
+            boot_step_logger.info_hex("virtio-blk io_base", device.io_base_port() as u64);
+            boot_step_logger.info_hex("virtio-blk sectors", device.capacity_in_sectors());
+            boot_step_logger.ok("virtio-blk device initialized (reset + feature handshake)");
+        }
+        None => boot_step_logger.warn("virtio-blk device not found"),
+    }
 }
 
 fn allocate_network_stack_endpoints(boot_step_logger: &mut BootStepLogger) {

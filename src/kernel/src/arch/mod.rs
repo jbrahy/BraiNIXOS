@@ -14,3 +14,6 @@ pub mod syscall_trampoline;
 
 #[cfg(target_arch = "x86_64")]
 pub mod pci;
+
+#[cfg(target_arch = "x86_64")]
+pub mod virtio_blk;
