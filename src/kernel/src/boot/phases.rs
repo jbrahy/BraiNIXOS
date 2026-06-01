@@ -63,6 +63,7 @@ pub fn execute_boot_sequence(
     measure_server_binaries_into_pcr3(multiboot2_info_address, boot_step_logger);
     initialize_kernel_ipc_globals(boot_step_logger);
     allocate_network_stack_endpoints(boot_step_logger);
+    probe_pci_devices(boot_step_logger);
     load_and_launch_server_processes(boot_step_logger);
     launch_device_server_processes(boot_step_logger);
     launch_network_server_processes(boot_step_logger);
@@ -183,6 +184,31 @@ fn initialize_kernel_ipc_globals(boot_step_logger: &mut BootStepLogger) {
 /// EndpointPool::new() initializes all 16 endpoints. Indices 0-2 are
 /// reserved for the network stack chain. No explicit allocation needed.
 /// Enforces D-04: three endpoints for network stack IPC chain.
+/// Enumerates PCI bus 0 and logs each virtio device's location, device ID, and
+/// BAR0/BAR4 — so the MMIO bases hardcoded in `device_table.rs` can be validated
+/// against the real topology before a CapDevice is granted to a device server.
+///
+/// Discovery only: the kernel never drives the devices (drivers live in
+/// userspace devd-nic / devd-disk).
+fn probe_pci_devices(boot_step_logger: &mut BootStepLogger) {
+    use crate::arch::pci::{
+        for_each_device_on_bus_zero, read_base_address_register, VIRTIO_PCI_VENDOR_ID,
+    };
+    for_each_device_on_bus_zero(|location| {
+        if location.vendor_id != VIRTIO_PCI_VENDOR_ID {
+            return;
+        }
+        let bus_device_function = ((location.bus as u64) << 16)
+            | ((location.device as u64) << 8)
+            | (location.function as u64);
+        boot_step_logger.info_hex("virtio dev (bus<<16|dev<<8|fn)", bus_device_function);
+        boot_step_logger.info_hex("  device_id", location.device_id as u64);
+        boot_step_logger.info_hex("  BAR0", read_base_address_register(location, 0) as u64);
+        boot_step_logger.info_hex("  BAR4", read_base_address_register(location, 4) as u64);
+    });
+    boot_step_logger.ok("PCI bus 0 enumerated (virtio device topology logged)");
+}
+
 fn allocate_network_stack_endpoints(boot_step_logger: &mut BootStepLogger) {
     boot_step_logger.ok("Network stack endpoints reserved (indices 0=nic<->linkd, 1=linkd<->ipd, 2=ipd<->transportd)");
 }

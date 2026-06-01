@@ -59,6 +59,15 @@ impl BootStepLogger {
         self.write_prefixed_line("[HALT]", message);
     }
 
+    /// `[INFO]` line with a labeled hex value, e.g. for device-enumeration output.
+    pub fn info_hex(&mut self, label: &str, value: u64) {
+        let _ = writeln!(
+            self.serial_output_port,
+            "[BOOT] [INFO] {} = {:#x}",
+            label, value
+        );
+    }
+
     fn write_prefixed_line(&mut self, tag: &str, message: &str) {
         let _ = writeln!(self.serial_output_port, "[BOOT] {} {}", tag, message);
     }
