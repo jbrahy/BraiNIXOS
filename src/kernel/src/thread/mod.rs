@@ -66,6 +66,15 @@ pub struct Thread {
     pub cpu_budget_ticks: u64,
     /// Time partition domain slot assigned by the Phase 5 compile-time slot table.
     pub domain_slot: u8,
+    /// Physical address of this thread's user page table (PML4) root.
+    ///
+    /// This is the CR3 value the dispatcher must load before returning to
+    /// Ring 3 for this thread (KPTI: each process has its own user page
+    /// table). Zero means the thread has no associated user address space
+    /// (a pure kernel thread, or a process whose page table is not yet
+    /// built). Set when a process is created from an ELF image; consumed
+    /// by the userspace-dispatch path (see the Phase 16-B plan).
+    pub user_page_table_physical_address: u64,
 }
 
 /// Returns a zeroed RegisterSaveArea with all registers set to zero.
@@ -106,6 +115,31 @@ impl Thread {
             priority: 0,
             cpu_budget_ticks: 0,
             domain_slot: 0,
+            user_page_table_physical_address: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh thread has no user address space: its CR3 value is the zero
+    /// sentinel until a process is loaded into it. The userspace dispatcher
+    /// relies on this to distinguish kernel threads from user processes.
+    #[test]
+    fn test_new_thread_has_zero_user_page_table_physical_address() {
+        let thread = Thread::new();
+        assert_eq!(thread.user_page_table_physical_address, 0);
+    }
+
+    /// The field round-trips an assigned CR3 value (a user PML4 physical
+    /// address) so the dispatcher can later load it into CR3.
+    #[test]
+    fn test_user_page_table_physical_address_is_assignable() {
+        let mut thread = Thread::new();
+        let physical_address = 0x0000_0000_0080_3000u64;
+        thread.user_page_table_physical_address = physical_address;
+        assert_eq!(thread.user_page_table_physical_address, physical_address);
     }
 }

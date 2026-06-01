@@ -246,8 +246,23 @@ fn build_loaded_process(
     let layout = build_layout_for_loaded_process(entry_point)?;
     let user_page_map_level_4 = acquire_fresh_user_page_map_level_4();
     load_segments_and_stack(user_page_map_level_4, elf_module_bytes, segments, &layout)?;
-    let handle = finalize_loaded_process_handle(process_type, &layout)?;
+    let user_page_table_physical_address =
+        compute_user_page_table_physical_address(user_page_map_level_4);
+    let handle =
+        finalize_loaded_process_handle(process_type, &layout, user_page_table_physical_address)?;
     Ok((handle, CapabilitySpace::new()))
+}
+
+/// Returns the physical address of a freshly built user PML4 root, for use as
+/// the thread's CR3 value when the dispatcher returns to Ring 3.
+#[cfg(target_arch = "x86_64")]
+fn compute_user_page_table_physical_address(
+    user_page_map_level_4: &x86_64::structures::paging::PageTable,
+) -> u64 {
+    crate::arch::paging::page_table_walk_helpers::compute_page_table_physical_address(
+        user_page_map_level_4,
+    )
+    .as_u64()
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -292,11 +307,13 @@ fn load_segments_and_stack(
 fn finalize_loaded_process_handle(
     process_type: ProcessType,
     layout: &crate::process::address_space::ProcessAddressSpaceLayout,
+    user_page_table_physical_address: u64,
 ) -> Result<ServerProcessHandle, crate::process::elf_loader::ElfLoadError> {
-    let thread = build_initial_thread(
+    let mut thread = build_initial_thread(
         layout.entry_point_virtual_address,
         layout.stack_top_virtual_address,
     );
+    thread.user_page_table_physical_address = user_page_table_physical_address;
     let thread_index = allocate_thread_pool_slot()
         .ok_or(crate::process::elf_loader::ElfLoadError::PageAllocationFailed)?;
     store_thread_in_kernel_pool(thread_index, thread);
