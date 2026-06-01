@@ -179,9 +179,20 @@ if [[ "${KEEP_RUNNING:-0}" == "1" ]]; then
 else
     QEMU_TIMEOUT_CMD=(timeout 300)
 fi
+# Persistent writable data disk (16 MiB) for credential/filesystem storage.
+# Created once and reused across boots so on-disk state survives a reboot —
+# this is what lets a changed password persist (the disk+FS milestone). The
+# driver will live in the devd-disk userspace server (virtio-blk over PCI).
+BRAINIX_DATA_DISK="${REPOSITORY_ROOT}/brainix-disk.img"
+if [[ ! -f "${BRAINIX_DATA_DISK}" ]]; then
+    echo "[test.sh] Creating persistent 16 MiB data disk (brainix-disk.img)..."
+    dd if=/dev/zero of="${BRAINIX_DATA_DISK}" bs=1M count=16 2>/dev/null
+fi
 # shellcheck disable=SC2086
 "${QEMU_TIMEOUT_CMD[@]}" qemu-system-x86_64 \
     -drive file=brainix.iso,format=raw,if=ide \
+    -drive file="${BRAINIX_DATA_DISK}",format=raw,if=none,id=bxdata \
+    -device virtio-blk-pci,drive=bxdata \
     -boot order=c \
     -nographic \
     -machine q35,accel=tcg \
