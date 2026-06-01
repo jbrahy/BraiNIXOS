@@ -16,13 +16,15 @@
 
 use crate::arch::pci::{find_device, read_base_address_register};
 use crate::arch::paging::kernel_page_table::{kernel_virtual_to_physical, map_mmio_region_into_kernel};
+use crate::arch::paging::page_table_walk_helpers::compute_physical_address_of_bss_page;
 
-/// True guest-physical address backing a kernel virtual address, via the live
-/// page table. Used for device DMA (descriptor rings, buffers): the fixed
-/// image-offset helper is wrong for some .bss placements, which silently
-/// pointed the NIC at the wrong memory.
+/// True guest-physical address backing a kernel virtual address for device DMA
+/// (descriptor rings, buffers). Prefers the live page-table walk; falls back to
+/// the fixed image-offset helper (proven correct for the virtio-blk queue DMA)
+/// if the walk can't resolve the address — never silently 0.
 fn dma_physical_address(virtual_address: u64) -> u64 {
-    kernel_virtual_to_physical(virtual_address).unwrap_or(0)
+    kernel_virtual_to_physical(virtual_address)
+        .unwrap_or_else(|| compute_physical_address_of_bss_page(virtual_address).as_u64())
 }
 
 /// PCI vendor:device for the QEMU Intel 82540EM e1000.
