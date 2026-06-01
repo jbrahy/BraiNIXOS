@@ -213,8 +213,54 @@ fn probe_pci_devices(boot_step_logger: &mut BootStepLogger) {
             boot_step_logger.info_hex("virtio-blk io_base", device.io_base_port() as u64);
             boot_step_logger.info_hex("virtio-blk sectors", device.capacity_in_sectors());
             boot_step_logger.ok("virtio-blk device initialized (reset + feature handshake)");
+            run_virtio_blk_self_test(&device, boot_step_logger);
         }
         None => boot_step_logger.warn("virtio-blk device not found"),
+    }
+}
+
+/// Write-then-read-back self-test on a scratch sector near the end of the disk,
+/// proving the virtqueue path works end-to-end. Reads sector first and logs its
+/// first bytes (persistence check across reboots), then writes a marker and
+/// reads it back.
+fn run_virtio_blk_self_test(
+    device: &crate::arch::virtio_blk::VirtioBlockDevice,
+    boot_step_logger: &mut BootStepLogger,
+) {
+    use crate::arch::virtio_blk::SECTOR_SIZE_IN_BYTES;
+    // Scratch sector well clear of any future credential/FS layout at the front.
+    let scratch_sector: u64 = device.capacity_in_sectors().saturating_sub(1);
+
+    let mut buffer = [0u8; SECTOR_SIZE_IN_BYTES];
+    if !device.read_sector(scratch_sector, &mut buffer) {
+        boot_step_logger.fail("virtio-blk self-test", "initial read failed");
+        return;
+    }
+    let existing_marker = u32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
+    boot_step_logger.info_hex("virtio-blk scratch[0..4] before", existing_marker as u64);
+
+    let marker: u32 = 0xB7A1_4D15;
+    buffer[0..4].copy_from_slice(&marker.to_le_bytes());
+    if !device.write_sector(scratch_sector, &buffer) {
+        boot_step_logger.fail("virtio-blk self-test", "write failed");
+        return;
+    }
+
+    let mut verify_buffer = [0u8; SECTOR_SIZE_IN_BYTES];
+    if !device.read_sector(scratch_sector, &mut verify_buffer) {
+        boot_step_logger.fail("virtio-blk self-test", "read-back failed");
+        return;
+    }
+    let read_back = u32::from_le_bytes([
+        verify_buffer[0],
+        verify_buffer[1],
+        verify_buffer[2],
+        verify_buffer[3],
+    ]);
+    if read_back == marker {
+        boot_step_logger.ok("virtio-blk self-test PASSED (write/read-back verified)");
+    } else {
+        boot_step_logger.fail("virtio-blk self-test", "read-back mismatch");
     }
 }
 
