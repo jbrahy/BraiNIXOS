@@ -209,8 +209,7 @@ unsafe fn write_one_byte_to_user_address(
 ) -> Result<(), ElfLoadError> {
     let physical_address =
         resolve_user_virtual_to_physical(user_page_map_level_4, destination_virtual_address)?;
-    let direct_map_pointer =
-        DIRECT_MAP_REGION_START.wrapping_add(physical_address) as *mut u8;
+    let direct_map_pointer = DIRECT_MAP_REGION_START.wrapping_add(physical_address) as *mut u8;
     core::ptr::write_volatile(direct_map_pointer, byte_value);
     Ok(())
 }
@@ -264,8 +263,8 @@ unsafe fn map_stack_pages_in_range(
     page_flags: PageTableFlags,
 ) -> Result<(), ElfLoadError> {
     for stack_page_index in 0..stack_page_count {
-        let virtual_address = stack_bottom_virtual_address
-            + (stack_page_index as u64) * (PAGE_SIZE_IN_BYTES as u64);
+        let virtual_address =
+            stack_bottom_virtual_address + (stack_page_index as u64) * (PAGE_SIZE_IN_BYTES as u64);
         allocate_and_map_one_page(user_page_map_level_4, virtual_address, page_flags)?;
     }
     Ok(())

@@ -17,7 +17,6 @@ use crate::boot::hardware_security_init::{
 use crate::boot::ipc_init::initialize_ipc_subsystem;
 use crate::boot::logger::BootStepLogger;
 use crate::boot::multiboot2_info::initialize_memory_subsystem;
-use crate::memory::virtual_address_layout::DIRECT_MAP_REGION_START;
 use crate::boot::scheduler_init::initialize_scheduler_subsystem;
 use crate::boot::server_measurement::extract_module_byte_slices_from_boot_information;
 use crate::capability::audit_log::AuditRingBuffer;
@@ -30,6 +29,7 @@ use crate::hardware_security::iommu_detection::IommuDetectionResult;
 use crate::hardware_security::iommu_detection::{detect_iommu_presence, enforce_iommu_policy};
 use crate::hardware_security::server_measurement::measure_all_server_binaries;
 use crate::ipc::endpoint::ThreadIdentifier;
+use crate::memory::virtual_address_layout::DIRECT_MAP_REGION_START;
 use crate::process::server_launch::{create_server_process, grant_initial_capability_to_server};
 use crate::process::ProcessType;
 use crate::syscall::kernel_ipc_state;
@@ -612,10 +612,7 @@ fn register_shell_process_in_table(
     ),
 ) {
     let (handle, capability_space) = handle_and_cspace;
-    insert_capability_space_into_global_process_table(
-        handle.thread_identifier,
-        capability_space,
-    );
+    insert_capability_space_into_global_process_table(handle.thread_identifier, capability_space);
 }
 
 fn log_kernel_banner(boot_step_logger: &mut BootStepLogger) {

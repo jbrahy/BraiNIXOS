@@ -227,8 +227,7 @@ fn reject_any_non_load_header(
     header_count: u64,
 ) -> Result<(), ElfLoadError> {
     for header_index in 0..header_count {
-        let one_header_offset =
-            header_offset + header_index * PROGRAM_HEADER_ENTRY_SIZE as u64;
+        let one_header_offset = header_offset + header_index * PROGRAM_HEADER_ENTRY_SIZE as u64;
         reject_one_header_if_not_load(binary_bytes, one_header_offset)?;
     }
     Ok(())
@@ -284,9 +283,7 @@ pub fn translate_segment_flags_to_user_page_permissions(
     Ok(build_user_page_permissions_for_segment(segment_flags))
 }
 
-fn reject_writable_and_executable_combination(
-    segment_flags: u32,
-) -> Result<(), ElfLoadError> {
+fn reject_writable_and_executable_combination(segment_flags: u32) -> Result<(), ElfLoadError> {
     let is_writable = segment_flags & SEGMENT_FLAG_WRITABLE != 0;
     let is_executable = segment_flags & SEGMENT_FLAG_EXECUTABLE != 0;
     if is_writable && is_executable {
@@ -748,7 +745,10 @@ mod tests {
             translate_segment_flags_to_user_page_permissions(SEGMENT_FLAG_READABLE).unwrap();
         assert_eq!(
             permissions,
-            UserPageMappingPermissions { writable: false, executable: false }
+            UserPageMappingPermissions {
+                writable: false,
+                executable: false
+            }
         );
     }
 
@@ -760,7 +760,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             permissions,
-            UserPageMappingPermissions { writable: false, executable: true }
+            UserPageMappingPermissions {
+                writable: false,
+                executable: true
+            }
         );
     }
 
@@ -772,7 +775,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             permissions,
-            UserPageMappingPermissions { writable: true, executable: false }
+            UserPageMappingPermissions {
+                writable: true,
+                executable: false
+            }
         );
     }
 

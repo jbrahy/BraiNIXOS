@@ -68,9 +68,7 @@ fn read_frame_capability_slot_index() -> u8 {
 /// Resolves the caller's CapabilitySpace via the kernel process table.
 ///
 /// Returns None if the thread_identifier is unknown (fail-closed path).
-fn look_up_caller_capability_space(
-    thread_identifier: u32,
-) -> Option<&'static CapabilitySpace> {
+fn look_up_caller_capability_space(thread_identifier: u32) -> Option<&'static CapabilitySpace> {
     // SAFETY: kernel_process_table_mut is called only from the single-core
     // SYSCALL dispatch path.
     // - Precondition: initialize_kernel_process_table was called at boot.
@@ -83,10 +81,7 @@ fn look_up_caller_capability_space(
 ///
 /// Even on successful validation, this returns -1 because actual page-table
 /// mapping is deferred to a follow-up plan. Fail closed.
-fn validate_caller_holds_readable_frame(
-    caller_cspace: &CapabilitySpace,
-    slot_index: u8,
-) -> i64 {
+fn validate_caller_holds_readable_frame(caller_cspace: &CapabilitySpace, slot_index: u8) -> i64 {
     let frame_data = match read_frame_capability_data(caller_cspace, slot_index) {
         Some(data) => data,
         None => return FRAME_MAP_RETURN_FAIL,
@@ -119,9 +114,7 @@ fn read_frame_capability_data(
 /// - Precondition: capability_type == Frame && object_pointer != 0.
 /// - Invariant: INV-AUTH-002 (authority is explicit and typed).
 /// - Evidence: matches the dereference_device_capability_data pattern in irq_bind.rs.
-fn dereference_frame_capability_data(
-    object_pointer: u64,
-) -> Option<&'static FrameCapabilityData> {
+fn dereference_frame_capability_data(object_pointer: u64) -> Option<&'static FrameCapabilityData> {
     let data_pointer = object_pointer as *const FrameCapabilityData;
     unsafe { data_pointer.as_ref() }
 }

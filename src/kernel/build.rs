@@ -16,7 +16,10 @@ fn main() {
     }
     let manifest_directory = env!("CARGO_MANIFEST_DIR");
     println!("cargo:rerun-if-changed=linker.ld");
-    println!("cargo:rustc-link-arg-bin=brainix=-T{}/linker.ld", manifest_directory);
+    println!(
+        "cargo:rustc-link-arg-bin=brainix=-T{}/linker.ld",
+        manifest_directory
+    );
     println!("cargo:rustc-link-arg-bin=brainix=-nostdlib");
     println!("cargo:rustc-link-arg-bin=brainix=-static");
     println!("cargo:rustc-link-arg-bin=brainix=-no-pie");

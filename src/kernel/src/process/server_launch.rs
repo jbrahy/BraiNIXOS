@@ -69,8 +69,7 @@ pub fn create_server_process(
         layout.entry_point_virtual_address,
         layout.stack_top_virtual_address,
     );
-    let thread_index = allocate_thread_pool_slot()
-        .ok_or(ServerLaunchError::ThreadPoolExhausted)?;
+    let thread_index = allocate_thread_pool_slot().ok_or(ServerLaunchError::ThreadPoolExhausted)?;
     store_thread_in_kernel_pool(thread_index, thread);
     let thread_identifier = thread_index as ThreadIdentifier;
     Ok((
@@ -272,7 +271,8 @@ fn build_layout_for_loaded_process(
     crate::process::address_space::ProcessAddressSpaceLayout,
     crate::process::elf_loader::ElfLoadError,
 > {
-    build_process_address_space_layout(entry_point).map_err(map_address_space_error_to_elf_load_error)
+    build_process_address_space_layout(entry_point)
+        .map_err(map_address_space_error_to_elf_load_error)
 }
 
 #[cfg(target_arch = "x86_64")]

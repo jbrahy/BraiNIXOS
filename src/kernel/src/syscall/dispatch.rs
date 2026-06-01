@@ -107,9 +107,9 @@ fn handle_device_range_syscall(syscall_number: u64, thread_identifier: u32) -> O
 fn handle_server_range_syscall(syscall_number: u64, thread_identifier: u32) -> Option<i64> {
     issue_speculative_load_barrier();
     match syscall_number {
-        SYSCALL_NUMBER_FRAME_MAP => {
-            Some(super::frame_map::handle_frame_map_syscall(thread_identifier))
-        }
+        SYSCALL_NUMBER_FRAME_MAP => Some(super::frame_map::handle_frame_map_syscall(
+            thread_identifier,
+        )),
         SYSCALL_NUMBER_SERIAL_READ_BYTE => {
             Some(super::serial_read::handle_serial_read_byte_syscall())
         }

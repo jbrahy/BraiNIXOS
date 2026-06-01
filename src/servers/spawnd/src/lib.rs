@@ -142,8 +142,7 @@ mod tests {
     /// Crash exactly at the maximum returns RefuseRestart (budget exhausted).
     #[test]
     fn test_restart_decision_refuses_after_maximum_exhausted() {
-        let decision =
-            decide_server_restart(ProcessType::Auditd, MAXIMUM_AUTOMATIC_RESTART_COUNT);
+        let decision = decide_server_restart(ProcessType::Auditd, MAXIMUM_AUTOMATIC_RESTART_COUNT);
         assert_eq!(decision, RestartDecision::RefuseRestart);
     }
 
