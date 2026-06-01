@@ -208,6 +208,83 @@ impl LoginFlow {
     }
 }
 
+/// One in-memory account: its login name, current password, and force-change flag.
+#[derive(Copy, Clone)]
+struct InMemoryAccount {
+    login_name: &'static [u8],
+    password: StoredLine,
+    must_change_password: bool,
+}
+
+impl InMemoryAccount {
+    fn with_initial_password(login_name: &'static [u8], initial_password: &[u8]) -> Self {
+        let mut password = StoredLine::new();
+        password.store(initial_password);
+        Self {
+            login_name,
+            password,
+            must_change_password: true,
+        }
+    }
+}
+
+/// A shell-resident [`CredentialAuthority`] for the two shipped users, with the
+/// initial password `brainxos` and the force-change flag set.
+///
+/// MVP front-end: this verifies in-process, which means a compromised shell
+/// could bypass it, and a changed password does not survive a reboot. The
+/// secure end-state routes [`CredentialAuthority`] calls through kernel
+/// syscalls (the `auth` TCB module) backed by a MAC-protected on-disk store.
+pub struct InMemoryCredentialAuthority {
+    accounts: [InMemoryAccount; 2],
+}
+
+impl InMemoryCredentialAuthority {
+    /// Provisions `root` and `jbrahy`, both with the initial password `brainxos`.
+    pub fn with_default_accounts() -> Self {
+        Self {
+            accounts: [
+                InMemoryAccount::with_initial_password(b"root", b"brainxos"),
+                InMemoryAccount::with_initial_password(b"jbrahy", b"brainxos"),
+            ],
+        }
+    }
+
+    fn account_index_for(&self, username: &[u8]) -> Option<usize> {
+        self.accounts
+            .iter()
+            .position(|account| account.login_name == username)
+    }
+}
+
+impl CredentialAuthority for InMemoryCredentialAuthority {
+    fn check_password(&self, username: &[u8], password: &[u8]) -> CredentialCheck {
+        let index = match self.account_index_for(username) {
+            Some(index) => index,
+            None => return CredentialCheck::Rejected,
+        };
+        let account = &self.accounts[index];
+        if account.password.as_slice() != password {
+            return CredentialCheck::Rejected;
+        }
+        if account.must_change_password {
+            CredentialCheck::AcceptedMustChange
+        } else {
+            CredentialCheck::Accepted
+        }
+    }
+
+    fn set_password(&mut self, username: &[u8], new_password: &[u8]) -> bool {
+        let index = match self.account_index_for(username) {
+            Some(index) => index,
+            None => return false,
+        };
+        self.accounts[index].password.store(new_password);
+        self.accounts[index].must_change_password = false;
+        true
+    }
+}
+
 const USERNAME_PROMPT: &[u8] = b"login: ";
 const PASSWORD_PROMPT: &[u8] = b"password: ";
 const NEW_PASSWORD_PROMPT: &[u8] = b"new password: ";
@@ -365,6 +442,38 @@ mod tests {
         assert_eq!(progress, LoginProgress::NeedMoreInput);
         assert!(sink.contains(b"passwords do not match"));
         assert!(authority.root_must_change);
+    }
+
+    #[test]
+    fn test_in_memory_authority_default_accounts() {
+        use super::InMemoryCredentialAuthority;
+        let mut authority = InMemoryCredentialAuthority::with_default_accounts();
+        assert_eq!(
+            authority.check_password(b"root", b"brainxos"),
+            CredentialCheck::AcceptedMustChange
+        );
+        assert_eq!(
+            authority.check_password(b"jbrahy", b"brainxos"),
+            CredentialCheck::AcceptedMustChange
+        );
+        assert_eq!(
+            authority.check_password(b"root", b"wrong"),
+            CredentialCheck::Rejected
+        );
+        assert_eq!(
+            authority.check_password(b"nobody", b"brainxos"),
+            CredentialCheck::Rejected
+        );
+        assert!(authority.set_password(b"jbrahy", b"newpass"));
+        assert_eq!(
+            authority.check_password(b"jbrahy", b"newpass"),
+            CredentialCheck::Accepted
+        );
+        // root is unaffected by jbrahy's change.
+        assert_eq!(
+            authority.check_password(b"root", b"brainxos"),
+            CredentialCheck::AcceptedMustChange
+        );
     }
 
     #[test]

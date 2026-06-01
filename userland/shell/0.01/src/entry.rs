@@ -27,6 +27,9 @@ use crate::display::{
 use crate::history::{HistoryNavigationCursor, HistoryRing};
 use crate::input_decoder::{decode_next_byte, InputDecoderState, InputEvent};
 use crate::line_buffer::CurrentLineBuffer;
+use crate::login::{
+    InMemoryCredentialAuthority, LoginFlow, LoginProgress, MAXIMUM_CREDENTIAL_LINE_LENGTH,
+};
 
 /// One-line v0.02 greeting written immediately before the first prompt.
 const GREETING_BANNER_BYTES: &[u8] =
@@ -65,9 +68,98 @@ impl<S: ByteSink> ReplState<S> {
 pub fn shell_main() -> ! {
     let mut state = ReplState::new(SerialByteSink);
     write_byte_slice(&mut state.display_sink, GREETING_BANNER_BYTES);
+    run_login_gate(&mut state.display_sink);
     write_prompt(&mut state.display_sink);
     enter_input_loop(&mut state)
 }
+
+/// Authenticates a user before the REPL starts. Reads COM1 a byte at a time,
+/// assembles each line, and drives the [`LoginFlow`] until it authenticates.
+/// Username bytes echo; password bytes do not.
+///
+/// MVP: the authority verifies in-process (see [`InMemoryCredentialAuthority`]).
+/// Hardening to kernel-syscall verification + on-disk persistence is follow-up.
+fn run_login_gate<S: ByteSink>(sink: &mut S) {
+    let mut authority = InMemoryCredentialAuthority::with_default_accounts();
+    let mut flow = LoginFlow::start(sink);
+    let mut line_buffer = [0u8; MAXIMUM_CREDENTIAL_LINE_LENGTH];
+    let mut line_length: usize = 0;
+    loop {
+        match syscall_serial_read_byte() {
+            Some(byte_value) => {
+                if drive_login_with_byte(
+                    &mut flow,
+                    &mut authority,
+                    sink,
+                    &mut line_buffer,
+                    &mut line_length,
+                    byte_value,
+                ) {
+                    return;
+                }
+            }
+            None => core::hint::spin_loop(),
+        }
+    }
+}
+
+/// Feeds one received byte into the login line assembler. Returns true once the
+/// flow reports the user is authenticated.
+fn drive_login_with_byte<S: ByteSink>(
+    flow: &mut LoginFlow,
+    authority: &mut InMemoryCredentialAuthority,
+    sink: &mut S,
+    line_buffer: &mut [u8; MAXIMUM_CREDENTIAL_LINE_LENGTH],
+    line_length: &mut usize,
+    byte_value: u8,
+) -> bool {
+    if byte_value == CARRIAGE_RETURN_BYTE || byte_value == LINE_FEED_BYTE {
+        return submit_login_line(flow, authority, sink, line_buffer, line_length);
+    }
+    append_login_byte(flow, sink, line_buffer, line_length, byte_value);
+    false
+}
+
+/// Submits the assembled line to the flow, echoing CR/LF only while the visible
+/// username is being entered (the flow emits its own CR/LF for secret lines).
+fn submit_login_line<S: ByteSink>(
+    flow: &mut LoginFlow,
+    authority: &mut InMemoryCredentialAuthority,
+    sink: &mut S,
+    line_buffer: &mut [u8; MAXIMUM_CREDENTIAL_LINE_LENGTH],
+    line_length: &mut usize,
+) -> bool {
+    if !flow.is_collecting_secret() {
+        write_carriage_return_line_feed(sink);
+    }
+    let progress = flow.submit_line(&line_buffer[..*line_length], authority, sink);
+    *line_length = 0;
+    matches!(progress, LoginProgress::Authenticated)
+}
+
+/// Appends a printable byte to the line buffer, echoing it only when the
+/// username (non-secret) is being entered.
+fn append_login_byte<S: ByteSink>(
+    flow: &LoginFlow,
+    sink: &mut S,
+    line_buffer: &mut [u8; MAXIMUM_CREDENTIAL_LINE_LENGTH],
+    line_length: &mut usize,
+    byte_value: u8,
+) {
+    if *line_length >= MAXIMUM_CREDENTIAL_LINE_LENGTH {
+        return;
+    }
+    line_buffer[*line_length] = byte_value;
+    *line_length += 1;
+    if !flow.is_collecting_secret() {
+        echo_printable_byte(sink, byte_value);
+    }
+}
+
+/// ASCII carriage return (Enter on most serial terminals).
+const CARRIAGE_RETURN_BYTE: u8 = 0x0d;
+/// ASCII line feed.
+const LINE_FEED_BYTE: u8 = 0x0a;
 
 fn enter_input_loop<S: ByteSink>(state: &mut ReplState<S>) -> ! {
     loop {
