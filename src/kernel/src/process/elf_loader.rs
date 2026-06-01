@@ -203,6 +203,54 @@ pub fn validate_elf_header(binary_bytes: &[u8]) -> Result<(), ElfLoadError> {
     validate_elf_machine(binary_bytes)
 }
 
+/// Strict pre-flight gate: rejects any ELF that contains a program header
+/// with `p_type` other than `PT_LOAD`. Whitelist not blacklist — protects
+/// against future-feature attacker inputs by narrowing the
+/// attacker-influenceable surface to exactly what our static-linked
+/// toolchain produces.
+///
+/// Enforces the spec at
+/// `docs/superpowers/specs/2026-05-31-userspace-elf-loading-design.md`.
+/// Verified by: `pre_flight_gate_*` tests.
+pub fn validate_program_header_types_are_load_only(
+    binary_bytes: &[u8],
+) -> Result<(), ElfLoadError> {
+    validate_binary_is_large_enough(binary_bytes)?;
+    let header_offset = extract_program_header_table_offset(binary_bytes);
+    let header_count = u64::from(extract_program_header_count(binary_bytes));
+    reject_any_non_load_header(binary_bytes, header_offset, header_count)
+}
+
+#[allow(clippy::arithmetic_side_effects)]
+fn reject_any_non_load_header(
+    binary_bytes: &[u8],
+    header_offset: u64,
+    header_count: u64,
+) -> Result<(), ElfLoadError> {
+    for header_index in 0..header_count {
+        let one_header_offset =
+            header_offset + header_index * PROGRAM_HEADER_ENTRY_SIZE as u64;
+        reject_one_header_if_not_load(binary_bytes, one_header_offset)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::arithmetic_side_effects)]
+fn reject_one_header_if_not_load(
+    binary_bytes: &[u8],
+    one_header_offset: u64,
+) -> Result<(), ElfLoadError> {
+    let type_byte_offset = one_header_offset as usize;
+    if binary_bytes.len() < type_byte_offset + 4 {
+        return Err(ElfLoadError::SegmentOutOfBounds);
+    }
+    let program_header_type = extract_u32_little_endian_at(binary_bytes, type_byte_offset);
+    if program_header_type != PROGRAM_HEADER_TYPE_LOAD {
+        return Err(ElfLoadError::UnsupportedProgramHeaderType);
+    }
+    Ok(())
+}
+
 /// Validates that the ELF header is correct then extracts the entry point virtual address.
 pub fn extract_entry_point(binary_bytes: &[u8]) -> Result<u64, ElfLoadError> {
     validate_elf_header(binary_bytes)?;
@@ -567,5 +615,72 @@ mod tests {
     fn elf_load_error_includes_user_page_table_walk_failed_variant() {
         let error = ElfLoadError::UserPageTableWalkFailed;
         assert_ne!(error, ElfLoadError::SegmentOutOfBounds);
+    }
+
+    /// Builds a 120-byte ELF64 with exactly one program header whose `p_type`
+    /// equals `program_header_type`. Used by the pre-flight gate tests below.
+    fn build_elf_with_program_header_type(program_header_type: u32) -> [u8; 120] {
+        let mut bytes = [0u8; 120];
+        bytes[0..4].copy_from_slice(&ELF_MAGIC_BYTES);
+        bytes[4] = ELF_CLASS_64_BIT;
+        bytes[5] = ELF_DATA_LITTLE_ENDIAN;
+        bytes[16..18].copy_from_slice(&ELF_TYPE_EXECUTABLE.to_le_bytes());
+        bytes[18..20].copy_from_slice(&ELF_MACHINE_X86_64.to_le_bytes());
+        bytes[32..40].copy_from_slice(&64u64.to_le_bytes());
+        bytes[54..56].copy_from_slice(&(PROGRAM_HEADER_ENTRY_SIZE as u16).to_le_bytes());
+        bytes[56..58].copy_from_slice(&1u16.to_le_bytes());
+        bytes[64..68].copy_from_slice(&program_header_type.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn pre_flight_gate_accepts_elf_with_pt_load_only() {
+        let elf_bytes = build_elf_with_program_header_type(1);
+        assert!(validate_program_header_types_are_load_only(&elf_bytes).is_ok());
+    }
+
+    #[test]
+    fn pre_flight_gate_rejects_pt_dynamic() {
+        let elf_bytes = build_elf_with_program_header_type(2);
+        assert_eq!(
+            validate_program_header_types_are_load_only(&elf_bytes),
+            Err(ElfLoadError::UnsupportedProgramHeaderType)
+        );
+    }
+
+    #[test]
+    fn pre_flight_gate_rejects_pt_interp() {
+        let elf_bytes = build_elf_with_program_header_type(3);
+        assert_eq!(
+            validate_program_header_types_are_load_only(&elf_bytes),
+            Err(ElfLoadError::UnsupportedProgramHeaderType)
+        );
+    }
+
+    #[test]
+    fn pre_flight_gate_rejects_pt_tls() {
+        let elf_bytes = build_elf_with_program_header_type(7);
+        assert_eq!(
+            validate_program_header_types_are_load_only(&elf_bytes),
+            Err(ElfLoadError::UnsupportedProgramHeaderType)
+        );
+    }
+
+    #[test]
+    fn pre_flight_gate_rejects_pt_gnu_relro() {
+        let elf_bytes = build_elf_with_program_header_type(0x6474_e552);
+        assert_eq!(
+            validate_program_header_types_are_load_only(&elf_bytes),
+            Err(ElfLoadError::UnsupportedProgramHeaderType)
+        );
+    }
+
+    #[test]
+    fn pre_flight_gate_rejects_unknown_program_header_type() {
+        let elf_bytes = build_elf_with_program_header_type(0xDEAD_BEEF);
+        assert_eq!(
+            validate_program_header_types_are_load_only(&elf_bytes),
+            Err(ElfLoadError::UnsupportedProgramHeaderType)
+        );
     }
 }
