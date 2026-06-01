@@ -5,6 +5,9 @@
 //! resolution) — enough to prove the NIC's TX+RX path works end-to-end by
 //! resolving the gateway's MAC. IPv4/ICMP/UDP/IPv6/TCP build on the same shape.
 
+pub mod icmp;
+pub mod ipv4;
+
 /// Ethernet header length.
 pub const ETHERNET_HEADER_LENGTH: usize = 14;
 /// EtherType for ARP.
@@ -20,6 +23,68 @@ const ARP_OPERATION_REQUEST: u16 = 0x0001;
 const ARP_OPERATION_REPLY: u16 = 0x0002;
 
 const BROADCAST_MAC: [u8; 6] = [0xFF; 6];
+
+/// Total length of an Ethernet+IPv4+ICMP echo frame.
+pub const ICMP_PING_FRAME_LENGTH: usize =
+    ETHERNET_HEADER_LENGTH + ipv4::IPV4_HEADER_LENGTH + icmp::ICMP_ECHO_LENGTH;
+
+/// Writes a 14-byte Ethernet header into `out`.
+fn write_ethernet_header(out: &mut [u8], destination_mac: [u8; 6], source_mac: [u8; 6], ethertype: u16) {
+    out[0..6].copy_from_slice(&destination_mac);
+    out[6..12].copy_from_slice(&source_mac);
+    out[12..14].copy_from_slice(&ethertype.to_be_bytes());
+}
+
+/// Assembles a complete Ethernet+IPv4+ICMP echo-request ("ping") frame into
+/// `out` (must be >= ICMP_PING_FRAME_LENGTH). Returns the frame length.
+pub fn build_icmp_ping_frame(
+    destination_mac: [u8; 6],
+    source_mac: [u8; 6],
+    source_ipv4: [u8; 4],
+    destination_ipv4: [u8; 4],
+    identifier: u16,
+    sequence: u16,
+    out: &mut [u8],
+) -> usize {
+    write_ethernet_header(out, destination_mac, source_mac, ipv4::ETHERTYPE_IPV4);
+    let header = ipv4::build_header(
+        source_ipv4,
+        destination_ipv4,
+        ipv4::IP_PROTOCOL_ICMP,
+        icmp::ICMP_ECHO_LENGTH as u16,
+        identifier,
+    );
+    let ip_start = ETHERNET_HEADER_LENGTH;
+    out[ip_start..ip_start + ipv4::IPV4_HEADER_LENGTH].copy_from_slice(&header);
+    let echo = icmp::build_echo_request(identifier, sequence);
+    let icmp_start = ip_start + ipv4::IPV4_HEADER_LENGTH;
+    out[icmp_start..icmp_start + icmp::ICMP_ECHO_LENGTH].copy_from_slice(&echo);
+    ICMP_PING_FRAME_LENGTH
+}
+
+/// True if `frame` is an Ethernet/IPv4/ICMP echo reply from `expected_src_ipv4`
+/// matching `identifier`/`sequence`.
+pub fn is_icmp_echo_reply(
+    frame: &[u8],
+    expected_source_ipv4: [u8; 4],
+    identifier: u16,
+    sequence: u16,
+) -> bool {
+    if frame.len() < ETHERNET_HEADER_LENGTH {
+        return false;
+    }
+    let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+    if ethertype != ipv4::ETHERTYPE_IPV4 {
+        return false;
+    }
+    let ip_packet = &frame[ETHERNET_HEADER_LENGTH..];
+    let payload_offset =
+        match ipv4::parse_payload_offset(ip_packet, ipv4::IP_PROTOCOL_ICMP, expected_source_ipv4) {
+            Some(offset) => offset,
+            None => return false,
+        };
+    icmp::is_matching_echo_reply(&ip_packet[payload_offset..], identifier, sequence)
+}
 
 /// Builds a broadcast ARP request asking "who has `target_ipv4`?" from
 /// `sender_mac`/`sender_ipv4`.

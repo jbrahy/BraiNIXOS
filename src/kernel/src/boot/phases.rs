@@ -220,26 +220,42 @@ fn probe_pci_devices(boot_step_logger: &mut BootStepLogger) {
             boot_step_logger.info_hex("e1000 MMIO base", nic.mmio_base_address());
             boot_step_logger.info_hex("e1000 MAC", mac_word);
             boot_step_logger.ok("e1000 NIC initialized (MMIO mapped, reset, MAC read)");
-            resolve_gateway_via_arp(&nic, mac, boot_step_logger);
+            if let Some(gateway_mac) = resolve_gateway_via_arp(&nic, mac, boot_step_logger) {
+                ping_gateway_via_icmp(&nic, mac, gateway_mac, boot_step_logger);
+            }
         }
         None => boot_step_logger.warn("e1000 NIC not found"),
     }
+
+    // Block device + credential store — always, independent of networking.
+    match crate::arch::virtio_blk::initialize_block_device() {
+        Some(device) => {
+            boot_step_logger.info_hex("virtio-blk io_base", device.io_base_port() as u64);
+            boot_step_logger.info_hex("virtio-blk sectors", device.capacity_in_sectors());
+            boot_step_logger.ok("virtio-blk device initialized (reset + feature handshake)");
+            crate::boot::credential_store::initialize_credential_store(device, boot_step_logger);
+            log_credential_store_status(boot_step_logger);
+        }
+        None => boot_step_logger.warn("virtio-blk device not found"),
+    }
 }
 
-/// End-to-end NIC test: ARP-resolve the slirp gateway (10.0.2.2). Sends a
-/// broadcast ARP request and polls the RX ring for the reply, proving TX, RX,
-/// and ARP all work. Logs the learned gateway MAC (expected 52:55:0a:00:02:02).
+/// Network constants for the QEMU slirp environment.
+const OUR_IPV4: [u8; 4] = [10, 0, 2, 15];
+const GATEWAY_IPV4: [u8; 4] = [10, 0, 2, 2];
+
+/// ARP-resolves the slirp gateway (10.0.2.2): sends a broadcast ARP request and
+/// polls the RX ring for the reply, proving TX, RX, and ARP. Returns the
+/// learned gateway MAC (expected 52:55:0a:00:02:02), or None.
 fn resolve_gateway_via_arp(
     nic: &crate::arch::e1000::E1000Device,
     our_mac: [u8; 6],
     boot_step_logger: &mut BootStepLogger,
-) {
-    const OUR_IPV4: [u8; 4] = [10, 0, 2, 15];
-    const GATEWAY_IPV4: [u8; 4] = [10, 0, 2, 2];
+) -> Option<[u8; 6]> {
     let request = crate::net::build_arp_request(our_mac, OUR_IPV4, GATEWAY_IPV4);
     if !nic.send_frame(&request) {
         boot_step_logger.warn("ARP: gateway request transmit did not complete");
-        return;
+        return None;
     }
     let mut frame = [0u8; 2048];
     for _attempt in 0..10_000_000u64 {
@@ -253,23 +269,55 @@ fn resolve_gateway_via_arp(
                     | (gateway_mac[5] as u64);
                 boot_step_logger.info_hex("ARP gateway 10.0.2.2 MAC", mac_word);
                 boot_step_logger.ok("Networking: ARP resolved gateway (TX+RX verified)");
+                return Some(gateway_mac);
+            }
+        }
+        core::hint::spin_loop();
+    }
+    boot_step_logger.warn("ARP: no gateway reply received");
+    None
+}
+
+/// Sends an IPv4 ICMP echo request ("ping") to the gateway and polls for the
+/// echo reply — proving the IPv4 + ICMP datapath end-to-end.
+fn ping_gateway_via_icmp(
+    nic: &crate::arch::e1000::E1000Device,
+    our_mac: [u8; 6],
+    gateway_mac: [u8; 6],
+    boot_step_logger: &mut BootStepLogger,
+) {
+    const ICMP_IDENTIFIER: u16 = 0x4252;
+    const ICMP_SEQUENCE: u16 = 1;
+    let mut frame = [0u8; crate::net::ICMP_PING_FRAME_LENGTH];
+    let length = crate::net::build_icmp_ping_frame(
+        gateway_mac,
+        our_mac,
+        OUR_IPV4,
+        GATEWAY_IPV4,
+        ICMP_IDENTIFIER,
+        ICMP_SEQUENCE,
+        &mut frame,
+    );
+    if !nic.send_frame(&frame[..length]) {
+        boot_step_logger.warn("ICMP: ping transmit did not complete");
+        return;
+    }
+    let mut reply = [0u8; 2048];
+    for _attempt in 0..10_000_000u64 {
+        if let Some(received) = nic.poll_receive(&mut reply) {
+            if crate::net::is_icmp_echo_reply(
+                &reply[..received],
+                GATEWAY_IPV4,
+                ICMP_IDENTIFIER,
+                ICMP_SEQUENCE,
+            ) {
+                boot_step_logger.ok("Networking: ICMP echo reply from gateway (IPv4 ping works)");
                 return;
             }
         }
         core::hint::spin_loop();
     }
-    boot_step_logger.warn("ARP: no gateway reply received (TX ok, RX/timing?)");
-
-    match crate::arch::virtio_blk::initialize_block_device() {
-        Some(device) => {
-            boot_step_logger.info_hex("virtio-blk io_base", device.io_base_port() as u64);
-            boot_step_logger.info_hex("virtio-blk sectors", device.capacity_in_sectors());
-            boot_step_logger.ok("virtio-blk device initialized (reset + feature handshake)");
-            crate::boot::credential_store::initialize_credential_store(device, boot_step_logger);
-            log_credential_store_status(boot_step_logger);
-        }
-        None => boot_step_logger.warn("virtio-blk device not found"),
-    }
+    boot_step_logger.warn("ICMP: no echo reply from gateway");
 }
 
 /// Sanity-logs the loaded credential store: confirms the default password
