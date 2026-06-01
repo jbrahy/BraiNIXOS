@@ -98,7 +98,7 @@ fn run_network_service(boot_step_logger: &mut BootStepLogger) -> ! {
     };
     let our_mac = nic.mac_address();
     let mut connection = TcpConnection::new_listening(OUR_IPV4, SERVICE_PORT, INITIAL_SEQUENCE);
-    let mut ssh_session = SshSession::new(fresh_ssh_ephemeral_key());
+    let mut ssh_session = new_ssh_session();
     let mut banner_sent = false;
     boot_step_logger.ok("Network service: SSH server listening on port 2222");
 
@@ -110,7 +110,7 @@ fn run_network_service(boot_step_logger: &mut BootStepLogger) -> ! {
     loop {
         if matches!(connection.state(), TcpState::Closed | TcpState::CloseWait) {
             connection = TcpConnection::new_listening(OUR_IPV4, SERVICE_PORT, INITIAL_SEQUENCE);
-            ssh_session = SshSession::new(fresh_ssh_ephemeral_key());
+            ssh_session = new_ssh_session();
             banner_sent = false;
         }
         let received = match nic.poll_receive(&mut receive_frame) {
@@ -164,6 +164,18 @@ fn fresh_ssh_ephemeral_key() -> [u8; 32] {
     let mut key = [0u8; 32];
     crate::hardware_security::csprng::generate_random_bytes(&mut key);
     key
+}
+
+/// SSH password verifier: checks (username, password) against the persistent
+/// credential store (root/jbrahy, default password brainxos).
+fn verify_ssh_password(username: &[u8], password: &[u8]) -> bool {
+    crate::boot::credential_store::verify_login(username, password).is_some()
+}
+
+/// Builds a fresh SSH session with a CSPRNG ephemeral key and the credential
+/// verifier.
+fn new_ssh_session() -> crate::ssh::SshSession {
+    crate::ssh::SshSession::new_with_verifier(fresh_ssh_ephemeral_key(), verify_ssh_password)
 }
 
 /// Wraps a TCP segment in IPv4 + Ethernet and transmits it.

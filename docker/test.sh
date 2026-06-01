@@ -190,8 +190,19 @@ rm -f /tmp/inbound_tcp_result.txt /tmp/ssh_probe.log
     sleep 22
     kill -9 "${ssh_pid}" 2>/dev/null || true
     sleep 1
-    echo "SSH_FULL_LOG_TAIL:" >> /tmp/inbound_tcp_result.txt
-    tail -25 /tmp/ssh_probe.log >> /tmp/inbound_tcp_result.txt 2>/dev/null || true
+    echo "SSH_HANDSHAKE_LOG:" >> /tmp/inbound_tcp_result.txt
+    grep -iE 'remote software version|kex: algorithm|Server host key|NEWKEYS|SERVICE_ACCEPT|Authentications that can continue|Permission denied|userauth|Next authentication method' \
+        /tmp/ssh_probe.log >> /tmp/inbound_tcp_result.txt 2>/dev/null || true
+    # Actual password login attempt (root / brainxos) if sshpass is available.
+    if command -v sshpass >/dev/null 2>&1; then
+        login_out="$(sshpass -p brainxos timeout 16 ssh -p 2222 \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+            -o ConnectTimeout=8 root@127.0.0.1 'echo BRAINIX_SSH_LOGIN_OK' 2>&1 | tail -5)"
+        echo "SSH_PASSWORD_LOGIN: ${login_out}" >> /tmp/inbound_tcp_result.txt
+    else
+        echo "SSH_PASSWORD_LOGIN: (sshpass not installed)" >> /tmp/inbound_tcp_result.txt
+    fi
     echo "PROBE_DONE" >> /tmp/inbound_tcp_result.txt
 ) &
 # Honor KEEP_RUNNING=1 (set by bin/run-brainx.sh in its default "always have

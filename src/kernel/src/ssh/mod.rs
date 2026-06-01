@@ -15,10 +15,13 @@
 pub mod crypto;
 pub mod kex;
 pub mod packet;
+pub mod poly1305;
+pub mod transport;
 pub mod version;
 
 use kex::{build_server_kexinit, client_kexinit_is_compatible};
-use packet::{parse_packet, write_packet, SSH_MSG_KEXINIT, SSH_MSG_KEX_ECDH_INIT};
+use packet::{parse_packet, write_packet, SSH_MSG_KEXINIT, SSH_MSG_KEX_ECDH_INIT, SSH_MSG_NEWKEYS};
+use transport::DirectionKeys;
 use version::{client_version_is_supported, SERVER_IDENTIFICATION};
 
 const RECEIVE_BUFFER_SIZE: usize = 8192;
@@ -29,9 +32,12 @@ pub enum SshPhase {
     AwaitingClientVersion,
     AwaitingClientKexInit,
     AwaitingKexEcdhInit,
-    /// KEXINIT exchanged and KEX_ECDH_INIT received — ready for the ECDH reply
-    /// (the cryptographic key exchange, next milestone).
-    KexNegotiated,
+    /// KEX_ECDH_REPLY + our NEWKEYS sent; waiting for the client's NEWKEYS.
+    AwaitingClientNewKeys,
+    /// Encrypted transport active; running service request + password userauth.
+    Authenticating,
+    /// The user authenticated successfully (ready for a session channel).
+    Authenticated,
     Rejected,
 }
 
@@ -51,9 +57,41 @@ pub struct SshSession {
     server_kexinit_payload_length: usize,
     client_kexinit_payload: [u8; 2048],
     client_kexinit_payload_length: usize,
+    /// SSH binary-packet sequence numbers (increment per packet, both pre- and
+    /// post-encryption).
+    send_sequence: u32,
+    receive_sequence: u32,
+    /// Transport keys derived at KEX (None until then).
+    server_to_client_keys: Option<DirectionKeys>,
+    client_to_server_keys: Option<DirectionKeys>,
+    /// The authenticated user's login name, once authenticated.
+    authenticated_user: [u8; 32],
+    authenticated_user_length: usize,
+    /// Verifies (username, password) against the credential store. Injected so
+    /// the pure session stays host-testable (the kernel passes a fn wrapping
+    /// boot::credential_store::verify_login).
+    password_verifier: fn(&[u8], &[u8]) -> bool,
+}
+
+/// Default password verifier (denies everything) for `Default`/tests that do not
+/// set one.
+fn deny_all_passwords(_username: &[u8], _password: &[u8]) -> bool {
+    false
 }
 
 impl SshSession {
+    /// Creates a session with the given X25519 ephemeral private scalar and a
+    /// password verifier (the kernel passes fresh CSPRNG bytes + a verifier
+    /// wrapping the credential store; tests pass fixed values).
+    pub fn new_with_verifier(
+        ephemeral_private: [u8; 32],
+        password_verifier: fn(&[u8], &[u8]) -> bool,
+    ) -> Self {
+        let mut session = Self::new(ephemeral_private);
+        session.password_verifier = password_verifier;
+        session
+    }
+
     /// Creates a session with the given X25519 ephemeral private scalar (the
     /// kernel passes fresh CSPRNG bytes; tests pass a fixed value).
     pub fn new(ephemeral_private: [u8; 32]) -> Self {
@@ -70,6 +108,13 @@ impl SshSession {
             server_kexinit_payload_length: 0,
             client_kexinit_payload: [0u8; 2048],
             client_kexinit_payload_length: 0,
+            send_sequence: 0,
+            receive_sequence: 0,
+            server_to_client_keys: None,
+            client_to_server_keys: None,
+            authenticated_user: [0u8; 32],
+            authenticated_user_length: 0,
+            password_verifier: deny_all_passwords,
         }
     }
 
@@ -105,7 +150,9 @@ impl SshSession {
                 SshPhase::AwaitingClientVersion => self.process_version(),
                 SshPhase::AwaitingClientKexInit => self.process_client_kexinit(out, &mut written),
                 SshPhase::AwaitingKexEcdhInit => self.process_kex_ecdh_init(out, &mut written),
-                SshPhase::KexNegotiated | SshPhase::Rejected => false,
+                SshPhase::AwaitingClientNewKeys => self.process_client_newkeys(),
+                SshPhase::Authenticating => self.process_authenticating(out, &mut written),
+                SshPhase::Authenticated | SshPhase::Rejected => false,
             };
             if !progressed {
                 break;
@@ -164,6 +211,7 @@ impl SshSession {
                 &mut out[*written..],
             );
             *written += packet_length;
+            self.send_sequence += 1; // our KEXINIT is binary packet seq 0
             self.server_kexinit_sent = true;
         }
         let parsed = match parse_packet(&self.receive_buffer[..self.receive_length]) {
@@ -180,6 +228,7 @@ impl SshSession {
         self.client_kexinit_payload_length = client_length;
         let total = parsed.total_length;
         self.consume(total);
+        self.receive_sequence += 1; // client KEXINIT consumed
         self.phase = if compatible {
             SshPhase::AwaitingKexEcdhInit
         } else {
@@ -206,8 +255,51 @@ impl SshSession {
         let mut client_public = [0u8; 32];
         client_public.copy_from_slice(&payload[5..37]);
         self.consume(total);
+        self.receive_sequence += 1; // client KEX_ECDH_INIT consumed
         self.emit_kex_ecdh_reply(&client_public, out, written);
-        self.phase = SshPhase::KexNegotiated;
+        self.phase = SshPhase::AwaitingClientNewKeys;
+        true
+    }
+
+    /// Consumes the client's (unencrypted) NEWKEYS, then switches to encrypted
+    /// transport.
+    fn process_client_newkeys(&mut self) -> bool {
+        let parsed = match parse_packet(&self.receive_buffer[..self.receive_length]) {
+            Some(parsed) => parsed,
+            None => return false,
+        };
+        let payload = &self.receive_buffer[parsed.payload_start..parsed.payload_end];
+        let is_newkeys = !payload.is_empty() && payload[0] == SSH_MSG_NEWKEYS;
+        let total = parsed.total_length;
+        self.consume(total);
+        self.receive_sequence += 1; // client NEWKEYS consumed
+        self.phase = if is_newkeys {
+            SshPhase::Authenticating
+        } else {
+            SshPhase::Rejected
+        };
+        true
+    }
+
+    /// Decrypts one client packet and drives service-request + password userauth.
+    fn process_authenticating(&mut self, out: &mut [u8], written: &mut usize) -> bool {
+        let keys = match self.client_to_server_keys.clone() {
+            Some(keys) => keys,
+            None => return false,
+        };
+        let mut decrypted = [0u8; 4096];
+        let opened = match transport::open_packet(
+            &keys,
+            self.receive_sequence,
+            &self.receive_buffer[..self.receive_length],
+            &mut decrypted,
+        ) {
+            Some(opened) => opened,
+            None => return false, // incomplete packet (or auth failure: fail closed)
+        };
+        self.consume(opened.consumed);
+        self.receive_sequence += 1;
+        self.handle_authenticating_message(&decrypted[..opened.payload_length], out, written);
         true
     }
 
@@ -235,6 +327,20 @@ impl SshSession {
         let mut signature_blob = [0u8; 128];
         let signature_blob_length = crypto::build_signature_blob(&signature, &mut signature_blob);
 
+        // Derive the transport keys (session_id = H for the first key exchange).
+        self.server_to_client_keys = Some(transport::derive_direction_keys(
+            &shared_secret,
+            &exchange_hash,
+            &exchange_hash,
+            b'D',
+        ));
+        self.client_to_server_keys = Some(transport::derive_direction_keys(
+            &shared_secret,
+            &exchange_hash,
+            &exchange_hash,
+            b'C',
+        ));
+
         // KEX_ECDH_REPLY = byte(31) string(K_S) string(Q_S) string(signature).
         let mut reply = [0u8; 512];
         reply[0] = SSH_MSG_KEX_ECDH_REPLY;
@@ -242,11 +348,121 @@ impl SshSession {
         offset = crypto::write_string(&mut reply, offset, &server_public);
         offset = crypto::write_string(&mut reply, offset, &signature_blob[..signature_blob_length]);
         *written += write_packet(&reply[..offset], &self.cookie, &mut out[*written..]);
+        self.send_sequence += 1; // KEX_ECDH_REPLY is binary packet seq 1
 
-        // Immediately follow with NEWKEYS (we switch ciphers on the client's NEWKEYS).
+        // Follow with NEWKEYS; subsequent packets are encrypted.
         let newkeys_payload = [SSH_MSG_NEWKEYS];
         *written += write_packet(&newkeys_payload, &self.cookie, &mut out[*written..]);
+        self.send_sequence += 1; // our NEWKEYS is binary packet seq 2
     }
+
+    /// Encrypts and queues an SSH packet on the server->client channel.
+    fn send_encrypted(&mut self, payload: &[u8], out: &mut [u8], written: &mut usize) {
+        if let Some(keys) = self.server_to_client_keys.clone() {
+            *written += transport::seal_packet(
+                &keys,
+                self.send_sequence,
+                payload,
+                &self.cookie,
+                &mut out[*written..],
+            );
+            self.send_sequence += 1;
+        }
+    }
+
+    /// Handles one decrypted client message during authentication: SERVICE_REQUEST
+    /// -> SERVICE_ACCEPT, and USERAUTH_REQUEST (password) -> SUCCESS / FAILURE.
+    fn handle_authenticating_message(&mut self, payload: &[u8], out: &mut [u8], written: &mut usize) {
+        use crate::ssh::packet::{
+            SSH_MSG_SERVICE_ACCEPT, SSH_MSG_SERVICE_REQUEST, SSH_MSG_USERAUTH_FAILURE,
+            SSH_MSG_USERAUTH_REQUEST, SSH_MSG_USERAUTH_SUCCESS,
+        };
+        if payload.is_empty() {
+            return;
+        }
+        match payload[0] {
+            SSH_MSG_SERVICE_REQUEST => {
+                // Reply SERVICE_ACCEPT echoing the service name.
+                let service = read_ssh_string(&payload[1..]);
+                let mut response = [0u8; 64];
+                response[0] = SSH_MSG_SERVICE_ACCEPT;
+                let length = write_ssh_string(&mut response, 1, service);
+                self.send_encrypted(&response[..length], out, written);
+            }
+            SSH_MSG_USERAUTH_REQUEST => {
+                self.handle_userauth_request(
+                    payload,
+                    out,
+                    written,
+                    SSH_MSG_USERAUTH_SUCCESS,
+                    SSH_MSG_USERAUTH_FAILURE,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// Parses a USERAUTH_REQUEST and replies SUCCESS for a correct password,
+    /// otherwise FAILURE advertising the "password" method.
+    fn handle_userauth_request(
+        &mut self,
+        payload: &[u8],
+        out: &mut [u8],
+        written: &mut usize,
+        success_message: u8,
+        failure_message: u8,
+    ) {
+        // byte(50) string(user) string(service) string(method) ...
+        let mut offset = 1;
+        let username = read_ssh_string(&payload[offset..]);
+        offset += 4 + username.len();
+        let service = read_ssh_string(&payload[offset..]);
+        offset += 4 + service.len();
+        let method = read_ssh_string(&payload[offset..]);
+        offset += 4 + method.len();
+
+        let mut authenticated = false;
+        if method == b"password" && payload.len() > offset {
+            // boolean(FALSE) string(password)
+            let password = read_ssh_string(&payload[offset + 1..]);
+            authenticated = (self.password_verifier)(username, password);
+        }
+
+        if authenticated {
+            self.authenticated_user_length = username.len().min(self.authenticated_user.len());
+            self.authenticated_user[..self.authenticated_user_length]
+                .copy_from_slice(&username[..self.authenticated_user_length]);
+            let response = [success_message];
+            self.send_encrypted(&response, out, written);
+            self.phase = SshPhase::Authenticated;
+        } else {
+            // FAILURE = byte(51) name-list("password") boolean(partial=FALSE).
+            let mut response = [0u8; 32];
+            response[0] = failure_message;
+            let length = write_ssh_string(&mut response, 1, b"password");
+            response[length] = 0; // partial success false
+            self.send_encrypted(&response[..length + 1], out, written);
+        }
+    }
+}
+
+/// Reads an SSH `string` (uint32 length + bytes) at the start of `data`.
+fn read_ssh_string(data: &[u8]) -> &[u8] {
+    if data.len() < 4 {
+        return &[];
+    }
+    let length = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    if data.len() < 4 + length {
+        return &[];
+    }
+    &data[4..4 + length]
+}
+
+/// Writes an SSH `string` at `offset`, returning the new offset.
+fn write_ssh_string(out: &mut [u8], offset: usize, data: &[u8]) -> usize {
+    out[offset..offset + 4].copy_from_slice(&(data.len() as u32).to_be_bytes());
+    out[offset + 4..offset + 4 + data.len()].copy_from_slice(data);
+    offset + 4 + data.len()
 }
 
 impl Default for SshSession {
@@ -299,7 +515,7 @@ mod tests {
         let mut ecdh_packet = [0u8; 128];
         let ecdh_length = write_packet(&ecdh_payload[..37], &cookie, &mut ecdh_packet);
         session.on_received(&ecdh_packet[..ecdh_length], &mut out);
-        assert_eq!(session.phase(), SshPhase::KexNegotiated);
+        assert_eq!(session.phase(), SshPhase::AwaitingClientNewKeys);
     }
 
     #[test]
