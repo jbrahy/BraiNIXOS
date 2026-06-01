@@ -33,6 +33,8 @@ pub mod memory;
 
 pub mod net;
 
+pub mod ssh;
+
 pub mod thread;
 
 pub mod scheduler;

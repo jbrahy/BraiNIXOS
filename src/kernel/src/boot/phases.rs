@@ -79,8 +79,9 @@ pub fn execute_boot_sequence(
 /// inbound server datapath (LISTEN -> ESTABLISHED -> data) end to end; the SSH
 /// transport is layered on next.
 fn run_network_service(boot_step_logger: &mut BootStepLogger) -> ! {
-    use crate::net::tcp::{parse_segment, IP_PROTOCOL_TCP};
+    use crate::net::tcp::parse_segment;
     use crate::net::tcp_connection::{TcpConnection, TcpState};
+    use crate::ssh::SshSession;
 
     const SERVICE_PORT: u16 = 2222;
     const INITIAL_SEQUENCE: u32 = 0x5348_0000; // "SH"
@@ -97,55 +98,63 @@ fn run_network_service(boot_step_logger: &mut BootStepLogger) -> ! {
     };
     let our_mac = nic.mac_address();
     let mut connection = TcpConnection::new_listening(OUR_IPV4, SERVICE_PORT, INITIAL_SEQUENCE);
-    boot_step_logger.ok("Network service: TCP echo listening on port 2222");
+    let mut ssh_session = SshSession::new();
+    let mut banner_sent = false;
+    boot_step_logger.ok("Network service: SSH server listening on port 2222");
 
     let mut receive_frame = [0u8; 2048];
     let mut segment_scratch = [0u8; 2048];
     let mut frame_scratch = [0u8; 2048];
     let mut delivered = [0u8; 2048];
+    let mut ssh_response = [0u8; 2048];
     loop {
         if matches!(connection.state(), TcpState::Closed | TcpState::CloseWait) {
             connection = TcpConnection::new_listening(OUR_IPV4, SERVICE_PORT, INITIAL_SEQUENCE);
+            ssh_session = SshSession::new();
+            banner_sent = false;
         }
-        if let Some(received) = nic.poll_receive(&mut receive_frame) {
-            if let Some((peer_mac, peer_ipv4, segment_range)) =
-                crate::net::extract_ipv4_tcp(&receive_frame[..received], OUR_IPV4)
-            {
-                let segment = &receive_frame[segment_range];
-                if let Some(view) = parse_segment(segment) {
-                    if view.destination_port == SERVICE_PORT {
-                        connection.set_remote_ipv4(peer_ipv4);
-                        let payload = &segment[view.payload_offset..];
-                        let outcome =
-                            connection.on_segment(&view, payload, &mut segment_scratch, &mut delivered);
-                        if let Some(response_length) = outcome.response_length {
-                            send_tcp_segment(
-                                &nic,
-                                peer_mac,
-                                our_mac,
-                                peer_ipv4,
-                                &segment_scratch[..response_length],
-                                &mut frame_scratch,
-                            );
-                        }
-                        if outcome.delivered_length > 0 {
-                            let echo_length = connection
-                                .send_data(&delivered[..outcome.delivered_length], &mut segment_scratch);
-                            send_tcp_segment(
-                                &nic,
-                                peer_mac,
-                                our_mac,
-                                peer_ipv4,
-                                &segment_scratch[..echo_length],
-                                &mut frame_scratch,
-                            );
-                        }
-                    }
-                }
+        let received = match nic.poll_receive(&mut receive_frame) {
+            Some(received) => received,
+            None => {
+                core::hint::spin_loop();
+                continue;
+            }
+        };
+        let (peer_mac, peer_ipv4, segment_range) =
+            match crate::net::extract_ipv4_tcp(&receive_frame[..received], OUR_IPV4) {
+                Some(parts) => parts,
+                None => continue,
+            };
+        let segment = &receive_frame[segment_range];
+        let view = match parse_segment(segment) {
+            Some(view) => view,
+            None => continue,
+        };
+        if view.destination_port != SERVICE_PORT {
+            continue;
+        }
+        connection.set_remote_ipv4(peer_ipv4);
+        let payload = &segment[view.payload_offset..];
+        let outcome = connection.on_segment(&view, payload, &mut segment_scratch, &mut delivered);
+        if let Some(response_length) = outcome.response_length {
+            send_tcp_segment(&nic, peer_mac, our_mac, peer_ipv4, &segment_scratch[..response_length], &mut frame_scratch);
+        }
+        // On first reaching ESTABLISHED, send the SSH server identification.
+        if connection.state() == TcpState::Established && !banner_sent {
+            let banner = SshSession::server_identification();
+            let length = connection.send_data(banner, &mut segment_scratch);
+            send_tcp_segment(&nic, peer_mac, our_mac, peer_ipv4, &segment_scratch[..length], &mut frame_scratch);
+            banner_sent = true;
+        }
+        // Drive the SSH session with any received application bytes.
+        if outcome.delivered_length > 0 {
+            let response_length =
+                ssh_session.on_received(&delivered[..outcome.delivered_length], &mut ssh_response);
+            if response_length > 0 {
+                let length = connection.send_data(&ssh_response[..response_length], &mut segment_scratch);
+                send_tcp_segment(&nic, peer_mac, our_mac, peer_ipv4, &segment_scratch[..length], &mut frame_scratch);
             }
         }
-        core::hint::spin_loop();
-        let _ = IP_PROTOCOL_TCP;
     }
 }
 
