@@ -82,6 +82,15 @@ pub fn write_carriage_return_line_feed<S: ByteSink>(sink: &mut S) {
     write_byte_slice(sink, CARRIAGE_RETURN_LINE_FEED);
 }
 
+/// Returns the cursor to column zero and clears to end of line (`\r ESC [ K`).
+///
+/// Used by the REPL to wipe the physical line before redrawing a
+/// dynamically-rendered prompt (see [`crate::prompt`]) followed by the
+/// current line — history recall and Ctrl-U both rely on it.
+pub fn write_clear_to_line_start<S: ByteSink>(sink: &mut S) {
+    write_byte_slice(sink, CARRIAGE_RETURN_AND_CLEAR_TO_END_OF_LINE);
+}
+
 /// Writes the shell prompt (`PROMPT_BYTES`).
 pub fn write_prompt<S: ByteSink>(sink: &mut S) {
     write_byte_slice(sink, PROMPT_BYTES);
@@ -187,5 +196,12 @@ mod tests {
         let mut sink = CapturingByteSink::new();
         write_byte_slice(&mut sink, b"abc");
         assert_eq!(sink.captured_bytes(), b"abc");
+    }
+
+    #[test]
+    fn write_clear_to_line_start_emits_carriage_return_and_clear() {
+        let mut sink = CapturingByteSink::new();
+        write_clear_to_line_start(&mut sink);
+        assert_eq!(sink.captured_bytes(), b"\r\x1b[K");
     }
 }

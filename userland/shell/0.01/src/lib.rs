@@ -24,5 +24,6 @@ pub mod history;
 pub mod input_decoder;
 pub mod line_buffer;
 pub mod login;
+pub mod prompt;
 
 pub use entry::shell_main;
