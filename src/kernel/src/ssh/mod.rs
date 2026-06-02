@@ -12,6 +12,7 @@
 //! The session is a pure state machine over byte buffers (no hardware), driven
 //! by the kernel network service loop which owns the TCP connection.
 
+pub mod client;
 pub mod client_identity;
 pub mod crypto;
 pub mod kex;
