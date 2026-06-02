@@ -18,6 +18,7 @@
 pub mod command_line;
 pub mod display;
 pub mod entry;
+pub mod environment;
 pub mod history;
 pub mod input_decoder;
 pub mod line_buffer;
