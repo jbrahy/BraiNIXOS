@@ -21,17 +21,21 @@ use brainix_libsyscall::{
     syscall_auth_login, syscall_auth_set_password, syscall_process_exit, syscall_serial_read_byte,
 };
 
+use crate::builtins::execute_command;
+use crate::command_line::ParsedCommandLine;
 use crate::display::{
     echo_printable_byte, emit_erase_last_character, emit_erase_last_character_repeated,
-    redraw_prompt_and_current_line, write_byte_slice, write_carriage_return_line_feed,
-    write_prompt, ByteSink, SerialByteSink,
+    write_byte_slice, write_carriage_return_line_feed, write_clear_to_line_start, ByteSink,
+    SerialByteSink,
 };
+use crate::environment::ShellEnvironment;
 use crate::history::{HistoryNavigationCursor, HistoryRing};
 use crate::input_decoder::{decode_next_byte, InputDecoderState, InputEvent};
 use crate::line_buffer::CurrentLineBuffer;
 use crate::login::{
     CredentialAuthority, CredentialCheck, LoginFlow, LoginProgress, MAXIMUM_CREDENTIAL_LINE_LENGTH,
 };
+use crate::prompt::render_prompt;
 
 /// A [`CredentialAuthority`] backed by the kernel auth syscalls. Verification
 /// and password changes happen in the kernel TCB against the persistent
@@ -57,9 +61,9 @@ impl CredentialAuthority for KernelCredentialAuthority {
     }
 }
 
-/// One-line v0.02 greeting written immediately before the first prompt.
+/// One-line v0.03 greeting written immediately before the first prompt.
 const GREETING_BANNER_BYTES: &[u8] =
-    b"BraiNIX shell v0.02 -- arrows: history, Ctrl-W/Ctrl-U: kill, Ctrl-D: exit\r\n";
+    b"BraiNIX zsh v0.03 -- type 'help' for builtins; arrows: history; Ctrl-D: exit\r\n";
 
 /// Farewell emitted just before `syscall_process_exit` on `Ctrl-C` / `Ctrl-D`.
 const EXIT_FAREWELL_BYTES: &[u8] = b"\r\nbye\r\n";
@@ -73,6 +77,8 @@ struct ReplState<S: ByteSink> {
     history_cursor: HistoryNavigationCursor,
     working_line_snapshot: CurrentLineBuffer,
     decoder_state: InputDecoderState,
+    parsed_command_line: ParsedCommandLine,
+    environment: ShellEnvironment,
     display_sink: S,
 }
 
@@ -84,6 +90,8 @@ impl<S: ByteSink> ReplState<S> {
             history_cursor: HistoryNavigationCursor::new(),
             working_line_snapshot: CurrentLineBuffer::new(),
             decoder_state: InputDecoderState::new(),
+            parsed_command_line: ParsedCommandLine::new(),
+            environment: ShellEnvironment::new(),
             display_sink,
         }
     }
@@ -94,9 +102,18 @@ impl<S: ByteSink> ReplState<S> {
 pub fn shell_main() -> ! {
     let mut state = ReplState::new(SerialByteSink);
     write_byte_slice(&mut state.display_sink, GREETING_BANNER_BYTES);
-    run_login_gate(&mut state.display_sink);
-    write_prompt(&mut state.display_sink);
+    run_login_gate(&mut state.display_sink, &mut state.environment);
+    render_current_prompt(&mut state);
     enter_input_loop(&mut state)
+}
+
+/// Renders the zsh-style prompt for the current user and working directory.
+fn render_current_prompt<S: ByteSink>(state: &mut ReplState<S>) {
+    render_prompt(
+        &mut state.display_sink,
+        state.environment.username(),
+        state.environment.working_directory(),
+    );
 }
 
 /// Authenticates a user before the REPL starts. Reads COM1 a byte at a time,
@@ -105,7 +122,7 @@ pub fn shell_main() -> ! {
 ///
 /// Verification + password changes run in the kernel TCB via the auth syscalls
 /// (see [`KernelCredentialAuthority`]); the persistent credential store backs them.
-fn run_login_gate<S: ByteSink>(sink: &mut S) {
+fn run_login_gate<S: ByteSink>(sink: &mut S, environment: &mut ShellEnvironment) {
     let mut authority = KernelCredentialAuthority;
     let mut flow = LoginFlow::start(sink);
     let mut line_buffer = [0u8; MAXIMUM_CREDENTIAL_LINE_LENGTH];
@@ -121,6 +138,7 @@ fn run_login_gate<S: ByteSink>(sink: &mut S) {
                     &mut line_length,
                     byte_value,
                 ) {
+                    environment.set_username(flow.authenticated_username());
                     return;
                 }
             }
@@ -268,17 +286,49 @@ fn handle_erase_last_word_event<S: ByteSink>(state: &mut ReplState<S>) {
 
 fn handle_erase_entire_line_event<S: ByteSink>(state: &mut ReplState<S>) {
     let _ = state.line_buffer.erase_entire_line();
-    redraw_prompt_and_current_line(&mut state.display_sink, &[]);
+    redraw_current_prompt_and_line(state);
 }
 
 fn handle_commit_line_event<S: ByteSink>(state: &mut ReplState<S>) {
     let _ = state
         .history_ring
         .record_committed_line(state.line_buffer.as_byte_slice());
+    write_carriage_return_line_feed(&mut state.display_sink);
+    execute_current_line(state);
     let _ = state.line_buffer.erase_entire_line();
     state.history_cursor.reset_to_working_line();
-    write_carriage_return_line_feed(&mut state.display_sink);
-    write_prompt(&mut state.display_sink);
+    finish_command_or_exit(state);
+}
+
+/// Tokenizes the committed line and runs the matching builtin, writing any
+/// output to the serial sink.
+fn execute_current_line<S: ByteSink>(state: &mut ReplState<S>) {
+    state
+        .parsed_command_line
+        .parse(state.line_buffer.as_byte_slice());
+    execute_command(
+        &state.parsed_command_line,
+        &mut state.environment,
+        &state.history_ring,
+        &mut state.display_sink,
+    );
+}
+
+/// Exits the process if a builtin requested it; otherwise renders the next
+/// prompt for the following command.
+fn finish_command_or_exit<S: ByteSink>(state: &mut ReplState<S>) {
+    if state.environment.exit_requested() {
+        exit_shell_process(state);
+    }
+    render_current_prompt(state);
+}
+
+/// Clears the physical line, renders the prompt, and reprints the current
+/// line buffer — used after Ctrl-U and history navigation.
+fn redraw_current_prompt_and_line<S: ByteSink>(state: &mut ReplState<S>) {
+    write_clear_to_line_start(&mut state.display_sink);
+    render_current_prompt(state);
+    write_byte_slice(&mut state.display_sink, state.line_buffer.as_byte_slice());
 }
 
 fn handle_recall_previous_event<S: ByteSink>(state: &mut ReplState<S>) {
@@ -288,14 +338,14 @@ fn handle_recall_previous_event<S: ByteSink>(state: &mut ReplState<S>) {
         .navigate_to_previous_entry(&state.history_ring)
     {
         copy_selected_navigation_target_into_line_buffer(state);
-        redraw_prompt_and_current_line(&mut state.display_sink, state.line_buffer.as_byte_slice());
+        redraw_current_prompt_and_line(state);
     }
 }
 
 fn handle_recall_next_event<S: ByteSink>(state: &mut ReplState<S>) {
     if state.history_cursor.navigate_to_next_entry() {
         copy_selected_navigation_target_into_line_buffer(state);
-        redraw_prompt_and_current_line(&mut state.display_sink, state.line_buffer.as_byte_slice());
+        redraw_current_prompt_and_line(state);
     }
 }
 

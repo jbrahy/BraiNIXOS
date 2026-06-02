@@ -225,6 +225,14 @@ impl LoginFlow {
     pub fn is_collecting_secret(&self) -> bool {
         !matches!(self.stage, LoginStage::AwaitingUsername)
     }
+
+    /// The authenticated username. Meaningful once [`submit_line`] has
+    /// returned [`LoginProgress::Authenticated`]; empty before login starts.
+    ///
+    /// [`submit_line`]: LoginFlow::submit_line
+    pub fn authenticated_username(&self) -> &[u8] {
+        self.username.as_slice()
+    }
 }
 
 /// One in-memory account: its login name, current password, and force-change flag.
@@ -520,5 +528,17 @@ mod tests {
         assert!(!flow.is_collecting_secret());
         flow.submit_line(b"root", &mut authority, &mut sink);
         assert!(flow.is_collecting_secret());
+    }
+
+    #[test]
+    fn test_authenticated_username_is_exposed_after_login() {
+        let mut authority = MockAuthority::new();
+        let mut sink = CapturingByteSink::new();
+        let mut flow = LoginFlow::start(&mut sink);
+        flow.submit_line(b"root", &mut authority, &mut sink);
+        flow.submit_line(b"brainxos", &mut authority, &mut sink);
+        flow.submit_line(b"newsecret", &mut authority, &mut sink);
+        flow.submit_line(b"newsecret", &mut authority, &mut sink);
+        assert_eq!(flow.authenticated_username(), b"root");
     }
 }
