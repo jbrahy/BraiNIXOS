@@ -15,6 +15,7 @@
 #![no_std]
 #![deny(unsafe_code)]
 
+pub mod command_line;
 pub mod display;
 pub mod entry;
 pub mod history;
