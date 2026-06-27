@@ -201,3 +201,42 @@ fn find_by_does_not_return_a_deleted_row_when_index_not_rebuilt() {
         Some(DbError::KeyNotFound)
     );
 }
+
+#[test]
+fn join_eq_matches_integer_keys_across_two_tables() {
+    extern crate alloc;
+    let mut db = fresh();
+    let users = db
+        .create_table(Schema::new(&[ColumnType::Integer, ColumnType::Text]).unwrap())
+        .unwrap();
+    let orders = db
+        .create_table(Schema::new(&[ColumnType::Integer, ColumnType::Integer]).unwrap())
+        .unwrap();
+    // users: (id, name)
+    db.insert(users, &[Value::Integer(1), Value::Text(b"ann")])
+        .unwrap();
+    db.insert(users, &[Value::Integer(2), Value::Text(b"bob")])
+        .unwrap();
+    // orders: (user_id, amount)
+    db.insert(orders, &[Value::Integer(1), Value::Integer(50)])
+        .unwrap();
+    db.insert(orders, &[Value::Integer(1), Value::Integer(75)])
+        .unwrap();
+    db.insert(orders, &[Value::Integer(2), Value::Integer(10)])
+        .unwrap();
+    db.insert(orders, &[Value::Integer(9), Value::Integer(99)])
+        .unwrap(); // no user
+
+    let mut pairs: alloc::vec::Vec<(alloc::vec::Vec<u8>, i64)> = alloc::vec::Vec::new();
+    for (user, order) in db.join_eq(users, ColumnId(0), orders, ColumnId(0)) {
+        pairs.push((
+            user.text(ColumnId(1)).unwrap().to_vec(),
+            order.integer(ColumnId(1)).unwrap(),
+        ));
+    }
+    // ann has 2 orders (50,75), bob has 1 (10); order id 9 matches nobody.
+    assert_eq!(pairs.len(), 3);
+    assert!(pairs.contains(&(b"ann".to_vec(), 50)));
+    assert!(pairs.contains(&(b"ann".to_vec(), 75)));
+    assert!(pairs.contains(&(b"bob".to_vec(), 10)));
+}

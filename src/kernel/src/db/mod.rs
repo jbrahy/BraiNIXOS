@@ -207,6 +207,27 @@ impl Database {
         Ok(())
     }
 
+    /// Bounded nested-loop equi-join: yields `(left_row, right_row)` pairs whose
+    /// Integer `left_col` and `right_col` are equal. Non-Integer columns or
+    /// out-of-range column ids simply yield no matches (fail-closed).
+    pub fn join_eq(
+        &self,
+        left: TableId,
+        left_col: ColumnId,
+        right: TableId,
+        right_col: ColumnId,
+    ) -> JoinScan<'_> {
+        JoinScan {
+            database: self,
+            left_table: left.0,
+            left_col: left_col.0,
+            right_table: right.0,
+            right_col: right_col.0,
+            outer: 0,
+            inner: 0,
+        }
+    }
+
     /// Scans `table`, yielding live rows whose Integer `column` satisfies `pred`.
     /// `Range(low, high)` is inclusive on both ends.
     pub fn select_where(
@@ -316,6 +337,56 @@ impl<'a> Iterator for PredicateScan<'a> {
                     }
                 }
             }
+        }
+        None
+    }
+}
+
+pub struct JoinScan<'a> {
+    database: &'a Database,
+    left_table: u16,
+    left_col: usize,
+    right_table: u16,
+    right_col: usize,
+    outer: usize,
+    inner: usize,
+}
+
+impl<'a> Iterator for JoinScan<'a> {
+    type Item = (RowRef<'a>, RowRef<'a>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.outer < MAX_ROWS {
+            let left_slot = &self.database.rows.slots[self.outer];
+            if !(left_slot.live && left_slot.table == self.left_table) {
+                self.outer += 1;
+                self.inner = 0;
+                continue;
+            }
+            let left_key = match left_slot.cells.get(self.left_col).copied() {
+                Some(Cell::Integer(key)) => key,
+                _ => {
+                    self.outer += 1;
+                    self.inner = 0;
+                    continue;
+                }
+            };
+            while self.inner < MAX_ROWS {
+                let right_index = self.inner;
+                self.inner += 1;
+                let right_slot = &self.database.rows.slots[right_index];
+                if right_slot.live && right_slot.table == self.right_table {
+                    if let Some(Cell::Integer(right_key)) =
+                        right_slot.cells.get(self.right_col).copied()
+                    {
+                        if right_key == left_key {
+                            return Some((RowRef { slot: left_slot }, RowRef { slot: right_slot }));
+                        }
+                    }
+                }
+            }
+            self.outer += 1;
+            self.inner = 0;
         }
         None
     }
