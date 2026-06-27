@@ -264,7 +264,6 @@ impl Database {
                 self.rows.slots[slot_index] = entry.previous;
             }
         }
-        self.index.reset(u16::MAX, 0, false);
         self.index.active = false;
         self.tx.clear();
         Ok(())

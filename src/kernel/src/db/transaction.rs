@@ -51,9 +51,4 @@ impl TxLog {
         self.active = false;
         self.count = 0;
     }
-
-    /// Returns the recorded entries newest-first for replay during abort.
-    pub(crate) fn undo_in_reverse(&self) -> impl Iterator<Item = &TxEntry> {
-        self.entries[..self.count].iter().rev()
-    }
 }
