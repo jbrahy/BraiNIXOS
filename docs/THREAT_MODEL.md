@@ -73,3 +73,21 @@ The decision to make: whether the consent path rides on this same console.
 - Option B: the consent prompt renders in a reserved region the untrusted output stream is structurally unable to address. Simpler, but it makes the consent renderer part of the trusted path and therefore TCB surface, which contradicts the "trusted set only ever shrinks" principle.
 
 Until this is settled, the color terminal ships only for non-consent output. The consent path does not depend on it.
+
+## Deployment threat profile (outbound-only · single-user · terminal-in-Docker)
+
+This section is **additive**. It does not replace the general attacker model above; it re-ranks it for the specific deployment BraiNIX actually ships in, so design effort is spent where the residual risk concentrates. The general model remains authoritative for any deployment that reintroduces a retired surface.
+
+**Deployment, stated:** BraiNIX is a real x86-64 ring-0 kernel booted under QEMU; Docker is the build/run host. The runtime profile is a single local user, terminal/serial console only, **outbound-only with no inbound listening socket**. (A working **vTPM/swtpm is a hard dependency** for the measured-boot and sealing guarantees and is **currently unmet** — see the architecture spec §0; until it is wired, INV-BOOT and any TPM-anchored guarantee degrade to the honest software-only fallback.)
+
+**What the deployment retires (lowers, does not eliminate):**
+
+- **Inbound network surface.** With no listening socket, remote-initiated attacks against an in-kernel server (e.g. the former SSH server on 2222) are retired for this deployment. The kernel's outbound client code is still exposed to hostile *responses* from the servers it dials.
+- **Multi-user lateral movement.** Single-user removes cross-user confused-deputy paths; capability confinement between *processes* still matters (the AI, the device servers).
+
+**Dominant threats, re-ranked for this deployment (highest first):**
+
+1. **Hostile data at rest / on disk.** The largest remaining attacker-controlled byte stream is the disk. The sub-project-A persistence decoder and any on-disk audit/log format parse attacker-controlled bytes in ring 0 → must be `#![no_std]`, fuzzed, and Kani-checked, fail-closed on any malformed length/offset/type tag, and never grow a pool from disk-supplied sizes.
+2. **Hostile LLM output.** The advisory AI's `SecurityProposal` tokens are attacker-influenced (prompt injection against trusted-but-uncomfortable weights). The validator that consumes them is a hostile-input parser; per the architecture spec, parsing stays in a userspace validator and the ring-0 apply-primitive is minimized, whitelisted, and incapable of touching invariant state. Consent for any applied change rides the trusted path under the no-reflection terminal rules.
+3. **Supply chain.** The toolchain plus the four tracked-debt crates (`sha2`, `chacha20`, `ed25519-dalek`, `curve25519-dalek`) are trusted code paths; the standing bar (zero external deps, list only decreases) is the control, and no new crate may be added (`hashbrown` and any DB/Wasm crate are excluded).
+4. **Container / host escape.** Because the build/run host is a container, a QEMU or host-kernel escape is a deployment-level concern outside BraiNIX's own TCB but inside the user's risk picture. Tracked as a deployment requirement (current/patched QEMU, least-privilege container), not a BraiNIX invariant.
