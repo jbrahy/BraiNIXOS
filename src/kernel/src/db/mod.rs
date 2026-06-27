@@ -168,7 +168,13 @@ impl Database {
     pub fn find_by(&self, table: TableId, column: ColumnId, key: i64) -> Result<RowId, DbError> {
         self.table_meta(table)?;
         if self.index.covers(table.0, column.0) {
-            return self.index.find(key).map(RowId).ok_or(DbError::KeyNotFound);
+            if let Some(candidate) = self.index.find(key) {
+                let slot = self.rows.slots.get(candidate as usize);
+                if slot.map(|s| s.live && s.table == table.0).unwrap_or(false) {
+                    return Ok(RowId(candidate));
+                }
+            }
+            // stale/dead/foreign index hit — fall through to the authoritative linear scan
         }
         for index in 0..MAX_ROWS {
             let slot = &self.rows.slots[index];

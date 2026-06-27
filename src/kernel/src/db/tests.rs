@@ -183,3 +183,21 @@ fn select_where_filters_on_integer_predicates() {
         alloc::vec![5, 10, 15]
     );
 }
+
+#[test]
+fn find_by_does_not_return_a_deleted_row_when_index_not_rebuilt() {
+    let mut db = fresh();
+    let t = db
+        .create_table(Schema::new(&[ColumnType::Integer]).unwrap())
+        .unwrap();
+    let r = db.insert(t, &[Value::Integer(5)]).unwrap();
+    db.create_index(t, ColumnId(0)).unwrap();
+    assert_eq!(db.find_by(t, ColumnId(0), 5).unwrap(), r); // sanity: found while live
+    db.delete(t, r).unwrap();
+    // The only row with key 5 is now dead; index was not rebuilt.
+    // Must fail closed, NOT return the stale RowId.
+    assert_eq!(
+        db.find_by(t, ColumnId(0), 5).err(),
+        Some(DbError::KeyNotFound)
+    );
+}
