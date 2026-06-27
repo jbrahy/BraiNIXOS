@@ -240,3 +240,57 @@ fn join_eq_matches_integer_keys_across_two_tables() {
     assert!(pairs.contains(&(b"ann".to_vec(), 75)));
     assert!(pairs.contains(&(b"bob".to_vec(), 10)));
 }
+
+#[test]
+fn transaction_abort_restores_inserts_and_deletes() {
+    let mut db = fresh();
+    let t = db
+        .create_table(Schema::new(&[ColumnType::Integer]).unwrap())
+        .unwrap();
+    let pre = db.insert(t, &[Value::Integer(1)]).unwrap(); // committed before tx
+
+    db.begin().unwrap();
+    assert_eq!(db.begin(), Err(DbError::TxAlreadyActive));
+    let mid = db.insert(t, &[Value::Integer(2)]).unwrap();
+    db.delete(t, pre).unwrap();
+    db.abort().unwrap();
+
+    // pre is back (delete undone), mid is gone (insert undone).
+    assert_eq!(db.get(t, pre).unwrap().integer(ColumnId(0)).unwrap(), 1);
+    assert_eq!(db.get(t, mid).err(), Some(DbError::KeyNotFound));
+    let live: usize = db.scan(t).count();
+    assert_eq!(live, 1);
+}
+
+#[test]
+fn transaction_commit_keeps_changes_and_misuse_fails_closed() {
+    let mut db = fresh();
+    let t = db
+        .create_table(Schema::new(&[ColumnType::Integer]).unwrap())
+        .unwrap();
+    assert_eq!(db.commit(), Err(DbError::TxNotActive));
+    assert_eq!(db.abort(), Err(DbError::TxNotActive));
+    db.begin().unwrap();
+    db.insert(t, &[Value::Integer(7)]).unwrap();
+    db.commit().unwrap();
+    assert_eq!(db.scan(t).count(), 1);
+}
+
+#[test]
+fn transaction_log_full_fails_closed() {
+    let mut db = fresh();
+    let t = db
+        .create_table(Schema::new(&[ColumnType::Integer]).unwrap())
+        .unwrap();
+    db.begin().unwrap();
+    for n in 0..super::transaction::MAX_TX_OPS as i64 {
+        db.insert(t, &[Value::Integer(n)]).unwrap();
+    }
+    // One past the undo-log capacity must fail closed and not insert.
+    assert_eq!(
+        db.insert(t, &[Value::Integer(9999)]),
+        Err(DbError::TxLogFull)
+    );
+    db.abort().unwrap();
+    assert_eq!(db.scan(t).count(), 0);
+}

@@ -6,6 +6,7 @@
 pub mod index;
 pub mod schema;
 pub mod store;
+pub mod transaction;
 pub mod value;
 
 #[cfg(test)]
@@ -17,6 +18,7 @@ pub use value::Value;
 use index::HashIndex;
 use schema::{MAX_COLUMNS, MAX_ROWS, MAX_TABLES};
 use store::{RowSlot, Rows, TableMeta, Tables};
+use transaction::TxLog;
 use value::Cell;
 
 /// Every fallible outcome. There is no panic path on caller input.
@@ -31,12 +33,16 @@ pub enum DbError {
     TextTooLong,
     DuplicateKey,
     KeyNotFound,
+    TxAlreadyActive,
+    TxNotActive,
+    TxLogFull,
 }
 
 pub struct Database {
     tables: Tables,
     rows: Rows,
     index: HashIndex,
+    tx: TxLog,
 }
 
 impl Database {
@@ -45,6 +51,7 @@ impl Database {
             tables: Tables::new(),
             rows: Rows::new(),
             index: HashIndex::new(),
+            tx: TxLog::new(),
         }
     }
 
@@ -87,6 +94,12 @@ impl Database {
         }
         for index in 0..MAX_ROWS {
             if !self.rows.slots[index].live {
+                if self.tx.active {
+                    let prior = self.rows.slots[index];
+                    if self.tx.record(index as u32, prior).is_err() {
+                        return Err(DbError::TxLogFull);
+                    }
+                }
                 self.rows.slots[index] = RowSlot {
                     table: table.0,
                     cells,
@@ -122,14 +135,22 @@ impl Database {
 
     /// Frees a live row owned by `table` (tombstone; slot becomes reusable).
     pub fn delete(&mut self, table: TableId, row: RowId) -> Result<(), DbError> {
+        let slot_index = row.0 as usize;
         let slot = self
             .rows
             .slots
-            .get_mut(row.0 as usize)
+            .get(slot_index)
             .ok_or(DbError::KeyNotFound)?;
         if !slot.live || slot.table != table.0 {
             return Err(DbError::KeyNotFound);
         }
+        if self.tx.active {
+            let previous = self.rows.slots[slot_index];
+            if self.tx.record(slot_index as u32, previous).is_err() {
+                return Err(DbError::TxLogFull);
+            }
+        }
+        let slot = &mut self.rows.slots[slot_index];
         slot.live = false;
         slot.table = u16::MAX;
         Ok(())
@@ -204,6 +225,48 @@ impl Database {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Starts a transaction. Only one may be active at a time.
+    pub fn begin(&mut self) -> Result<(), DbError> {
+        if self.tx.active {
+            return Err(DbError::TxAlreadyActive);
+        }
+        self.tx.clear();
+        self.tx.active = true;
+        Ok(())
+    }
+
+    /// Commits the active transaction: changes persist, the undo log is dropped.
+    pub fn commit(&mut self) -> Result<(), DbError> {
+        if !self.tx.active {
+            return Err(DbError::TxNotActive);
+        }
+        self.tx.clear();
+        Ok(())
+    }
+
+    /// Aborts the active transaction: restores every recorded prior row slot in
+    /// reverse, then deactivates the index (it must be rebuilt — same contract
+    /// as a post-delete index).
+    pub fn abort(&mut self) -> Result<(), DbError> {
+        if !self.tx.active {
+            return Err(DbError::TxNotActive);
+        }
+        let count = self.tx.count;
+        let mut i = count;
+        while i > 0 {
+            i -= 1;
+            let entry = self.tx.entries[i];
+            let slot_index = entry.slot_index as usize;
+            if slot_index < MAX_ROWS {
+                self.rows.slots[slot_index] = entry.previous;
+            }
+        }
+        self.index.reset(u16::MAX, 0, false);
+        self.index.active = false;
+        self.tx.clear();
         Ok(())
     }
 
