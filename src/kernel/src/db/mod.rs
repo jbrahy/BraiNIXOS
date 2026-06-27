@@ -3,6 +3,7 @@
 //! Heap-free, `unsafe`-free, no external crates. The global runtime instance is
 //! introduced in a later stage; this module is a pure, host-testable data type.
 
+pub mod index;
 pub mod schema;
 pub mod store;
 pub mod value;
@@ -13,6 +14,7 @@ mod tests;
 pub use schema::{ColumnId, ColumnType, RowId, Schema, TableId};
 pub use value::Value;
 
+use index::HashIndex;
 use schema::{MAX_COLUMNS, MAX_ROWS, MAX_TABLES};
 use store::{RowSlot, Rows, TableMeta, Tables};
 use value::Cell;
@@ -34,6 +36,7 @@ pub enum DbError {
 pub struct Database {
     tables: Tables,
     rows: Rows,
+    index: HashIndex,
 }
 
 impl Database {
@@ -41,6 +44,7 @@ impl Database {
         Database {
             tables: Tables::new(),
             rows: Rows::new(),
+            index: HashIndex::new(),
         }
     }
 
@@ -88,6 +92,15 @@ impl Database {
                     cells,
                     live: true,
                 };
+                if self.index.covers(table.0, self.index.column) {
+                    if let Cell::Integer(key) = cells[self.index.column] {
+                        if let Err(error) = self.index.insert(key, index as u32) {
+                            // Roll back the row write: the insert is refused.
+                            self.rows.slots[index] = RowSlot::EMPTY;
+                            return Err(error);
+                        }
+                    }
+                }
                 return Ok(RowId(index as u32));
             }
         }
@@ -127,6 +140,80 @@ impl Database {
         RowScan {
             database: self,
             table: table.0,
+            next: 0,
+        }
+    }
+
+    /// Builds a hash index on an Integer column by scanning existing rows.
+    /// Fails closed if the column is not Integer or the index overflows.
+    pub fn create_index(&mut self, table: TableId, column: ColumnId) -> Result<(), DbError> {
+        let schema = self.table_meta(table)?.schema;
+        if schema.types.get(column.0) != Some(&ColumnType::Integer) {
+            return Err(DbError::ColumnTypeMismatch);
+        }
+        self.index.reset(table.0, column.0, false);
+        for index in 0..MAX_ROWS {
+            let slot = &self.rows.slots[index];
+            if slot.live && slot.table == table.0 {
+                if let Cell::Integer(key) = slot.cells[column.0] {
+                    self.index.insert(key, index as u32)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Point lookup by Integer key. Uses the index when it covers the column,
+    /// otherwise a linear scan. Fails closed with `KeyNotFound`.
+    pub fn find_by(&self, table: TableId, column: ColumnId, key: i64) -> Result<RowId, DbError> {
+        self.table_meta(table)?;
+        if self.index.covers(table.0, column.0) {
+            return self.index.find(key).map(RowId).ok_or(DbError::KeyNotFound);
+        }
+        for index in 0..MAX_ROWS {
+            let slot = &self.rows.slots[index];
+            if slot.live && slot.table == table.0 {
+                if let Some(Cell::Integer(value)) = slot.cells.get(column.0).copied() {
+                    if value == key {
+                        return Ok(RowId(index as u32));
+                    }
+                }
+            }
+        }
+        Err(DbError::KeyNotFound)
+    }
+
+    /// Like `create_index` but rejects duplicate keys on build and on insert.
+    pub fn create_unique_index(&mut self, table: TableId, column: ColumnId) -> Result<(), DbError> {
+        let schema = self.table_meta(table)?.schema;
+        if schema.types.get(column.0) != Some(&ColumnType::Integer) {
+            return Err(DbError::ColumnTypeMismatch);
+        }
+        self.index.reset(table.0, column.0, true);
+        for index in 0..MAX_ROWS {
+            let slot = &self.rows.slots[index];
+            if slot.live && slot.table == table.0 {
+                if let Cell::Integer(key) = slot.cells[column.0] {
+                    self.index.insert(key, index as u32)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Scans `table`, yielding live rows whose Integer `column` satisfies `pred`.
+    /// `Range(low, high)` is inclusive on both ends.
+    pub fn select_where(
+        &self,
+        table: TableId,
+        column: ColumnId,
+        pred: Predicate,
+    ) -> PredicateScan<'_> {
+        PredicateScan {
+            database: self,
+            table: table.0,
+            column: column.0,
+            pred,
             next: 0,
         }
     }
@@ -175,6 +262,53 @@ impl<'a> Iterator for RowScan<'a> {
             let slot = &self.database.rows.slots[index];
             if slot.live && slot.table == self.table {
                 return Some((RowId(index as u32), RowRef { slot }));
+            }
+        }
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum Predicate {
+    Eq(i64),
+    Lt(i64),
+    Gt(i64),
+    Range(i64, i64),
+}
+
+impl Predicate {
+    fn matches(&self, value: i64) -> bool {
+        match *self {
+            Predicate::Eq(target) => value == target,
+            Predicate::Lt(bound) => value < bound,
+            Predicate::Gt(bound) => value > bound,
+            Predicate::Range(low, high) => value >= low && value <= high,
+        }
+    }
+}
+
+pub struct PredicateScan<'a> {
+    database: &'a Database,
+    table: u16,
+    column: usize,
+    pred: Predicate,
+    next: usize,
+}
+
+impl<'a> Iterator for PredicateScan<'a> {
+    type Item = (RowId, RowRef<'a>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.next < MAX_ROWS {
+            let index = self.next;
+            self.next += 1;
+            let slot = &self.database.rows.slots[index];
+            if slot.live && slot.table == self.table {
+                if let Some(Cell::Integer(value)) = slot.cells.get(self.column).copied() {
+                    if self.pred.matches(value) {
+                        return Some((RowId(index as u32), RowRef { slot }));
+                    }
+                }
             }
         }
         None

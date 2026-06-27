@@ -115,3 +115,71 @@ fn scan_returns_only_live_rows_in_slot_order() {
     assert_eq!(seen[0].1, 20);
     assert_eq!(seen[1], (c, 30));
 }
+
+#[test]
+fn create_index_then_find_by_hits_and_misses() {
+    let mut db = fresh();
+    let t = db
+        .create_table(Schema::new(&[ColumnType::Integer, ColumnType::Text]).unwrap())
+        .unwrap();
+    let r1 = db
+        .insert(t, &[Value::Integer(100), Value::Text(b"a")])
+        .unwrap();
+    let _r2 = db
+        .insert(t, &[Value::Integer(200), Value::Text(b"b")])
+        .unwrap();
+    db.create_index(t, ColumnId(0)).unwrap();
+    assert_eq!(db.find_by(t, ColumnId(0), 100).unwrap(), r1);
+    assert_eq!(
+        db.find_by(t, ColumnId(0), 999).err(),
+        Some(DbError::KeyNotFound)
+    );
+    // Inserts after index creation are indexed too.
+    let r3 = db
+        .insert(t, &[Value::Integer(300), Value::Text(b"c")])
+        .unwrap();
+    assert_eq!(db.find_by(t, ColumnId(0), 300).unwrap(), r3);
+}
+
+#[test]
+fn unique_index_rejects_duplicates_and_stays_consistent() {
+    let mut db = fresh();
+    let t = db
+        .create_table(Schema::new(&[ColumnType::Integer]).unwrap())
+        .unwrap();
+    let r1 = db.insert(t, &[Value::Integer(5)]).unwrap();
+    db.create_unique_index(t, ColumnId(0)).unwrap();
+    // Duplicate key is refused and the row is NOT inserted.
+    assert_eq!(
+        db.insert(t, &[Value::Integer(5)]),
+        Err(DbError::DuplicateKey)
+    );
+    // Delete the holder, then the key is insertable again and findable.
+    db.delete(t, r1).unwrap();
+    db.create_unique_index(t, ColumnId(0)).unwrap(); // rebuild after delete
+    let r2 = db.insert(t, &[Value::Integer(5)]).unwrap();
+    assert_eq!(db.find_by(t, ColumnId(0), 5).unwrap(), r2);
+}
+
+#[test]
+fn select_where_filters_on_integer_predicates() {
+    let mut db = fresh();
+    let t = db
+        .create_table(Schema::new(&[ColumnType::Integer]).unwrap())
+        .unwrap();
+    for n in [1i64, 5, 10, 15, 20] {
+        db.insert(t, &[Value::Integer(n)]).unwrap();
+    }
+    let collect = |db: &Database, p: Predicate| -> alloc::vec::Vec<i64> {
+        db.select_where(t, ColumnId(0), p)
+            .map(|(_, row)| row.integer(ColumnId(0)).unwrap())
+            .collect()
+    };
+    assert_eq!(collect(&db, Predicate::Eq(10)), alloc::vec![10]);
+    assert_eq!(collect(&db, Predicate::Lt(10)), alloc::vec![1, 5]);
+    assert_eq!(collect(&db, Predicate::Gt(10)), alloc::vec![15, 20]);
+    assert_eq!(
+        collect(&db, Predicate::Range(5, 15)),
+        alloc::vec![5, 10, 15]
+    );
+}
