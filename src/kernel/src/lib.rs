@@ -17,6 +17,8 @@ pub mod auth;
 
 pub mod capability;
 
+pub mod db;
+
 /// Device table constants and builder functions (pure data, host-testable).
 ///
 /// This module is exposed outside the x86_64-gated boot module so that
