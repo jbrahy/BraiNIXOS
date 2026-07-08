@@ -2,13 +2,16 @@
 
 Companion to NORTH_STAR.md. The north-star states the invariants as a contract. This document states who the contract defends against, what is trusted to uphold it, how each invariant is verified, and what a violation costs.
 
+BraiNIX now **serves LLM inference to remote network clients**. That reverses the former outbound-only posture and makes the inbound serving path the largest attack surface in the system. This document is rewritten around that reality.
+
 ## Attacker model
 
 Assumed capabilities of the adversary:
 
-- Supplies arbitrary network input, arbitrary disk and filesystem content, and arbitrary input to any userspace process.
-- Fully controls any userspace process it compromises, including device-driver servers.
-- Drives the AI assistant with adversarial prompts, including content crafted to elicit privilege escalation or to spoof a consent decision.
+- Is a remote network client, or controls one. Supplies arbitrary inbound bytes to the serving path: connection setup, authentication attempts, and — once authenticated — arbitrary request payloads and arbitrary prompt content.
+- Drives the served model with adversarial prompts, including content crafted to elicit privilege escalation, to exfiltrate another client's session or the weights, or to make the model reach outside its serving channel.
+- Supplies arbitrary disk and filesystem content, including malformed model-weight blobs and session/log data.
+- Fully controls any userspace process it compromises, including device-driver servers and the serving front end.
 - Observes timing and any published artifact (ISO, PCR predictions, source).
 
 Assumed not available to the adversary:
@@ -25,69 +28,67 @@ In the TCB, where a single defect can break security:
 - The CPU, the IOMMU, and the TPM 2.0.
 - The UEFI Secure Boot and measured-boot chain.
 - The Ed25519 release-signing key.
-- The in-tree model weights of the auditor and the assistant.
+- The in-tree model weights of the served model and the auditor.
 
-The model weights are trusted deliberately and uncomfortably. Because their compromise cannot be ruled out by structure, shrinking what their compromise can reach is a permanent design pressure, which is why INV-AUDIT and INV-ASSIST exist: they cap the blast radius of a bad model to visibility and to consented actions respectively.
+The served model's weights are trusted deliberately and uncomfortably: they are loaded, measured, and run, and a compromised or poisoned weight set cannot be ruled out by structure. That is exactly why INV-MODEL and INV-SERVE exist — they cap the blast radius of a bad or hijacked model to a single client's session and deny it any authority, spawn, cross-session read, or network reach outside the serving channel. The model is central to the product and central to nothing in the TCB's authority.
 
 Outside the TCB, assumed hostile:
 
-- Every userspace process, including the `console` server.
-- Every network byte, every disk byte.
-- Every device driver. Drivers run as ordinary servers with bounded device capabilities and no special standing.
+- Every remote client, every inbound byte, every prompt, and every token the served model emits.
+- Every userspace process, including the serving front end and any operator console.
+- Every disk byte, including model-weight blobs and the session/log store.
+- Every device driver, including the GPU driver on the deferred hardware milestone. Drivers run as ordinary servers with bounded device capabilities and no special standing.
 
 ## Per-invariant verification and blast radius
 
-INV-AUTH. How we know: Kani proofs on the capability and IPC paths, backed by types that make a forged or widened capability unrepresentable. If violated: a process gains authority it was never granted; this is full escalation and is the worst case the design exists to prevent.
+INV-AUTH. How we know: Kani proofs on the capability and IPC paths, backed by types that make a forged or widened capability unrepresentable. If violated: a process or a client gains authority it was never granted; this is full escalation and is the worst case the design exists to prevent.
 
-INV-MEM. How we know: a structural page-table invariant plus the absence of any heap allocator in the kernel image. If violated: W^X loss enables code injection in the affected domain; no kernel heap removes a whole class of use-after-free and allocator-corruption bugs from the TCB.
+INV-MEM. How we know: a structural page-table invariant plus the absence of any heap allocator in the kernel image; model weights and KV-cache occupy fixed reserved regions, not a growable allocator. If violated: W^X loss enables code injection in the affected domain; a reintroduced allocator reopens a whole class of use-after-free and allocator-corruption bugs the fixed-pool discipline forecloses.
 
 INV-IPC. How we know: types that make a shared-memory channel or async queue unrepresentable in tree, plus proofs on the rendezvous path. If violated: shared mutable state between domains reopens TOCTOU and confused-deputy patterns the synchronous model forecloses.
 
 INV-BOOT. How we know: published PCR predictions matched against attested values, plus a reproducible build any third party can reproduce bit for bit. If violated: an attacker can ship or boot an image that does not match its attestation; measured boot is what makes that detectable rather than silent.
 
-INV-AUDIT. How we know: the auditor's frozen capability manifest is the proof. It physically cannot name the capabilities it lacks, so it cannot spawn, mutate the kernel, or reach the network regardless of what its model decides. If violated (only possible via a manifest error): audit visibility is lost; privilege is not, by construction.
+INV-SERVE. How we know: the inbound request decoder is a `#![no_std]` hostile-input parser with a fuzz target and a Kani harness, fail-closed on any malformed length/offset/type tag; per-client session capabilities are frozen at grant and cannot name another session. If violated: one client reads or corrupts another client's session, weights view, or KV state — a cross-tenant breach and the primary failure the serving design defends against.
 
-INV-ASSIST. How we know: a documented capability-confinement suite the assistant must pass under active prompt injection, with no escalation under any input, plus the same manifest discipline as the auditor. If violated: the assistant could act without consent; the consent trusted path (below) is the structural backstop.
+INV-MODEL. How we know: the same capability-manifest discipline as the auditor — the served model *physically cannot name* the capabilities it lacks, so no prompt can make it spawn, mutate the kernel, read another session, or reach the network outside the serving channel. Weight integrity is checked against a measured digest before first use. Backed by a confinement suite the model runtime must pass under active prompt injection with no escalation under any input. If violated: the model could act outside its session or exfiltrate across the boundary; the capability manifest is the structural backstop that a bad model cannot defeat by reasoning.
+
+INV-AUDIT. How we know: the auditor's frozen capability manifest is the proof. It physically cannot name the capabilities it lacks, so it cannot spawn, mutate the kernel, or reach the network regardless of what its model decides. It observes the serving stack — connections, capability grants, request/response boundaries — and reports. If violated (only possible via a manifest error): audit visibility is lost; privilege is not, by construction.
+
+INV-GPU (deferred milestone). How we know: the accelerator's DMA windows are confined by IOMMU mappings the driver cannot widen, and the driver holds only bounded device capabilities. Until the GPU milestone lands, inference is CPU-only and this is a stated target, not a shipped guarantee. If violated: a driver or device DMA escapes its window into kernel or cross-domain memory — which is why the IOMMU confinement, not driver correctness, is the control.
 
 Standing bars, enforced in CI and never allowed to regress:
 
-- Auditor true-positive rate above 95% on the released CTF corpus.
+- Auditor true-positive rate above 95% on the released CTF corpus, now measured against the serving stack.
 - Machine-checked coverage of kernel invariants driven toward 80%.
-- Zero external dependencies in cargo metadata is the target; the current crate list is tracked debt that only decreases.
+- Zero external dependencies in cargo metadata is the target; the current crate list is tracked debt that only decreases. The inference engine and GPU driver add none.
 
-## Trusted path and the console (open decision)
+## Trusted path and any operator console
 
-The consent action that upholds INV-ASSIST happens on the trusted console. A full-color terminal in the `console` server raises a boundary question that must be settled before the feature lands.
+Under the former design the trusted path existed so a local user could consent to an internal assistant *acting on the system*. The served model does not act on the system — it answers client prompts within its confined session — so a per-action consent path is no longer the central concern. What survives is the terminal-safety rule for any operator console that renders untrusted bytes (model output, client data, filenames, disk or network bytes):
 
-The risk is not color. It is that a general escape-sequence interpreter, fed untrusted output (assistant text, auditor findings, filenames, disk or network bytes), can spoof the trusted path two ways: cursor and clear and color codes can redraw or overwrite the consent prompt, and reflection sequences (answerback, device status report, device attributes, cursor-position report, OSC clipboard) can make the terminal write back into its own input stream and forge the consent keystroke.
-
-Design rules that keep the terminal outside the TCB:
-
-- Color is a decision the trusted renderer makes about structured output, never an in-band code interpreted from an untrusted byte stream. Servers send text plus semantic attributes over the capability-mediated channel; the console maps attribute to color. There is no in-band control channel for untrusted text to hijack.
-- The terminal is strictly one-way. It never writes to its input under any sequence. Reflection sequences are not implemented.
+- Color and structure are decisions the trusted renderer makes about semantically-tagged output, never in-band codes interpreted from an untrusted byte stream.
+- The terminal is strictly one-way. It never writes to its input under any sequence. Reflection sequences (answerback, device status report, device attributes, cursor-position report, OSC clipboard) are not implemented, so untrusted output can never forge a keystroke.
 - If in-band SGR is ever allowed, it is a closed whitelist grammar implemented as a small state machine, fuzzed and Kani-checked like every other in-tree parser, with everything outside the set rendered as literal bytes.
 
-The decision to make: whether the consent path rides on this same console.
+If a future feature reintroduces a consent-gated action on the local system, it re-inherits the kernel-intercepted secure-attention-sequence design (a kernel context the console server cannot observe or forge), so any such consent rests on the kernel, not on console correctness.
 
-- Option A, recommended: a kernel-intercepted secure attention sequence switches to a consent context the `console` server cannot observe or forge. The full-color terminal stays fully untrusted and out of the TCB. INV-ASSIST rests on the kernel, not on console correctness.
-- Option B: the consent prompt renders in a reserved region the untrusted output stream is structurally unable to address. Simpler, but it makes the consent renderer part of the trusted path and therefore TCB surface, which contradicts the "trusted set only ever shrinks" principle.
+## Deployment threat profile (inbound-serving · multi-client · network-facing)
 
-Until this is settled, the color terminal ships only for non-consent output. The consent path does not depend on it.
+This section re-ranks the general model above for the deployment BraiNIX now ships in, so design effort is spent where the residual risk concentrates. The general model remains authoritative.
 
-## Deployment threat profile (outbound-only · single-user · terminal-in-Docker)
+**Deployment, stated:** BraiNIX is a real x86-64 ring-0 kernel. The near-term CPU-inference MVP boots under QEMU with Docker as the build/run host; the later GPU milestone requires real hardware (VFIO passthrough or bare metal) and is scoped separately. The runtime profile is **network-facing with a single authenticated, capability-gated inbound serving socket**, serving one or more remote clients whose sessions are mutually isolated. (A working **vTPM/swtpm remains a hard dependency** for measured boot, weight measurement, and sealing, and is **currently unmet** — see the architecture spec §0; until it is wired, INV-BOOT and the INV-MODEL weight-measurement anchor degrade to an honest software-only fallback.)
 
-This section is **additive**. It does not replace the general attacker model above; it re-ranks it for the specific deployment BraiNIX actually ships in, so design effort is spent where the residual risk concentrates. The general model remains authoritative for any deployment that reintroduces a retired surface.
+**What the deployment adds back (the reversed posture):**
 
-**Deployment, stated:** BraiNIX is a real x86-64 ring-0 kernel booted under QEMU; Docker is the build/run host. The runtime profile is a single local user, terminal/serial console only, **outbound-only with no inbound listening socket**. (A working **vTPM/swtpm is a hard dependency** for the measured-boot and sealing guarantees and is **currently unmet** — see the architecture spec §0; until it is wired, INV-BOOT and any TPM-anchored guarantee degrade to the honest software-only fallback.)
-
-**What the deployment retires (lowers, does not eliminate):**
-
-- **Inbound network surface.** With no listening socket, remote-initiated attacks against an in-kernel server (e.g. the former SSH server on 2222) are retired for this deployment. The kernel's outbound client code is still exposed to hostile *responses* from the servers it dials.
-- **Multi-user lateral movement.** Single-user removes cross-user confused-deputy paths; capability confinement between *processes* still matters (the AI, the device servers).
+- **Inbound network surface.** The single largest change from the prior design. A listening socket, connection setup, authentication, and post-auth request handling are all remote-attacker-reachable in or adjacent to ring 0. This surface must be minimized, moved to userspace where possible, and every parser on it fuzzed and Kani-checked before it faces real clients.
+- **Multi-client isolation.** More than one remote session may exist; cross-session confused-deputy and cross-tenant read paths (INV-SERVE) are now first-order concerns.
 
 **Dominant threats, re-ranked for this deployment (highest first):**
 
-1. **Hostile data at rest / on disk.** The largest remaining attacker-controlled byte stream is the disk. The sub-project-A persistence decoder and any on-disk audit/log format parse attacker-controlled bytes in ring 0 → must be `#![no_std]`, fuzzed, and Kani-checked, fail-closed on any malformed length/offset/type tag, and never grow a pool from disk-supplied sizes.
-2. **Hostile LLM output.** The advisory AI's `SecurityProposal` tokens are attacker-influenced (prompt injection against trusted-but-uncomfortable weights). The validator that consumes them is a hostile-input parser; per the architecture spec, parsing stays in a userspace validator and the ring-0 apply-primitive is minimized, whitelisted, and incapable of touching invariant state. Consent for any applied change rides the trusted path under the no-reflection terminal rules.
-3. **Supply chain.** The toolchain plus the four tracked-debt crates (`sha2`, `chacha20`, `ed25519-dalek`, `curve25519-dalek`) are trusted code paths; the standing bar (zero external deps, list only decreases) is the control, and no new crate may be added (`hashbrown` and any DB/Wasm crate are excluded).
-4. **Container / host escape.** Because the build/run host is a container, a QEMU or host-kernel escape is a deployment-level concern outside BraiNIX's own TCB but inside the user's risk picture. Tracked as a deployment requirement (current/patched QEMU, least-privilege container), not a BraiNIX invariant.
+1. **Hostile remote clients and the inbound protocol.** The connection/auth/request path parses attacker-controlled bytes reachable from the network. It must be `#![no_std]`, fuzzed, and Kani-checked, fail-closed on any malformed length/offset/type tag, and never grow a pool from client-supplied sizes. The authenticated transport reuses only the already-vendored crypto primitives; no new crate.
+2. **Hostile prompts against the served model.** Prompt injection targets the trusted-but-uncomfortable weights to escape the session. INV-MODEL + INV-SERVE cap the blast radius to the attacker's own session; the confinement is manifest-enforced and must hold under the injection suite with no escalation under any input.
+3. **Model-weight provenance.** The served weights are trusted-but-huge; a poisoned or swapped blob is a supply-chain and integrity concern. Weights are measured against a known digest before use (anchored to measured boot once the vTPM gap is closed), and the loader fails closed on any malformed or oversized blob.
+4. **Hostile data at rest / on disk.** Model-weight blobs and the session/log store are attacker-influenceable byte streams parsed in ring 0 or adjacent; the same `#![no_std]`, fuzzed, Kani-checked, fail-closed discipline applies.
+5. **GPU DMA (deferred milestone).** On the hardware milestone, an accelerator or its driver DMAing outside its IOMMU window is a cross-domain breach; the IOMMU confinement (INV-GPU), not driver correctness, is the control.
+6. **Container / host escape.** For the QEMU/Docker MVP, a QEMU or host-kernel escape is a deployment-level concern outside BraiNIX's own TCB but inside the user's risk picture (current/patched QEMU, least-privilege container). The GPU milestone's bare-metal deployment retires the container layer but adds firmware/IOMMU configuration as the equivalent concern.
