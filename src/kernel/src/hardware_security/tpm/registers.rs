@@ -65,6 +65,34 @@ pub enum TpmError {
     InvalidResponseTag,
 }
 
+/// Read the TPM_DID_VID (device/vendor ID) register as a u32.
+///
+/// On host target (non-x86_64) returns 0 (no physical TPM in the test host).
+fn read_tpm_device_vendor_id_register() -> u32 {
+    #[cfg(target_arch = "x86_64")]
+    return crate::arch::hardware_registers::read_tpm_register(
+        TPM_DEVICE_VENDOR_ID_REGISTER_OFFSET,
+    );
+    #[cfg(not(target_arch = "x86_64"))]
+    return 0;
+}
+
+/// Returns true if a TPM 2.0 is physically present at the TIS interface.
+///
+/// Reads TPM_DID_VID at base 0xFED40000 + 0xF00. An absent interface reads
+/// back all-ones (0xFFFFFFFF, from unmapped MMIO) or all-zeros; a present TPM
+/// (e.g. QEMU `tpm-tis` backed by swtpm) returns a real device/vendor ID.
+///
+/// This is the runtime signal that distinguishes a real measured-boot path
+/// (PCRs extended into an actual TPM) from the honest software-only fallback,
+/// independent of the compile-time `dev-build` feature.
+///
+/// Enforces INV-BOOT-001 (measured boot path integrity).
+pub fn is_tpm_present() -> bool {
+    let device_vendor_id = read_tpm_device_vendor_id_register();
+    device_vendor_id != 0xFFFF_FFFF && device_vendor_id != 0x0000_0000
+}
+
 /// Request use of TPM locality 0 and wait until it is granted.
 ///
 /// Enforces INV-BOOT-001 (measured boot path integrity).
@@ -243,6 +271,19 @@ mod tests {
         assert!(
             result.is_ok(),
             "request_tpm_locality must return Ok on host"
+        );
+    }
+
+    /// On host target (no physical TPM), is_tpm_present reports false.
+    ///
+    /// The DID/VID register read returns 0 on the non-x86_64 host stub, which
+    /// the presence check treats as "no TPM" — so the software-only fallback
+    /// path is selected in host builds.
+    #[test]
+    fn test_is_tpm_present_reports_false_on_host_target() {
+        assert!(
+            !is_tpm_present(),
+            "host target has no physical TPM; is_tpm_present must be false"
         );
     }
 }

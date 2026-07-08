@@ -259,6 +259,20 @@ fn perform_tpm_attestation_gate_check(boot_step_logger: &mut BootStepLogger) {
     let mut attestation_gate = create_attestation_gate();
     let start_tick_count = read_current_apic_timer_tick_count();
 
+    // Runtime detection of a real TPM at the TIS interface (0xFED40000). This
+    // drives the honest software-fallback decision below independently of the
+    // compile-time `dev-build` feature: measured boot is "real" iff an actual
+    // TPM was present to receive the PCR[0]/PCR[1] extends performed earlier
+    // in initialize_hardware_security.
+    let tpm_present = crate::hardware_security::tpm::registers::is_tpm_present();
+    if tpm_present {
+        boot_step_logger
+            .ok("Measured boot: TPM 2.0 present at TIS 0xFED40000 (PCR[0..1] extended into real TPM)");
+    } else {
+        boot_step_logger
+            .warn("Measured boot: no TPM present at TIS 0xFED40000 (software-only fallback, INV-BOOT degraded)");
+    }
+
     advance_attestation_gate(&mut attestation_gate, AttestationEvent::MeasurementComplete)
         .unwrap_or_else(|_| halt_on_attestation_failure(boot_step_logger));
 
@@ -284,26 +298,48 @@ fn perform_tpm_attestation_gate_check(boot_step_logger: &mut BootStepLogger) {
                 &mut attestation_gate,
                 AttestationEvent::VerificationFailed,
             );
-            halt_or_warn_on_attestation_failure(boot_step_logger);
+            halt_or_warn_on_attestation_failure(boot_step_logger, tpm_present);
         }
     }
 }
 
+/// Handle a failed TPM quote at the attestation gate.
+///
 /// In production builds (`IS_DEVELOPMENT_BUILD == false`) a failed TPM quote
 /// is a fatal halt per D-22 and INV-BOOT-002 — no fallback to unattested
-/// operation is permitted. In development builds the kernel logs a warning
-/// and continues so the QEMU integration test can complete end-to-end
-/// without a real vTPM provisioned. The dev-mode path is gated behind the
-/// `dev-build` cargo feature and surfaces in PCR[1] via the dev-mode flag
-/// (see `IS_DEVELOPMENT_BUILD` consumer in this module).
-fn halt_or_warn_on_attestation_failure(boot_step_logger: &mut BootStepLogger) {
-    if IS_DEVELOPMENT_BUILD {
-        boot_step_logger
-            .warn("Attestation gate: TPM quote verification failed (dev-build: continuing)");
-        return;
+/// operation is permitted, regardless of whether a TPM is present. This branch
+/// is unchanged and the gate is never weakened.
+///
+/// In development builds the kernel logs a warning and continues so the QEMU
+/// integration test can complete end-to-end. The message now reflects the
+/// *runtime* TPM presence so the boot log is honest about which path ran:
+///   - `tpm_present == true`: PCR[0]/PCR[1] were extended into a real TPM
+///     (the measured-boot path genuinely ran); only the TPM2_Quote signing
+///     step is unverified, because a signing attestation key is not yet
+///     provisioned (a separate, larger milestone). This is NOT a software
+///     fallback.
+///   - `tpm_present == false`: no TPM was present, so measured boot degraded
+///     to the honest software-only fallback.
+///
+/// The dev-mode path remains gated behind the `dev-build` cargo feature and
+/// surfaces in PCR[1] via the dev-mode flag (see `IS_DEVELOPMENT_BUILD`).
+fn halt_or_warn_on_attestation_failure(
+    boot_step_logger: &mut BootStepLogger,
+    tpm_present: bool,
+) {
+    if !IS_DEVELOPMENT_BUILD {
+        boot_step_logger.halt("Attestation gate: TPM quote verification failed");
+        halt_processor();
     }
-    boot_step_logger.halt("Attestation gate: TPM quote verification failed");
-    halt_processor();
+    if tpm_present {
+        boot_step_logger.warn(
+            "Attestation gate: real TPM measured; TPM2_Quote unverified (no attestation key provisioned; dev-build: continuing)",
+        );
+    } else {
+        boot_step_logger.warn(
+            "Attestation gate: no TPM present, software-only fallback (dev-build: continuing)",
+        );
+    }
 }
 
 /// Check whether the 60-second attestation timeout has been exceeded (D-22).

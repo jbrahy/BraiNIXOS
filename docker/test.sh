@@ -77,22 +77,61 @@ echo "[test.sh] Provisioning swtpm for Phase 6 attestation test..."
 rm -rf /tmp/brainix-tpm
 mkdir -p /tmp/brainix-tpm
 SWTPM_READY=0
-if timeout 10 swtpm_setup \
-    --tpmstate /tmp/brainix-tpm \
-    --tpm2 \
-    --createek \
-    --overwrite \
-    2>/dev/null; then
-    SWTPM_READY=1
+
+# swtpm self-sandboxes with libseccomp (seccomp_load()) on every invocation.
+# Under Docker Desktop's amd64-on-arm64 emulation (Rosetta/qemu-user
+# translating this container's x86_64 binaries on an Apple Silicon host),
+# that syscall fails with ECANCELED: the ephemeral swtpm process swtpm_setup
+# spawns for --createek dies at startup before it can signal readiness over
+# its control socket, and swtpm_setup then blocks forever reading a socket
+# whose peer already exited (confirmed via /proc/<pid>/status: state S,
+# wchan unix_stream_read_generic, with the child already a zombie) -- this is
+# the "swtpm_setup hangs in the container" failure recorded in CONTEXT.md.
+# Fix: point swtpm_setup and the long-running daemon at a wrapper that
+# appends `--seccomp action=none`, disabling only swtpm's own internal
+# self-sandbox (a defense-in-depth hardening feature of the emulator process
+# itself, not part of BraiNIX's TCB or the measured-boot chain). Harmless
+# no-op on native x86_64 hosts.
+SWTPM_BIN="$(command -v swtpm || true)"
+SWTPM_NOSECCOMP_WRAPPER=/tmp/brainix-tpm-swtpm-noseccomp.sh
+if [ -n "${SWTPM_BIN}" ]; then
+    cat > "${SWTPM_NOSECCOMP_WRAPPER}" << WRAPPEREOF
+#!/usr/bin/env bash
+exec "${SWTPM_BIN}" "\$@" --seccomp action=none
+WRAPPEREOF
+    chmod +x "${SWTPM_NOSECCOMP_WRAPPER}"
+
+    if timeout 20 swtpm_setup \
+        --tpmstate /tmp/brainix-tpm \
+        --tpm2 \
+        --createek \
+        --overwrite \
+        --tpm "${SWTPM_NOSECCOMP_WRAPPER} socket" \
+        2>/dev/null; then
+        SWTPM_READY=1
+    else
+        echo "[test.sh] WARN: swtpm_setup failed (attestation skipped, software-only fallback)"
+    fi
 else
-    echo "[test.sh] WARN: swtpm_setup failed (swtpm not installed; attestation skipped)"
+    echo "[test.sh] WARN: swtpm not installed (attestation skipped, software-only fallback)"
 fi
 
-if [ "${SWTPM_READY}" -eq 1 ] && command -v swtpm &>/dev/null; then
+if [ "${SWTPM_READY}" -eq 1 ]; then
+    # Separate --server (plain TPM command/response socket) from --ctrl (the
+    # unixio control socket QEMU's `-tpmdev emulator` connects to for its
+    # data-fd handoff protocol). QEMU's chardev path below is unchanged
+    # (still swtpm.sock), so this only adds a second, host-side-only socket
+    # that lets tpm2_nvdefine/tpm2_pcrread talk to the same running TPM via
+    # the "swtpm:path=" tcti convention (which requires a bare command
+    # socket plus a "<path>.ctrl" companion) -- matches the pattern already
+    # validated in ci.yml's integration-test job.
     swtpm socket \
         --tpmstate dir=/tmp/brainix-tpm \
-        --ctrl type=unixio,path=/tmp/brainix-tpm/swtpm.sock \
+        --ctrl type=unixio,path=/tmp/brainix-tpm/swtpm.sock.ctrl \
+        --server type=unixio,path=/tmp/brainix-tpm/swtpm.sock \
         --tpm2 \
+        --flags not-need-init,startup-clear \
+        --seccomp action=none \
         --log level=0 &
     SWTPM_PID=$!
     echo "[test.sh] swtpm started (PID ${SWTPM_PID})"
@@ -202,6 +241,7 @@ rm -f /tmp/inbound_tcp_result.txt /tmp/ssh_login.log
     echo "" >> /tmp/inbound_tcp_result.txt
     echo "PROBE_DONE" >> /tmp/inbound_tcp_result.txt
 ) &
+INBOUND_PROBE_PID=$!
 # Honor KEEP_RUNNING=1 (set by bin/run-brainx.sh in its default "always have
 # the latest version running" mode): omit the 300s `timeout` wrapper so qemu
 # stays alive after the kernel reaches its halt loop, until the user
@@ -236,7 +276,11 @@ fi
     2>&1 | tee /tmp/boot.log || true
 
 echo "[test.sh] === INBOUND TCP PROBE ==="
-wait
+# Wait only for the inbound probe subshell — NOT a bare `wait`, which would
+# also block on the long-running swtpm daemon background job (it never exits)
+# now that swtpm is actually provisioned. The swtpm process is reaped by the
+# explicit kill below.
+wait "${INBOUND_PROBE_PID}" 2>/dev/null || true
 cat /tmp/inbound_tcp_result.txt 2>/dev/null || echo "no inbound result"
 echo "[test.sh] === END INBOUND TCP PROBE ==="
 
