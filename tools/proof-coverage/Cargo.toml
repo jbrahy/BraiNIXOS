@@ -1,0 +1,13 @@
+[package]
+name = "proof-coverage"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "proof-coverage"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+panic = "unwind"

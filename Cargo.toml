@@ -8,6 +8,9 @@ members = [
     "src/brainix-ipc-core",
     "userland/shell/0.01",
 ]
+exclude = [
+    "tools/proof-coverage",
+]
 resolver = "2"
 
 [workspace.package]

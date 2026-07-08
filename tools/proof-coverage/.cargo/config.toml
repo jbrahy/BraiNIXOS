@@ -1,0 +1,3 @@
+# Override the workspace's bare-metal target with native compilation
+[build]
+target = "aarch64-apple-darwin"
