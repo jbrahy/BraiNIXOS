@@ -184,7 +184,9 @@ rm -f /tmp/inbound_tcp_result.txt /tmp/ssh_login.log
     # (setsid + askpass, no controlling tty); hard-killed after a fixed window.
     printf '#!/bin/sh\necho brainxos\n' > /tmp/askpass.sh
     chmod +x /tmp/askpass.sh
-    printf 'whoami\nuname\nexit\n' > /tmp/ssh_input.txt
+    # The bridged userspace shell runs its own login gate (root/brainxos, then a
+    # forced password change), then the REPL. Drive that flow, type a line, exit.
+    printf 'root\nbrainxos\nNewBrainix1\nNewBrainix1\nhello-from-ssh\n\x04' > /tmp/ssh_input.txt
     setsid sh -c 'DISPLAY=none SSH_ASKPASS=/tmp/askpass.sh SSH_ASKPASS_REQUIRE=force \
         ssh -v -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o PreferredAuthentications=password -o PubkeyAuthentication=no \

@@ -23,6 +23,12 @@ use crate::syscall::kernel_syscall_registers::KERNEL_SYSCALL_MESSAGE_REGISTER_ZE
 /// Verified by: tests::test_serial_write_returns_zero_on_success
 pub fn handle_serial_write_byte_syscall() -> i64 {
     let byte_value = read_byte_value_from_syscall_register();
+    // When the shell is bridged to an SSH session, its output goes out as
+    // CHANNEL_DATA over SSH rather than to COM1.
+    if crate::boot::ssh_bridge::is_active() {
+        crate::boot::ssh_bridge::write_output_byte(byte_value);
+        return 0;
+    }
     write_byte_to_serial(byte_value);
     0
 }

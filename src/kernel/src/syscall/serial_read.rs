@@ -20,6 +20,14 @@ const SERIAL_READ_NO_BYTE_AVAILABLE: i64 = -1;
 /// Enforces INV-BOOT-001: serial access is confined to the kernel.
 /// Verified by: tests::test_serial_read_returns_minus_one_when_no_data_available
 pub fn handle_serial_read_byte_syscall() -> i64 {
+    // When the shell is bridged to an SSH session, its input comes from the SSH
+    // channel (reading also drives the network), not COM1.
+    if crate::boot::ssh_bridge::is_active() {
+        return match crate::boot::ssh_bridge::read_input_byte() {
+            Some(byte_value) => i64::from(byte_value),
+            None => SERIAL_READ_NO_BYTE_AVAILABLE,
+        };
+    }
     match read_serial_byte_non_blocking() {
         Some(byte_value) => i64::from(byte_value),
         None => SERIAL_READ_NO_BYTE_AVAILABLE,

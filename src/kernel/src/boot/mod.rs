@@ -9,3 +9,5 @@ pub mod scheduler_init;
 pub mod serial;
 pub mod server_launch;
 pub mod server_measurement;
+#[cfg(target_arch = "x86_64")]
+pub mod ssh_bridge;
