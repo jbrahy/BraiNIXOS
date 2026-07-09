@@ -1,7 +1,8 @@
 # Contributing to BraiNIX
 
-Thank you for your interest. BraiNIX is a security-first microkernel, and it holds a deliberately high
-bar: every change should leave the system as auditable and as structurally secure as it found it.
+Thank you for your interest. BraiNIX is a security-first microkernel built to serve LLM inference
+securely to remote clients, and it holds a deliberately high bar: every change should leave the system
+as auditable and as structurally secure as it found it.
 
 Please also read the [Code of Conduct](CODE_OF_CONDUCT.md). Security vulnerabilities must **not** be filed
 as public issues — see the [Security Policy](SECURITY.md).
