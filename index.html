@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BraiNIX — a structurally secure microkernel</title>
-<meta name="description" content="BraiNIX is a capability-based, security-first x86-64 microkernel written end to end in Rust. Every security property is structural — nothing rests on an attacker not knowing something." />
+<title>BraiNIX — securely serving LLM inference</title>
+<meta name="description" content="BraiNIX is a security-first microkernel built to serve LLM inference securely to remote clients, written end to end in Rust. The security model is the product — every guarantee is structural, nothing rests on an attacker not knowing something." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet" />
@@ -107,6 +107,8 @@
   .inv .id{font-size:12px; letter-spacing:.12em; color:var(--acc); margin-bottom:14px}
   .inv p{font-size:13px; color:var(--dim); line-height:1.6}
   .inv p b{color:var(--text); font-weight:500}
+  .inv.deferred::before{background:var(--amber); opacity:.5}
+  .inv.deferred .id{color:var(--amber)}
 
   /* architecture facts strip */
   .facts{display:grid; grid-template-columns:repeat(6,1fr); gap:1px; background:var(--line); border:1px solid var(--line); margin-bottom:42px}
@@ -163,22 +165,22 @@
   <div class="hero">
     <div class="wrap">
       <div class="hero-glow"></div>
-      <div class="eyebrow reveal" style="animation-delay:.05s"><span class="dot"></span> x86-64 · Rust <span style="color:var(--faint)">no_std</span> · capability-based microkernel</div>
-      <h1 class="reveal" style="animation-delay:.12s">Security that is <em>structural</em>, not <span class="strike">secret</span>.</h1>
+      <div class="eyebrow reveal" style="animation-delay:.05s"><span class="dot"></span> x86-64 + aarch64 · Rust <span style="color:var(--faint)">no_std</span> · secure inference serving</div>
+      <h1 class="reveal" style="animation-delay:.12s">A secure place to <em>serve a model</em>.</h1>
       <p class="lede reveal" style="animation-delay:.22s">
-        BraiNIX is a capability-based, security-first microkernel written end to end in Rust.
-        <b>Every guarantee is enforced by the design</b> — the capability model, the type system, or a
-        machine-checked proof. Nothing rests on an attacker not knowing something.<span class="cursor"></span>
+        BraiNIX is a security-first microkernel built to <b>serve LLM inference securely to remote clients</b>.
+        The security model is the product — capabilities, W^X, measured boot, and a dependency closure of
+        <em>itself</em>, turned outward against hostile clients, hostile prompts, and model compromise.
+        Every guarantee is enforced by the design, never by what an attacker doesn’t know.<span class="cursor"></span>
       </p>
       <div class="cta reveal" style="animation-delay:.32s">
         <a class="btn primary" href="https://github.com/jbrahy/BraiNIXOS">Read the source ↗</a>
         <a class="btn ghost" href="#invariants">The contract →</a>
       </div>
       <div class="statusline reveal" style="animation-delay:.42s">
-        <span><b>●</b> live boot: kernel → userspace shell verified under QEMU</span>
-        <span>per-process page tables (KPTI)</span>
-        <span>W^X everywhere</span>
-        <span>synchronous rendezvous IPC</span>
+        <span><b>●</b> research-grade, early</span>
+        <span>substrate: kernel → userspace shell verified under QEMU</span>
+        <span>serving path &amp; inference engine in progress</span>
       </div>
     </div>
   </div>
@@ -192,14 +194,14 @@
         <p class="sec-sub">These decide every tradeoff. When they conflict with convenience, convenience loses.</p>
       </div>
       <div class="principles">
-        <div class="pr"><div class="n">P-01</div><h3>Least authority</h3><p>Nothing holds a capability it does not need, and no capability is ambient. Authority is named, granted, and revocable.</p></div>
-        <div class="pr"><div class="n">P-02</div><h3>Fail closed</h3><p>Absence of an explicit grant is denial. An error path that cannot prove safety denies the operation.</p></div>
+        <div class="pr"><div class="n">P-01</div><h3>Least authority</h3><p>Nothing holds a capability it does not need, and no capability is ambient. A remote client is granted only its own session.</p></div>
+        <div class="pr"><div class="n">P-02</div><h3>Fail closed</h3><p>Absence of an explicit grant is denial. A malformed request, a corrupt model blob, an error path that cannot prove safety — all deny.</p></div>
         <div class="pr"><div class="n">P-03</div><h3>Structure over secrecy</h3><p>Security is a property of the design, enforced by the capability model, the type system, or a machine-checked proof — never by what an attacker doesn’t know.</p></div>
-        <div class="pr"><div class="n">P-04</div><h3>Minimize &amp; name the trust</h3><p>The set of components that can violate security is small, written down, and justified. Anything outside it is treated as hostile.</p></div>
+        <div class="pr"><div class="n">P-04</div><h3>Minimize &amp; name the trust</h3><p>The set of components that can violate security is small, written down, and justified. Every client, every prompt, every model token is treated as hostile.</p></div>
         <div class="pr"><div class="n">P-05</div><h3>Every claim is falsifiable</h3><p>A property that is asserted but not checked does not count as enforced. If it isn’t verified, it isn’t a guarantee.</p></div>
         <div class="pr" style="display:flex;flex-direction:column;justify-content:center;background:var(--panel)">
           <div class="n" style="color:var(--acc)">∎</div>
-          <p style="font-family:var(--serif);font-size:19px;color:var(--text);line-height:1.45">Convenience is not a principle. It never wins a tie.</p>
+          <p style="font-family:var(--serif);font-size:19px;color:var(--text);line-height:1.45">The model gets all the compute. It gets none of the authority.</p>
         </div>
       </div>
     </div>
@@ -214,12 +216,14 @@
         <p class="sec-sub">Each invariant is named, documented, and individually checkable. Asserted is not enforced.</p>
       </div>
       <div class="inv-grid">
-        <div class="inv"><div class="id">INV-AUTH</div><p>No ambient authority. Every server’s capability set is <b>frozen at launch</b>, and capabilities are unforgeable typed tokens.</p></div>
-        <div class="inv"><div class="id">INV-MEM</div><p><b>W^X holds for every page, always.</b> No dynamic kernel heap — fixed-size pool allocators only. Per-process page tables (KPTI).</p></div>
+        <div class="inv"><div class="id">INV-AUTH</div><p>No ambient authority. Every server’s capability set is <b>frozen at launch</b>; capabilities are unforgeable typed tokens. A client is granted only its own session.</p></div>
+        <div class="inv"><div class="id">INV-MEM</div><p><b>W^X holds for every page, always.</b> No dynamic kernel heap — fixed pools only. Model weights and KV-cache live in fixed reserved regions, never a growing allocator.</p></div>
         <div class="inv"><div class="id">INV-IPC</div><p>Inter-process communication is <b>synchronous rendezvous only</b>. No shared-memory IPC and no async queues exist in tree.</p></div>
         <div class="inv"><div class="id">INV-BOOT</div><p>Every release is <b>measured into the TPM</b>, reproducibly built, and Ed25519-signed — with predicted PCRs published before the artifact ships.</p></div>
-        <div class="inv"><div class="id">INV-AUDIT</div><p>The observe-only auditor <b>reports and nothing else</b>. It holds no spawn, kernel-mutation, or network capability — its compromise costs visibility, never privilege.</p></div>
-        <div class="inv"><div class="id">INV-ASSIST</div><p>Any assistance layer acts only after <b>explicit per-action consent</b> on the trusted console, reached through capability-mediated IPC. A tenant, never a trusted authority.</p></div>
+        <div class="inv"><div class="id">INV-SERVE</div><p>Inbound clients are <b>mutually isolated</b> — none can name another’s session, weights, or KV state. The request decoder is a fail-closed, zero-allocation hostile-input parser.</p></div>
+        <div class="inv"><div class="id">INV-MODEL</div><p>The served model is a <b>confined tenant</b>, never a trusted authority. Weights are integrity-checked; it cannot escalate, read another session, or reach the network outside the serving channel — even under adversarial prompting.</p></div>
+        <div class="inv"><div class="id">INV-AUDIT</div><p>The observe-only auditor watches the serving stack and <b>reports — nothing else</b>. It holds no spawn, kernel-mutation, or network capability; its compromise costs visibility, never privilege.</p></div>
+        <div class="inv deferred"><div class="id">INV-GPU · deferred</div><p>Accelerator DMA is <b>confined by the IOMMU</b>; the GPU driver is an ordinary capability-bounded server. Inference is CPU-first; GPU is a later hardware milestone.</p></div>
       </div>
     </div>
   </section>
@@ -233,19 +237,21 @@
         <p class="sec-sub">The smallest possible ring-0 surface. Everything else is an isolated, bounded userspace process.</p>
       </div>
       <div class="facts">
-        <div class="fact"><div class="v">x86-64</div><div class="k">target</div></div>
+        <div class="fact"><div class="v">x86-64 + aarch64</div><div class="k">targets</div></div>
         <div class="fact"><div class="v">Rust no_std</div><div class="k">end to end</div></div>
         <div class="fact"><div class="v">W^X</div><div class="k">global</div></div>
         <div class="fact"><div class="v">KPTI</div><div class="k">per process</div></div>
-        <div class="fact"><div class="v">RDRAND</div><div class="k">required</div></div>
-        <div class="fact"><div class="v">no KASLR</div><div class="k">by design</div></div>
+        <div class="fact"><div class="v">0 crates</div><div class="k">the goal</div></div>
+        <div class="fact"><div class="v">CPU-first</div><div class="k">inference</div></div>
       </div>
       <div class="arch">
-        <div class="ac"><div class="mk">›</div><div><h4>Microkernel core</h4><p>Drivers, filesystem, and the network stack all run in userspace. Ring 0 holds only what cannot live anywhere else.</p></div></div>
+        <div class="ac"><div class="mk">›</div><div><h4>Microkernel core</h4><p>Drivers, filesystem, network stack, the serving front end, and the inference engine all run in userspace. Ring 0 holds only what cannot live anywhere else.</p></div></div>
+        <div class="ac"><div class="mk">›</div><div><h4>Secure serving path</h4><p>An authenticated, capability-gated inbound protocol — in-tree Ed25519 / X25519 / ChaCha20-Poly1305 — with mutually isolated per-client sessions and a fail-closed request parser.</p></div></div>
+        <div class="ac"><div class="mk">›</div><div><h4>Confined inference engine</h4><p>A no_std transformer runtime. The served model gets all the compute and reserved memory it needs, weights in fixed regions — and zero authority.</p></div></div>
         <div class="ac"><div class="mk">›</div><div><h4>Capability-mediated everything</h4><p>No ambient authority. Every resource is reached through an unforgeable, typed, bounded, revocable token.</p></div></div>
         <div class="ac"><div class="mk">›</div><div><h4>KPTI &amp; W^X, structurally</h4><p>The kernel is never mapped in user page tables. No page is ever simultaneously writable and executable — anywhere.</p></div></div>
+        <div class="ac"><div class="mk">›</div><div><h4>Multi-arch by design</h4><p>A hardware abstraction layer targets x86-64 and aarch64 servers as compile-time backends — one kernel, more metal.</p></div></div>
         <div class="ac"><div class="mk">›</div><div><h4>Decomposed network stack</h4><p>Link, IP, and transport run as three separate isolated servers, chained only by synchronous IPC. Containment is the default.</p></div></div>
-        <div class="ac"><div class="mk">›</div><div><h4>One server per device</h4><p>Each hardware device gets its own isolated server with a bounded capability set. A driver compromise stays local.</p></div></div>
         <div class="ac"><div class="mk">›</div><div><h4>Measured, reproducible boot</h4><p>Bootloader through kernel is measured into the TPM and Ed25519-signed, reproducibly built from source the project owns.</p></div></div>
       </div>
     </div>
@@ -265,12 +271,12 @@
           <li><span>—</span> No ambient authority anywhere. Capability sets are frozen at launch.</li>
           <li><span>—</span> W^X enforced globally and structurally. No page is ever writable and executable.</li>
           <li><span>—</span> Synchronous rendezvous IPC only. No shared memory, no async queues.</li>
-          <li><span>—</span> No dynamic kernel heap. Fixed-size pool allocators only.</li>
-          <li><span>—</span> The dependency closure only ever shrinks toward zero external code.</li>
-          <li><span>—</span> No path to security depends on attacker ignorance.</li>
+          <li><span>—</span> No dynamic kernel heap. Fixed-size pool allocators only — model weights included.</li>
+          <li><span>—</span> The dependency closure only ever shrinks toward zero external code. The inference engine and drivers are written in-tree.</li>
+          <li><span>—</span> The served model and every remote client are untrusted. No path to security depends on attacker ignorance.</li>
         </ul>
         <p class="nongoals">
-          <b>Non-goals:</b> POSIX compatibility · dynamic loading · ambient authority · network egress without an explicit grant · telemetry or phone-home of any kind · and any security argument that rests on obscurity.
+          <b>Non-goals:</b> POSIX compatibility · dynamic loading · ambient authority · treating the served model or any client as trusted · telemetry or phone-home of any kind · and any security argument that rests on obscurity.
         </p>
       </div>
     </div>
@@ -279,8 +285,8 @@
 
 <footer>
   <div class="wrap foot">
-    <div class="l"><span class="glyph" style="width:16px;height:16px"></span> BraiNIX — a capability-based, security-first microkernel.</div>
-    <a class="repo" href="https://github.com/jbrahy/BraiNIXOS">github.com/jbrahy/BraiNIXOS ↗</a>
+    <div class="l"><span class="glyph" style="width:16px;height:16px"></span> BraiNIX — a security-first microkernel that serves LLM inference securely.</div>
+    <a class="repo" href="https://github.com/jbrahy/BraiNIXOS">github.com/jbrahy/BraiNIX ↗</a>
   </div>
   <div class="wrap" style="margin-top:24px"><div class="meta">Structure over secrecy. Every claim falsifiable. The trusted set only ever shrinks.</div></div>
 </footer>
