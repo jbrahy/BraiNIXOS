@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "src/adt",
     "src/kernel",
     "src/bootloader",
     "src/bootloader-verify",
