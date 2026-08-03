@@ -108,7 +108,7 @@ Early, actively developed. BraiNIX pivoted from an internal-only hardened microk
 
 **Designed, not yet implemented:**
 - 📐 Multi-arch HAL — trait design landed ([`HAL.md`](docs/architecture/HAL.md)); **no backend extracted yet**. This gates all Apple Silicon work.
-- 📐 BSP v1 serving protocol — [spec landed](docs/architecture/BSP-v1-serving-protocol.md); server not built.
+- 📐 BSP v2 serving protocol — [spec landed](docs/architecture/BSP-v2-serving-protocol.md); server not built.
 
 **Not started:**
 - ⬜ Apple Silicon platform (ADT parser, boot stub, AIC, DART, RTKit/ANS2, PCIe, Ethernet).

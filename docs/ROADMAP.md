@@ -54,7 +54,7 @@ update, with no upstream remedy. These are accepted costs, not open questions.
 | P2-T1 | BSP v1 serving protocol spec — [`architecture/BSP-v1-serving-protocol.md`](architecture/BSP-v1-serving-protocol.md) — historical; **superseded by BSP v2** (decision #16), so P2-T1 is re-opened in Wave 2 | `670e072` |
 | X-T1 | Proof-coverage tracker — `tools/proof-coverage/` | `670e072` |
 | P2-T9 | swtpm measured boot + runtime TPM-presence gating (x86-64) | `c01d0ab` |
-| P6-T1 | Apple Silicon research memo — [`superpowers/specs/2026-07-08-apple-silicon-baremetal-research.md`](superpowers/specs/2026-07-08-apple-silicon-baremetal-research.md) | `670e072` |
+| P6-T1 | Apple Silicon research memo — [`archive/specs/2026-07-08-apple-silicon-baremetal-research.md`](archive/specs/2026-07-08-apple-silicon-baremetal-research.md) | `670e072` |
 
 **Wave 2 — IN PROGRESS.** Wave 2 is **this documentation gate first** — reconciling NORTH_STAR,
 THREAT_MODEL, SECURITY_INVARIANTS, BSP, and this file against the 2026-08-02 decisions — and **then two

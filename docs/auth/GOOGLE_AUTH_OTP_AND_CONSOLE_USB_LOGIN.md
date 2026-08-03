@@ -7,7 +7,7 @@
 >
 > - It describes an **operator login** path. The serving product authenticates *remote clients* to
 >   *sessions*, not humans to a root account — see
->   [`../architecture/BSP-v1-serving-protocol.md`](../architecture/BSP-v1-serving-protocol.md).
+>   [`../architecture/BSP-v2-serving-protocol.md`](../architecture/BSP-v2-serving-protocol.md).
 > - On the **primary platform** the early console is an unauthenticated debug UART that grants whoever
 >   holds the cable physical-access authority, and it must be **absent in production**
 >   ([`../operations/PLATFORM_SUPPORT_MATRIX.md`](../operations/PLATFORM_SUPPORT_MATRIX.md) §2.5).

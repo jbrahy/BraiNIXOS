@@ -1,14 +1,23 @@
-> # 📋 UNSCHEDULED — accurate design, not on the roadmap
+> # ⛔ SUPERSEDED — do not use as guidance
 >
-> **Reviewed 2026-08-02.** This spec describes a real design that **nothing is currently being built
-> against**. It is not scheduled in [`ROADMAP.md`](ROADMAP.md) and should not be treated as committed work.
+> **Superseded by [`architecture/BSP-v2-serving-protocol.md`](architecture/BSP-v2-serving-protocol.md)
+> on 2026-08-02**, specifically its **admin session type**.
 >
-> It also overlaps the inbound serving path, which *is* being built: see
-> [`architecture/BSP-v1-serving-protocol.md`](architecture/BSP-v1-serving-protocol.md). Where the two
-> disagree about how remote clients reach the system, **BSP v1 is authoritative** — it is the protocol the
-> product ships.
+> The owner decision of 2026-08-02 (`ROADMAP.md` decision #17) chose a fixed, enumerated verb set over a
+> shell, explicitly and on the record: administration is a second session *type* on the single
+> authenticated, capability-gated transport, gated by `CapAdmin`, exposing exactly six verbs —
+> enroll-key, revoke-key, load-weights, read-audit-log, restart-server, reboot. A general-purpose remote
+> shell is a **non-goal** in [`NORTH_STAR.md`](NORTH_STAR.md), because a shell that can do anything is
+> ambient authority under another name. The serial console is the break-glass path.
+>
+> **This design is not being built.** It is not a deferred item and not an unscheduled one; the question
+> it answers was answered differently. Capability numbering and the verb set are normative in
+> [`architecture/CAPABILITY_MODEL.md`](architecture/CAPABILITY_MODEL.md).
 >
 > Note also that the SSH server this spec assumes is **scheduled for deletion** at P2-T6.
+>
+> Retained unedited as a historical record of the design that was considered. See
+> [`DOCUMENTATION_MAP.md`](DOCUMENTATION_MAP.md).
 
 ---
 
