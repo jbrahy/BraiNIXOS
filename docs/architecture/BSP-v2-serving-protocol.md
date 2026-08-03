@@ -96,7 +96,7 @@ all three went stale.
 | `INV-AUTH-008` (auditable authority flow) | Enrollment, revocation, and every admin verb and denial are distinct attributable events (§10.4). |
 | `INV-BOOT-006` (runtime enrollment) | Credentials arrive over the admin channel (§10.4) or the serial console, and nowhere else. No credential is compiled in. |
 | `INV-BOOT-007` (ratchet) | Session key *n* derives from chain key *n*; the chain advances and chain key *n* is zeroized, as one operation, at the transition to `ESTABLISHED` (§6). |
-| `INV-BOOT-008` (break-glass) | `enroll-key` and `revoke-key` both refuse the break-glass credential's handle, unconditionally and non-configurably (§7.3, §10.4). |
+| `INV-BOOT-008` (break-glass) | The break-glass credential **never authenticates on this transport** — the network listener refuses it at selector match (§2.5, §12 row K5) — and `enroll-key` and `revoke-key` both refuse its handle, unconditionally and non-configurably (§7.3, §10.4). |
 | `INV-BUILD-004` (no secret in a build artifact) | v1's compile-time `CLIENT_ALLOWLIST` is deleted. The wire protocol has no compile-time secret of any kind. |
 | `INV-MEM` (W^X, fixed pools, no heap) | All sizes in §8 are `const`. Session pool, credential table, per-session prompt buffer, and record buffers are build-time-sized BSS. No handshake, request, or admin verb ever allocates. |
 | `INV-FAIL-003` (secure degradation) | Ratchet desynchronization denies the session and is recoverable only by re-enrollment or the serial console (§6.4). It never falls back to an un-ratcheted key. |
@@ -177,21 +177,31 @@ a decommissioned drive, or a backup is a total, retroactive loss of serving
 confidentiality. BSP cannot mitigate it. BSP can only avoid making it worse, and
 §6 is the mechanism that will.
 
-### 2.5 The break-glass credential
+### 2.5 The break-glass credential — serial only, never on this transport
 
-One admin credential carries the break-glass flag. It is provisioned over the
-serial console and only over the serial console (`INV-BOOT-008`), it authenticates
-network admin sessions like any other admin credential, and neither `enroll-key`
-nor `revoke-key` will touch it. It therefore cannot be revoked or replaced by a
-compromised admin session, which is exactly why it exists: physical presence wins,
-and the owner cannot be permanently locked out of the owner's own machine.
+One admin credential carries the break-glass flag. **Owner ruling, 2026-08-02: it
+authenticates over the serial transport and nowhere else.** The network listener
+this document governs MUST refuse it outright, before any other check that could
+depend on it (§12 row K5). It is provisioned over the serial console and only
+over the serial console (`INV-BOOT-008`), and neither `enroll-key` nor
+`revoke-key` will touch it, so it cannot be revoked or replaced by a compromised
+admin session. That is why it exists: physical presence wins, and the owner cannot
+be permanently locked out of the owner's own machine.
 
-Its costs, stated rather than softened: it is long-lived by construction, its
-disclosure is repairable only by physical presence, and **it does not ratchet**
-(§6.5) — so break-glass sessions have no forward secrecy even after the ratchet
-ships. A break-glass credential whose chain could desynchronize would be a
-recovery path that can itself fail, which is a remote self-destruct with extra
-steps.
+This is what `docs/NORTH_STAR.md` already says — "the serial console is the
+break-glass path when the network path is unusable or untrusted" — and what
+`INV-AUTH-009` already says: "the serial console — **not a network path** — is the
+break-glass channel." A protocol spec may not resolve a north-star silence by
+widening, and the earlier draft of this section did exactly that.
+
+The security reason, beyond the authority argument: under the at-rest ruling of
+§2.4 the credential store is plaintext on disk on the primary platform. A
+network-capable break-glass credential would therefore be a **permanent,
+by-definition-unrevocable remote administrative credential recoverable by disk
+theft** — the one credential an attacker most wants and the one the design
+deliberately refuses to make remotely usable. Its cost stays what it always was
+and is not softened: it is long-lived by construction, and its disclosure is
+repairable only by physical presence.
 
 ---
 
@@ -319,7 +329,7 @@ retries, and no variable-length field anywhere before the keys exist.
 | 6 | 2 | `reserved` | MUST equal `0x0000`. Not a negotiation field; a nonzero value is a REJECT, not an extension point |
 | 8 | 8 | `chain_counter` | `u64`, the chain position the client derived from (§6.3) |
 | 16 | 32 | `client_nonce` | 32 fresh random bytes; the selector salt and the client's freshness contribution |
-| 48 | 16 | `key_selector` | per-connection blinded credential selector (§5.3) |
+| 48 | 16 | `key_selector` | per-connection blinded credential selector, computed over `chain_counter` and `client_nonce` (§5.3) |
 
 **`ServerHello`** (server → client), length **`= 64`**:
 
@@ -374,8 +384,27 @@ admin credential even if a caller passes the wrong role later.
 
 ```
 PRK_id       = HKDF-Extract(salt = LABEL_ID_SALT, ikm = K_id)         # precomputable
-key_selector = HKDF-Expand(PRK_id, LABEL_SELECTOR || client_nonce, 16)
+key_selector = HKDF-Expand(PRK_id, LABEL_SELECTOR || chain_counter || client_nonce, 16)
 ```
+
+The `info` is `16 + 8 + 32 = 56` bytes and its length is a compile-time constant.
+
+**`chain_counter` is inside the selector, and that is not cosmetic.** It is what
+makes the counter unforgeable by anyone who does not hold `K_id`. Without it, a
+party who recorded one `ClientHello` could replay it with an arbitrary counter and
+force the server to walk up to `MAX_CHAIN_CATCHUP` chain advances per packet,
+before admission control had run — unauthenticated compute amplification bounded
+by nothing the attacker did not choose. With it, a modified counter simply fails
+to match any credential (§12 row K1), and the only counter a replayer can present
+is the one the legitimate client used. The consequence is worth stating: once the
+server has advanced past that recorded position, the replay costs **zero** chain
+advances, because row K3 rejects it on a comparison.
+
+Identification is still independent of chain *state*, which is what §2.2 requires:
+the server computes each candidate over the counter it received, not over its own
+position, so a desynchronized client — including one at a position the server can
+no longer reach — is still identified, and its failure is reported and audited
+rather than presenting as an unknown peer.
 
 The client computes `key_selector` and sends it. The server, on receipt, iterates
 **every** slot of its fixed credential table:
@@ -386,9 +415,11 @@ The client computes `key_selector` and sends it. The server, on receipt, iterate
   all `MAX_ENROLLED_KEYS` iterations regardless of when a match occurs;
 - empty slots hold a per-boot random `K_id` so their iteration is
   indistinguishable in work and timing from an occupied slot;
-- exactly one match ⇒ proceed with that credential. Zero matches ⇒ REJECT + drop.
-  Two matches ⇒ REJECT + drop (a 16-byte collision is a `2^-128`-scale event per
-  pair; treating it as an attack costs nothing and avoids an arbitrary choice).
+- exactly one match ⇒ proceed with that credential, unless its `flags` mark it
+  break-glass, which is an unconditional REJECT + drop on this transport (§2.5,
+  §12 row K5). Zero matches ⇒ REJECT + drop. Two matches ⇒ REJECT + drop (a
+  16-byte collision is a `2^-128`-scale event per pair; treating it as an attack
+  costs nothing and avoids an arbitrary choice).
 
 **Why this rather than a stable key id.** A stable public identifier would be
 simpler and would make lookup O(1). It would also put a constant on the wire that
@@ -460,13 +491,18 @@ Server side (the hostile-input side — this is the fuzz/Kani target):
                             credential table (§5.3, rows K1–K2)
                                    │ no match → REJECT+drop
                                           ▼
-                            resolve chain position from chain_counter
-                            into scratch, uncommitted (§6.3, rows K3–K4)
-                                   │ behind / too far → REJECT+drop
+                            break-glass? → REJECT+drop, always (row K5)
+                                          │
                                           ▼
                             acquire session slot from the fixed pool
                             (pool or per-credential limit full →
                              REJECT+drop, §12 rows S1–S2)
+                                          │
+                                          ▼
+                            resolve chain position from chain_counter
+                            into scratch, uncommitted (§6.3, rows K3–K4)
+                                   │ behind / too far → REJECT+drop
+                                            (release slot)
                                           │
                                           ▼
                             derive PRK_session, both confirms, K_c2s, K_s2c
@@ -480,8 +516,8 @@ Server side (the hostile-input side — this is the fuzz/Kani target):
                                           │             (release slot, zeroize,
                                           │              do NOT advance chain)
                                           ▼
-                            commit the ratchet: persist CK_{m+1} and
-                            counter m+1, zeroize CK_m (§6.2)
+                            commit the ratchet: monotonic compare-and-swap
+                            of (CK_{m+1}, m+1), zeroize CK_m (§6.2)
                                           │
                                           ▼
                             grant CapServe(this slot) or CapAdmin per
@@ -497,6 +533,16 @@ Client side is the mirror: derive the selector, send `ClientHello`; on
 `ServerHello`, derive `PRK_session` and compare `server_confirm` constant-time; on
 success advance its own chain (§6.3), send `ClientAuth`, and treat the session as
 live; on any mismatch abort without sending anything further.
+
+**The order of those steps is normative, and two placements are load-bearing.**
+The break-glass check sits immediately after the match, so no later step can be
+reached with that credential. Chain resolution sits **after** admission control,
+so the only unauthenticated work a peer can force before `MAX_SESSIONS_PER_CREDENTIAL`
+applies is the fixed selector scan; the up-to-`MAX_CHAIN_CATCHUP` advances happen
+only inside an admitted half-open slot. That reordering is a second bound, not the
+primary one — the primary defense against forced catch-up work is that
+`chain_counter` is bound into the selector (§5.3) and therefore cannot be chosen
+by anyone who does not hold the credential.
 
 **One shot, no negotiation, no retries.** BSP offers a single suite (HKDF-SHA256 /
 ChaCha20-Poly1305 / SHA-256) — there is no algorithm negotiation to downgrade, and
@@ -518,9 +564,12 @@ from it requires inverting HMAC-SHA256, and `K_id` is in any case not the enroll
 key — the enrolled bytes were destroyed at §5.2 and `K_id` is one of three
 independent expansions of them. Because `client_nonce` is in the `info`, the
 selector differs every connection, so it is not a stable identifier and does not
-link sessions. The server-side scan is constant work with constant-time
-comparison, so neither the matching slot's index nor the presence of a match is
-timing-visible.
+link sessions. Because `chain_counter` is also in the `info`, the selector doubles
+as an integrity check on the one pre-authentication field that would otherwise
+steer server-side work: a counter the sender did not compute the selector over
+matches no credential at all. The server-side scan is constant work with
+constant-time comparison, so neither the matching slot's index nor the presence of
+a match is timing-visible.
 
 **(b) The transcript is bound.** `TH_1` and `TH_2` are SHA-256 over the exact
 fixed-length byte images of the messages, covering every field of both: magic,
@@ -585,12 +634,14 @@ stored constant, so anyone who later obtains the credential store decrypts every
 session ever recorded from that machine. Once the ratchet ships, `CK_m` is
 zeroized after use and one-wayness of HKDF makes it unrecoverable from `CK_{m+1}`,
 so recorded traffic stops being retrospectively readable. The break-glass
-credential is permanently excluded from that improvement (§6.5).
+credential does not appear on this transport at all, so it neither gains nor loses
+anything here (§2.5, §6.5).
 
 ### 5.7 Residual observables, stated
 
-Neither of these is a confidentiality loss; both are real and are recorded rather
-than glossed.
+None of these is a confidentiality loss; all are real and are recorded rather than
+glossed. The last two are what a recorded `ClientHello` is still worth to an
+attacker after §5.3 removed its ability to forge the counter.
 
 - **A revocation oracle for an observer who already recorded a handshake.** The
   server answers a matched selector with `ServerHello` and an unmatched one with a
@@ -603,8 +654,22 @@ than glossed.
   someone who already observed that client.
 - **`chain_counter` is a metadata leak.** It is plaintext and monotonic, so an
   observer learns how many sessions a credential has completed and can partially
-  re-link sessions the blinded selector unlinked. §15 question 2 records the
-  alternative and why it was not taken.
+  re-link sessions the blinded selector unlinked. Binding it into the selector
+  (§5.3) makes it unforgeable; it does not make it confidential. §15 question 2
+  records the alternative and why it was not taken.
+- **Every inbound `ClientHello` costs the full selector scan, matched or not.** An
+  unauthenticated peer can spend one 64-byte packet to buy `MAX_ENROLLED_KEYS`
+  selector derivations, and no admission limit applies before the scan because the
+  scan is what identifies the credential the limit would be applied to. This is
+  inherent to blinded lookup, not a defect in it: the alternative that avoids it is
+  the stable public key id §5.3 rejected. What matters is that the multiplier is a
+  **fixed `const`** an attacker cannot steer — the chain-advance work that *could*
+  have been steered is closed by binding `chain_counter` into the selector and
+  bounded again by placing catch-up after admission (§5.5). Sizing
+  `MAX_ENROLLED_KEYS` is therefore a DoS decision as well as a capacity one, which
+  is why it appears in §15 question 7.
+- **A recorded `ClientHello` is a targeted denial of service against its owner**,
+  for as long as that credential stays enrolled. See §9.1.
 
 ---
 
@@ -640,6 +705,27 @@ by replaying a captured `ClientHello`, it could push the server's chain arbitrar
 far forward and lock the legitimate client out permanently, without ever holding
 the credential.
 
+**The commit is monotonic.** It is a compare-and-swap against the persisted
+position, not an unconditional store: a commit of `(CK_{m+1}, m+1)` takes effect
+only if `m + 1 > s_persisted`; otherwise the persisted state is left alone and the
+resolved scratch material is zeroized. This is required, not defensive. Two
+handshakes under one credential may be in flight simultaneously
+(`MAX_SESSIONS_PER_CREDENTIAL` permits two), they may have resolved from different
+scratch positions, and they may complete in either order. Without the
+compare-and-swap the later commit could move the persisted counter **backwards**
+and reinstate a chain key the server had already advanced past — a direct
+violation of `INV-BOOT-007`'s "No component retains a chain key it has advanced
+past." It is not remotely exploitable, because both commits require an
+authenticated peer holding the credential, but the invariant is not conditional on
+exploitability.
+
+A consequence worth naming rather than leaving to be discovered: two concurrent
+sessions under one credential may derive from the **same** chain position, so the
+chain is not a per-session uniqueness mechanism and was never claimed to be. Their
+session keys are still distinct, because `PRK_session` incorporates two fresh
+nonces (§9.2). Each session zeroizes its own scratch copy at teardown, whether or
+not its commit won.
+
 ### 6.3 Persisted counter state on both ends, and catch-up
 
 Both ends persist `(CK_n, n)`. The client sends `n` as `chain_counter` and derives
@@ -648,7 +734,7 @@ from `CK_n`. The server holds `(CK_s, s)` and compares:
 | Relation | Server action |
 |---|---|
 | `n == s` | Derive from `CK_s`. Normal case. |
-| `s < n ≤ s + MAX_CHAIN_CATCHUP` | Compute `CK_n` by `n − s` advances **in scratch**, uncommitted. On success at `ESTABLISHED`, persist `(CK_{n+1}, n+1)` and zeroize everything between. |
+| `s < n ≤ s + MAX_CHAIN_CATCHUP` | Compute `CK_n` by `n − s` advances **in scratch**, uncommitted. On success at `ESTABLISHED`, commit `(CK_{n+1}, n+1)` under the monotonic compare-and-swap of §6.2 and zeroize everything between. |
 | `n > s + MAX_CHAIN_CATCHUP` | REJECT + drop. Bounds both the work an unauthenticated peer can request and how far a forged counter could push a committed chain (it cannot push it at all — see §6.2). |
 | `n < s` | REJECT + drop. The chain is one-way; the server cannot go back. This is the desynchronization failure of §6.4. |
 
@@ -675,17 +761,18 @@ serial console and nowhere else. That is why the serial path is compiled in
 unconditionally and is not gated on any network state: a ratchet with no
 out-of-band repair path is a remote self-destruct.
 
-### 6.5 The break-glass credential does not ratchet
+### 6.5 The break-glass credential has no chain state on this transport
 
-Its `chain_counter` is fixed at `0` and its chain never advances; a `ClientHello`
-under the break-glass credential MUST carry `chain_counter == 0` and any other
-value is a REJECT. The reason is §6.4: the recovery path may not have a failure
-mode of its own. The cost is stated plainly — **break-glass sessions never have
-forward secrecy**, even after the ratchet ships, so a disclosed break-glass
-credential decrypts every recorded break-glass session for the life of the
-machine. Break-glass is a recovery path, not a routine administrative one, and its
-use should be rare enough that the exposure is small; that is a mitigation by
-operational discipline, which is the weakest kind, and it is named as such.
+The break-glass credential never authenticates a network session (§2.5), so the
+network listener never derives from its chain, never advances it, and can never
+desynchronize it. A `ClientHello` whose selector matches the break-glass record is
+refused before any chain resolution runs (§12 row K5). Whether the serial
+transport ratchets its own sessions is a property of that path and is out of scope
+for this document, which governs the network socket.
+
+This is the second reason the serial-only ruling is the right one: it removes the
+question §6.4 would otherwise force — whether the recovery path may itself have a
+desynchronization failure mode — instead of answering it with an exception.
 
 ---
 
@@ -743,8 +830,9 @@ Two hard limits bound it:
   six.
 - **Neither verb will touch the break-glass credential.** Both compare the target
   handle against the break-glass handle and refuse, unconditionally and
-  non-configurably (`INV-BOOT-008`). A compromised admin session cannot lock the
-  owner out.
+  non-configurably (`INV-BOOT-008`, §10.4). A compromised admin session cannot lock
+  the owner out — and, since the break-glass credential does not authenticate on
+  this transport at all (§2.5), a compromised admin session cannot *use* it either.
 
 ---
 
@@ -792,10 +880,23 @@ tunable, the *presence of a hard const bound on each* is not):
 plus `MAX_ENROLLED_KEYS × credential record`. No client input changes this figure
 (`INV-MEM`, `INV-SERVE-002`).
 
-**Bounded per-handshake work, also fixed at build time:** one `ClientHello`
-costs `MAX_ENROLLED_KEYS` selector derivations plus at most `MAX_CHAIN_CATCHUP`
-chain advances plus a fixed number of expansions — all `const`-bounded, none
-client-scalable beyond those two constants.
+**Bounded work, stated per attacker rather than per handshake** — the per-handshake
+form of this claim is true and misleading, because an attacker sends many
+handshakes:
+
+- **Per inbound `ClientHello`, authenticated or not:** `MAX_ENROLLED_KEYS` selector
+  derivations. This is the floor, it applies to every packet including garbage, and
+  it is the standing cost of blinded lookup (§5.3, §5.7).
+- **Chain advances: zero, unless the peer holds the credential.** `chain_counter`
+  is covered by the selector (§5.3), so a counter the sender did not derive over
+  matches nothing and never reaches chain resolution; and resolution sits behind
+  admission control (§5.5), so even a legitimate counter's catch-up work is capped
+  at `MAX_SESSIONS_PER_CREDENTIAL × MAX_CHAIN_CATCHUP` concurrently.
+- **Everything downstream of admission** — key derivation, `ServerHello`, the
+  session slot — is bounded by `MAX_SESSIONS` and `MAX_SESSIONS_PER_CREDENTIAL`.
+
+So the only quantity an unauthenticated attacker can scale with packet rate is the
+selector scan, and its multiplier is a `const` it cannot steer.
 
 ---
 
@@ -817,6 +918,25 @@ authenticated, so a party replaying a captured `ClientHello` can hold a slot unt
 half-open handshakes precisely so this cannot consume the pool
 (`INV-SERVE-003`). An admin credential additionally cannot exceed
 `MAX_ADMIN_SESSIONS`.
+
+**The bound protects every other client and does not protect the victim.** Stated
+in full, because the previous sentence is the kind of true statement that reads as
+a closed issue: with `MAX_SESSIONS_PER_CREDENTIAL = 2`, an attacker replaying one
+captured `ClientHello` twice occupies **both** of that credential's admission
+slots, refreshes them every `HS_TIMEOUT`, and thereby denies that one client
+service **indefinitely** — at a cost of two 64-byte packets per timeout period,
+with no credential and no possibility of authenticating. Every other client is
+unaffected, and the fixed pool is never exhausted; the isolation property holds
+exactly as designed, and the availability of one tenant does not.
+
+The remedy is revocation and re-enrollment: a new credential has a new `K_id`, so
+the captured `ClientHello`'s selector matches nothing and the recording becomes
+inert. That is a manual, `CapAdmin`-gated repair for an attack that costs the
+attacker almost nothing, which is an unfavourable exchange and is named as one
+rather than presented as a mitigation. A per-source-address admission limit would
+blunt it, but BSP is specified above the transport's addressing and cannot see the
+source; that makes it a `servd` policy question rather than a wire-protocol one.
+Recorded here so it is not mistaken for an oversight — see §15 question 7.
 
 ### 9.2 Establish
 
@@ -921,12 +1041,22 @@ capability (`INV-AUTH-009`).
 
 | Tag | Verb | Body | Rules |
 |--:|---|---|---|
-| `0x11` | `EnrollKey` | `request_id[4]`, `role[1]`, `key_material[32]` | `role ∈ {0x01 client, 0x02 admin}` — any other value REJECT. Server runs §5.2, persists the record, zeroizes `key_material` and `PRK_enroll`, and replies `KeyEnrolled{handle}`. Credential table full ⇒ `Error{ERR_NO_CAPACITY}`. Enrolling a duplicate `handle` ⇒ `Error{ERR_DUPLICATE}` (the caller re-sent the same key material) |
+| `0x11` | `EnrollKey` | `request_id[4]`, `role[1]`, `key_material[32]` | `role ∈ {0x01 client, 0x02 admin}` — any other value REJECT. Server runs §5.2 and, **before persisting anything**, compares the derived `handle` against the break-glass handle: equal ⇒ `Error{ERR_FORBIDDEN}`, unconditionally and non-configurably (`INV-BOOT-008`, §12 row A4). Otherwise persists the record, zeroizes `key_material` and `PRK_enroll`, and replies `KeyEnrolled{handle}`. Credential table full ⇒ `Error{ERR_NO_CAPACITY}`. Duplicate `handle` ⇒ `Error{ERR_DUPLICATE}` (the caller re-sent the same key material) |
 | `0x12` | `RevokeKey` | `request_id[4]`, `handle[16]` | Handle MUST exist ⇒ else `Error{ERR_NO_SUCH_KEY}`. Handle MUST NOT be the break-glass handle ⇒ else `Error{ERR_FORBIDDEN}`, unconditionally and non-configurably (`INV-BOOT-008`). On success the record's `K_id` and `CK_n` are zeroized and the slot is returned to the fixed table; live sessions authenticated by that credential are torn down (§9.4) |
 | `0x13` | `LoadWeights` | `request_id[4]`, `weights_digest[32]` | Activates the weight blob whose measured digest is exactly this value; the digest is verified before first use (`INV-MODEL-002`) and a mismatch or absent blob ⇒ `Error{ERR_NO_SUCH_WEIGHTS}`. **The blob is not carried over BSP** — this verb names a digest, never a path and never a byte stream; see §15 question 4 |
 | `0x14` | `ReadAuditLog` | `request_id[4]`, `cursor[8]`, `max_records[2]` | `max_records ≤ MAX_AUDIT_RECORDS` — else `Error{ERR_LIMIT}`. Read-only; returns `AuditChunk` records and a next cursor. Reading grants no authority (`INV-SERVE-005`) |
 | `0x15` | `RestartServer` | `request_id[4]`, `target[1]` | `target` is an enumerated server identity (`servd`, `inferd`, `auditd`, `gpud`), not a name and not a path; an unknown value ⇒ `Error{ERR_BAD_TARGET}`. Restart re-launches with the target's existing frozen manifest and mints nothing (`INV-FAIL-002`) |
 | `0x16` | `Reboot` | `request_id[4]` | Reboots the machine. The admin session is torn down before the reboot proceeds |
+
+**How `EnrollKey` can target the break-glass identity at all**, since the caller
+supplies key material and not a handle: `handle = Expand(PRK_enroll,
+LABEL_KEY_HANDLE || role, 16)` is a deterministic function of the material, so the
+only way to produce the break-glass handle is to **re-supply the break-glass key
+material itself** — which a compromised admin session could do if the break-glass
+key ever leaked, precisely in order to re-enroll it under a different `role` or to
+displace the record. The refusal is therefore not dead code, and §12 row A4's
+`EnrollKey` clause is reachable. `RevokeKey` reaches it the obvious way, by naming
+the handle directly.
 
 There is deliberately **no `rotate` verb** (§7.3), no `set-config`, no
 `read-file`, no `write-file`, no `exec`, and no verb that adds, removes, or widens
@@ -1029,7 +1159,7 @@ Kani/fuzz assertion target.
 | K2 | `key_selector` matches two credentials | scan | Drop |
 | K3 | `chain_counter` < server chain position | §6.3 comparison | Drop (desynchronized; recovery is §6.4, never a fallback key) |
 | K4 | `chain_counter` > position + `MAX_CHAIN_CATCHUP` | §6.3 bound | Drop |
-| K5 | break-glass credential with `chain_counter` ≠ 0 | §6.5 | Drop |
+| K5 | selector matches the **break-glass** credential | `flags` bit 0, checked at match (§2.5) | Drop, unconditionally and before any chain resolution. The break-glass credential authenticates on the serial transport only; on this listener it is never accepted, whatever else is well-formed |
 | S1 | no free session slot | pool acquire | Drop (server at capacity; existing sessions unaffected — `INV-SERVE-001`) |
 | S2 | credential already at `MAX_SESSIONS_PER_CREDENTIAL`, or admin at `MAX_ADMIN_SESSIONS` | admission check (§9.1) | Drop (`INV-SERVE-003`) |
 | R1 | AEAD `enc_length` decodes `< 2` or `> 35000` | record-layer bound | Drop |
@@ -1099,9 +1229,12 @@ clients:
   4. teardown from every non-`FREE` state returns the slot and zeroizes keys, with
      no slot leak and no chain commit;
   5. the chain is committed on exactly one path — the `ESTABLISHED` transition of
-     §6.2 — and on no other (`INV-BOOT-007`);
-  6. `enroll-key` and `revoke-key` cannot reach the break-glass record
-     (`INV-BOOT-008`);
+     §6.2 — and on no other; **and that commit is monotonic**: for all
+     interleavings of up to `MAX_SESSIONS_PER_CREDENTIAL` concurrent handshakes on
+     one credential, the persisted counter never decreases and no chain key the
+     server has advanced past is ever reinstated (`INV-BOOT-007`);
+  6. `enroll-key` and `revoke-key` cannot reach the break-glass record, and the
+     network listener never establishes a session under it (`INV-BOOT-008`, §2.5);
   7. no admin verb path grants, derives, or widens a capability
      (`INV-AUTH-009`).
 - **Property tests:**
@@ -1179,16 +1312,15 @@ line above is struck.
    but it lets a compromised admin persist past revocation of the credential it
    used. The stricter alternative is to allow only `role = client` over the network
    and require serial provisioning for every admin credential. Confirm.
-6. **Break-glass over the network.** This spec reads THREAT_MODEL and
-   `INV-BOOT-008` as meaning the break-glass credential is *provisioned* only over
-   serial but *authenticates* network admin sessions like any other admin
-   credential — which is what makes its disclosure harmful, its non-revocability
-   protective, and §2.5 coherent. If the intent was instead that break-glass
-   authenticates **only** a serial-attached session, §2.5, §6.5, and row K5 change
-   and the credential becomes far less exposed. Confirm the reading.
-7. **`MAX_SESSIONS` = 8, `MAX_ENROLLED_KEYS` = 32, `MAX_PROMPT_BYTES` = 16 KiB.**
-   These set the fixed inbound memory budget and the per-handshake work bound. Need
-   the real boot memory budget to finalize.
+6. *(Answered 2026-08-02 — break-glass is serial only; see §2.5. Retained as a
+   numbered placeholder so §-references to later questions do not shift.)*
+7. **`MAX_SESSIONS` = 8, `MAX_ENROLLED_KEYS` = 32, `MAX_SESSIONS_PER_CREDENTIAL`
+   = 2, `MAX_PROMPT_BYTES` = 16 KiB.** These set the fixed inbound memory budget,
+   the standing per-packet selector-scan cost (§5.7), and the targeted-DoS exposure
+   of §9.1 — raising `MAX_SESSIONS_PER_CREDENTIAL` makes a replay lockout costlier
+   to mount and a legitimate client costlier to serve. Need the real boot memory
+   budget to finalize, and a decision on whether `servd` adds a per-source-address
+   admission limit below BSP.
 8. **Rekeying within a session.** v2, like v1, tears down at `MAX_RECORD_SEQ`
    rather than rekeying. With the ratchet, an in-session rekey would be a natural
    chain step; confirm no long-lived session needs one.
