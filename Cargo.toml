@@ -4,6 +4,7 @@ members = [
     "src/adt-verify",
     "src/bxw1",
     "src/tensor",
+    "src/transformer",
     "src/tokenizer",
     "src/kernel",
     "src/bootloader",

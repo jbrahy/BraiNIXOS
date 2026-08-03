@@ -146,6 +146,13 @@ name = "brainix-tokenizer"
 version = "0.1.0"
 
 [[package]]
+name = "brainix-transformer"
+version = "0.1.0"
+dependencies = [
+ "brainix-tensor",
+]
+
+[[package]]
 name = "brainix-transportd"
 version = "0.1.0"
 dependencies = [
