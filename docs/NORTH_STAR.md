@@ -8,12 +8,18 @@ with it, this file wins and the other file is drift to be fixed. See DOCUMENTATI
 
 ## The destination
 
+**What this project is.** BraiNIX is a craft project. The work is the point, and the artifact is held to
+product-grade rigor because that is the only honest way to measure the craft. It is not a market claim,
+and nothing in this document should be read as one. Where this file demands proof, speed, or
+reproducibility, it is setting an engineering bar for the builder — not describing a business.
+
 BraiNIX is a minimal, capability-based, security-first microkernel whose purpose is to **serve LLM
 inference securely to remote network clients**. It is written end to end in Rust, and its dependency
 closure is itself: zero external code, with every byte that runs — from boot stub through kernel,
 network stack, inference engine, device drivers, libraries, and crypto primitives — in-tree, audited,
 and reproducibly built from source the project owns. The external crates still vendored today are
-tracked debt against this rule, not exceptions to it.
+tracked debt against this rule, not exceptions to it — with one permanent exception, the Ed25519
+release-signature verification stack, named and justified below.
 
 The security invariants are the product, not an obstacle to it. "Secure" is the word that separates
 BraiNIX from a commodity inference server: the same capability model, W^X memory discipline, minimal
@@ -42,9 +48,8 @@ transformer — are written once and are not permitted to acquire platform assum
 ## Performance is a goal, not a leftover
 
 **On the primary platform, BraiNIX serves as fast as the hardware allows.** Owner decision, 2026-08-02.
-The reference machine is bought and sized for inference, and a secure inference server nobody can afford
-to use has not delivered its security to anyone. Throughput is a product requirement, ranked below the
-invariants and above everything else.
+The reference machine was bought and sized for inference, and building it slow would be building it
+wrong. Throughput is a craft standard, ranked below the invariants and above everything else.
 
 This is a deliberate strengthening of the tradeoff rule below, which previously named throughput as a
 thing principles beat. Principles still beat it — but "we did not optimize because security" is no longer
@@ -92,12 +97,15 @@ The honest technical picture, so expectations match physics:
 
 - For **single-stream decode**, the GPU shares the same unified memory bus as the CPU. It does not raise
   the bandwidth-bound ceiling; the gain is real but bounded, and quantization matters more.
-- For **prefill** (compute-bound) and for **serving multiple clients concurrently**, the GPU is a large
-  win — and concurrency is precisely what a serving product needs. This is where the investment pays.
+- The GPU's payoff is **prefill acceleration plus time-sliced multi-client serving**. Cross-tenant
+  batching is forbidden by the tenant mapping policy below, so clients take turns rather than share a
+  batch: each turn is faster, but they are still turns. Single-stream decode stays bandwidth-bound and
+  gains little. This is **a smaller win than this document previously claimed** — it said the GPU was a
+  large win for concurrent serving, and that claim assumed batching that the isolation rules do not allow.
 - The cost is the **single largest reverse-engineering effort on the platform**, larger than the entire
   storage-and-network driver chain, and it must be written clean-room from published documentation.
 
-### TCB-AS/GPU — pending exception, requires sign-off
+### TCB-AS/GPU — named exception, conditionally signed
 
 Running AGX has a security consequence that the CPU-only design did not have, and it is recorded here
 because it touches a hard line rather than merely a schedule.
@@ -114,16 +122,39 @@ driver cannot widen (INV-GPU, `INV-DEV-006`), every DART instance fronting the G
 firmware is treated as hostile: its completion records and any data it writes back are parsed with the
 same fail-closed discipline as network bytes (`INV-PARSE-001`).
 
-**This exception is not yet signed.** Until it is, AGX work may proceed on design and on the DART
-confinement that must precede it, but no build ships with the GPU enabled. INV-GPU is no longer deferred
-on the primary platform; it is the invariant that makes this exception survivable, and it must be
-enforced and proven *before* firmware is loaded, not after.
+**Tenant mapping policy.** Model weights are mapped into the GPU's DART window **read-only and
+permanently** — they are not client data and there is nothing to unmap between sessions. KV cache is
+mapped **strictly per session**: mapped on session entry, unmapped and flushed on exit, and **never two
+tenants resident simultaneously**. The GPU time-slices between clients; cross-tenant batching is
+forbidden, whatever it would be worth. The consequence is that **INV-SERVE is preserved intact and needs
+no exception** — isolation on the GPU is the same isolation as everywhere else, paid for in throughput
+rather than in invariants.
+
+**Conditionally signed off by the owner, 2026-08-02.** The exception is in force now, so AGX design and
+implementation work may proceed. It is conditional: five preconditions must all be green **before GPU
+firmware is ever loaded**, and they are the acceptance criteria for AS-5-T0.
+
+1. Every GPU-fronting DART instance defaults to deny-all.
+2. A Kani proof on the **DART backend / HAL IOMMU trait** that its API surface admits no widening
+   operation — proving that no consumer, `gpud` included, can widen its own DMA window (`INV-DEV-006`).
+   The proof belongs to the confinement, not to the driver.
+3. GPU completion records are fuzzed and Kani-checked as hostile input (`INV-PARSE-001`).
+4. The tenant mapping policy above is enforced: weights read-only and permanent, KV cache per session,
+   never two tenants resident.
+5. No iBoot-locked DART on the GPU path — or, if one exists, its locked semantics are honestly
+   represented in the HAL trait rather than papered over.
+
+**If any precondition proves unsatisfiable on real hardware, this exception self-voids and AS-5 stops.**
+That is the correct failure mode, not an obstacle to route around. Until all five are green, no build
+ships with the GPU enabled. INV-GPU is no longer deferred on the primary platform; it is the invariant
+that makes this exception survivable, and it must be enforced and proven *before* firmware is loaded,
+not after.
 
 ## First principles
 
 These decide every tradeoff. When they conflict with convenience, the principle wins unless the owner
 signs off otherwise in writing. Throughput is not convenience: see *Performance is a goal* above — it is
-a product requirement that ranks below the invariants and above everything else.
+a craft standard that ranks below the invariants and above everything else.
 
 - Least authority. Nothing holds a capability it does not need, and no capability is ambient. Authority
   is named, granted, and revocable. A remote client is granted only its own session.
@@ -209,14 +240,55 @@ this target by components we cannot remove, audit, or replace. A macOS stub inst
 for the paired recoveryOS and firmware volumes; "bare metal" here means "our kernel is the OS," not
 "Apple software is absent." Enumerated in THREAT_MODEL.md.
 
+### Named crypto exception — Ed25519 release-signature verification
+
+**Signed off by the owner, 2026-08-02.** Recorded here rather than tracked as debt because it is
+permanent and deliberate: a named hole in "every byte that runs is in-tree," not something a later phase
+pays off.
+
+The serving transport needs no asymmetric crypto — it uses pre-shared per-client keys, HKDF-SHA256
+session-key derivation, and ChaCha20-Poly1305 records, and all four of those primitives are in-tree and
+constant-time by construction. INV-BOOT's release signature is the different case. Verifying an Ed25519
+signature means computing `[8][s]B = [8]R + [8][k]A` over edwards25519, which requires decompressing a
+point by modular square root. That is curve25519 field arithmetic, and there is no formulation of the
+check that avoids it.
+
+The verification stack — `ed25519-dalek`, `curve25519-dalek`, `fiat-crypto`, `subtle` — therefore
+**stays vendored, verify-only, permanently.** All signing paths go: once the outbound SSH client is
+removed, nothing in tree holds a private key or signs anything.
+
+The rationale is correctness, not side channels. No secret enters verification, so there is no
+side-channel argument for owning this code. There is a strong argument against hand-rolling it: a
+point-decompression bug means accepting **forged release signatures**, and `fiat-crypto`'s field
+arithmetic is machine-verified against a formal specification — a stronger correctness claim than this
+project could produce by hand for the same effort. Reimplementing it would *lower* assurance, and "every
+claim is falsifiable" forbids trading a machine-checked property for an unchecked one to satisfy a
+different rule.
+
+The cost, stated plainly: **wire compatibility with stock OpenSSH clients is forfeited.** OpenSSH has no
+pre-shared-key mode, and the one key exchange that avoids curve arithmetic —
+`diffie-hellman-group14-sha256` — requires constant-time bignum modular exponentiation, a harder
+assurance problem than curve25519. Clients speak the BSP protocol or they do not connect.
+
 ## What advancing the goal means
 
 - The dependency closure shrinks toward itself. Removing an external crate advances the goal. Adding one
   is anti-goal — the inference engine, the serving protocol, and the device drivers are written in-tree,
-  not vendored. Third-party reverse-engineering work (notably Asahi Linux) is **reference-only**: we
-  read published documentation and reimplement from understanding; we do not copy code, under any
-  license. Where only source documents a behavior, one person writes a specification and a different
-  session implements from it.
+  not vendored. The crypto primitives are the concrete case: the in-tree set is **SHA-256, HKDF,
+  ChaCha20, and Poly1305**, reimplemented from their specifications, which deletes `sha2` and `chacha20`.
+  Third-party reverse-engineering work (notably Asahi Linux) is **reference-only**: we read published
+  documentation and reimplement from understanding; we do not copy code, under any license. Where only
+  source documents a behavior, a **two-role clean room is enforced** — a procedure, not a good intention:
+  - A **spec author** role may read the reverse-engineered source. It emits nothing but fact tables —
+    register offsets, struct field layouts, sequence diagrams, state machines — into
+    `docs/platform-specs/`. Every spec file carries a provenance header naming its sources and a
+    **firmware-version field**, because the AGX firmware ABI is versioned per macOS release and a fact
+    table with no version recorded is a fact table about an unknown machine.
+  - An **implementer** role is denied access to that source and works only from the spec file.
+  - The honest limit, stated rather than glossed: this wall protects **code provenance, not knowledge
+    provenance**. It makes copying impossible and the derivation auditable; it does not make the
+    implementer's understanding independent of the source that produced the spec. We claim the first and
+    do not claim the second.
 - New code lands behind an invariant. A feature that cannot be expressed as, or checked against, the
   invariants above is not ready.
 - The served model earns its resources by staying confined. Give it all available compute and reserved
@@ -245,8 +317,19 @@ for the paired recoveryOS and firmware volumes; "bare metal" here means "our ker
 - No dynamic kernel heap. Fixed-size pool allocators only. "Give all resources to the LLM" is satisfied
   by large fixed reserved regions for weights and KV-cache, never by adding an allocator.
 - No new external crate dependencies. The standing job is to remove the ones still present (multiboot2,
-  sha2, chacha20, ed25519-dalek, x86_64, bitflags, log, uefi-raw, uguid, ptr_meta), not add more. The
+  sha2, chacha20, x86_64, bitflags, log, uefi-raw, uguid, ptr_meta), not add more. The in-tree crypto set
+  is SHA-256, HKDF, ChaCha20, and Poly1305, which deletes `sha2` and `chacha20`. The Ed25519
+  *verification* stack is the one family that stays, under the named crypto exception above. The
   inference engine, the device drivers, and every Apple Silicon platform component are in-tree.
+- **No secret ever enters a build artifact.** Client and admin keys are enrolled at runtime and persisted
+  by the kernel's credential store; none is ever compiled in. Session keys come from a symmetric HKDF
+  ratchet — session key *n* is derived from chain key *n*, the chain then advances and the old key is
+  deleted — which buys forward secrecy from symmetric primitives alone. The break-glass admin key is
+  provisioned over the serial console and is **never rotatable over the network**, so a compromised admin
+  session cannot lock the owner out. The reason is the reproducible-build clause of INV-BOOT: a
+  compile-time secret means either the published payload contains the secret or the deployed payload
+  differs from the published one, and reproducibility that describes an image nobody runs is not
+  reproducibility.
 - No copied code from reverse-engineering projects, regardless of their license. Documentation in,
   clean-room implementation out.
 - The auditor never holds spawn, kernel-mutation, or network capability. The served model never reads
@@ -254,20 +337,29 @@ for the paired recoveryOS and firmware volumes; "bare metal" here means "our ker
   capability-mediated serving channel.
 - No path to security depends on attacker ignorance.
 - **Degrading a named invariant on any platform requires a written, named exception with owner sign-off,
-  recorded in this document.** INV-BOOT/AS and TCB-AS are the only such exceptions in force.
+  recorded in this document.** INV-BOOT/AS, TCB-AS, the conditionally signed TCB-AS/GPU, and the named
+  Ed25519 verification exception are the only such exceptions in force.
 
 ## Non-goals
 
-POSIX compatibility, dynamic loading, ambient authority, telemetry or phone-home of any kind, treating
-the served model or any remote client as trusted, and any security argument that rests on obscurity.
+POSIX compatibility, dynamic loading, ambient authority, a general-purpose remote shell, telemetry or
+phone-home of any kind, treating the served model or any remote client as trusted, and any security
+argument that rests on obscurity.
 
 Platform-specific non-goals: the **Secure Enclave** as a security component, and any attempt to present
 Apple Silicon as an attested platform.
 
 Apple's **AGX GPU is no longer a non-goal** (owner ruling, 2026-08-02) — see *The GPU is in scope* above.
-It remains the largest single body of work on the platform and carries the pending TCB-AS/GPU exception.
+It remains the largest single body of work on the platform and carries the conditionally signed
+TCB-AS/GPU exception.
 
 Performance is explicitly **not** a non-goal. Slowness requires a named invariant as its justification.
 
 Inbound serving is a goal; it is delivered through a single authenticated, capability-gated path, not by
-relaxing the confinement rules above.
+relaxing the confinement rules above. That one path carries two session types, distinguished by
+capability and by nothing else. **Client sessions** hold `CapServe` and can only run inference. **Admin
+sessions** hold `CapAdmin` and can only invoke a fixed, enumerated verb set — enroll-key, revoke-key,
+load-weights, read-audit-log, restart-server, reboot. Administration is explicitly **not a
+general-purpose shell**: a shell that can do anything is ambient authority under another name, which is
+exactly what the capability model exists to forbid. The serial console is the break-glass path when the
+network path is unusable or untrusted.
