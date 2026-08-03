@@ -2,6 +2,7 @@
 members = [
     "src/adt",
     "src/adt-verify",
+    "src/bsp",
     "src/bxw1",
     "src/tensor",
     "src/transformer",
