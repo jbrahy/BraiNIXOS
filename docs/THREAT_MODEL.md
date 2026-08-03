@@ -60,7 +60,6 @@ In the TCB, where a single defect can break security:
   permanently and verify-only under the named crypto exception in NORTH_STAR.md.
 - The serving transport's cryptographic primitives — **SHA-256, HKDF, ChaCha20, Poly1305** — which are
   specified to be in-tree; `sha2` and `chacha20` are still vendored until that reimplementation lands.
-- `servd`, for INV-SERVE and for nothing else — see below.
 - The in-tree model weights of the served model and the auditor.
 - **x86-64 only:** the TPM 2.0, and the UEFI Secure Boot and measured-boot chain.
 - **Apple Silicon only (TCB-AS, unavoidable):** **SecureROM**, **iBoot1**, **iBoot2**, and **sepOS**.
@@ -78,22 +77,10 @@ Kani and Prusti cannot be produced for code we do not own, so its Full-tier row 
 `docs/security/SECURITY_INVARIANTS.md` §16 names those two artifacts as missing. `sha2` and `chacha20` are
 the opposite case: vendored today, specified to be reimplemented in-tree, and tracked debt until they are.
 
-### `servd` is in the TCB for INV-SERVE and nowhere else
-
-"Where a single defect can break security" has to be read per-invariant, or the enumeration is wrong in
-both directions. `servd` is an ordinary userspace server holding no ambient authority, and a defect in it
-cannot violate INV-AUTH, INV-MEM, INV-IPC, or INV-BOOT — the kernel does not trust it and nothing it says
-makes the kernel trust it. But it terminates the transport, holds the session keys, and **mints every
-per-session capability**, so for the one invariant it mints against, the capability model does not contain
-it: a single defect in `servd` reaches every tenant at once and no component above it would notice. That
-is why `docs/security/SECURITY_INVARIANTS.md` §16 assigns it **Full** proof tier alongside the kernel
-rather than the Reduced tier its userspace address space would otherwise suggest. Listing it under
-"assumed hostile" without that qualification would have understated it.
-
-The credential store is the same shape from the other side. It is in-kernel, so it inherits the kernel's
-trust and the kernel's proof tier by residence, and it holds the secret that authenticates every client.
-It is named separately above because "the kernel" is too coarse a label for the one component whose
-disclosure is retroactive.
+The credential store is not a new member of the trusted set — it is in-kernel, so it was always inside
+"the kernel and the boot stub." It is named separately because that label is too coarse for the one
+component whose disclosure is retroactive: it holds the secret that authenticates every client, and its
+at-rest exposure is modelled below.
 
 ### TCB-AS: the components we cannot remove
 
@@ -120,8 +107,12 @@ channel. The model is central to the product and central to nothing in the TCB's
 Outside the TCB, assumed hostile:
 
 - Every remote client, every inbound byte, every prompt, and every token the served model emits.
-- Every userspace process, including any operator console. `servd` is the single qualified case above:
-  hostile to the kernel, trusted for INV-SERVE.
+- Every userspace process, including the serving front end and any operator console. `servd` is outside
+  the TCB and stays there: it terminates the transport, holds session keys, and mints every per-session
+  capability, so a defect in it crosses all tenants at once — which is why
+  `docs/security/SECURITY_INVARIANTS.md` §16 puts it at **Full** proof tier. That is the alternative to
+  trusting it, not evidence that we do. Proof tier tracks blast radius, not TCB residency; §16 assigns
+  Full to parsers living inside Reduced-tier drivers for the same reason.
 - Every disk byte, including model-weight blobs and the session/log store.
 - **Every byte of firmware-supplied data on Apple Silicon** — the ADT, boot-args, and any structure iBoot
   hands us. Firmware we do not control gets exactly the treatment network bytes get.
@@ -151,7 +142,8 @@ confused-deputy patterns the synchronous model forecloses.
 - *x86-64 (attested):* published PCR predictions matched against attested values, plus a reproducible
   build any third party can reproduce bit for bit. If violated: an attacker can ship or boot an image
   that does not match its attestation; measured boot is what makes that detectable rather than silent.
-  Sealing is available here, and the credential store uses it — see *The serving transport* below.
+  Sealing is available here, and the credential store is specified to use it — not yet implemented; see
+  *The serving transport* below.
 - *Apple Silicon (primary, degraded):* reproducible build and Ed25519 release signature hold unchanged;
   payload-at-rest integrity is enforced by iBoot2 against the device-local policy. Measurement,
   attestation, and sealing are **structurally unavailable**. If violated: **there is no detection
@@ -289,8 +281,12 @@ ratchet with no out-of-band repair path is a remote self-destruct.
 **The credential store at rest, split by platform.** Owner ruling, 2026-08-02: at-rest protection tracks
 the platform's attestation capability, rather than inventing a second degradation pattern.
 
-- *x86-64 (attested):* the credential store is **TPM-sealed**. INV-BOOT holds in full there, so there is a
-  boot state worth sealing against, and a stolen disk does not yield the keys.
+- *x86-64 (attested):* the credential store is **specified to be TPM-sealed**. INV-BOOT holds in full
+  there, so there is a boot state worth sealing against, and once sealing ships a stolen disk does not
+  yield the keys. **It has not shipped.** `src/kernel/src/boot/credential_store.rs` persists to virtio-blk
+  and seals nothing, and `INV-BOOT-006` does not yet require sealing, so x86-64 today has the same
+  plaintext-at-rest exposure as the primary platform — with a route out that the primary platform does not
+  have. Stating it as done would be asserting a control that does not exist.
 - *Apple Silicon (primary):* the credential store is **plaintext at rest**, recorded as a clause of the
   existing INV-BOOT/AS exception. Sealing means binding a secret to a measured boot state, and the primary
   platform has neither the measurement nor the hardware to bind against. iBoot2's device-local policy
@@ -301,7 +297,8 @@ and admin pre-shared key.** Combined with the forward-secrecy gap above, physica
 machine — or of a decommissioned drive, or of a backup of its storage — retroactively decrypts every
 session ever recorded from it. This ranks with the absence of remote attestation as an unmitigable cost of
 the primary-platform decision, and it is the same cost in a second place: the platform cannot bind a
-secret to a state it cannot measure. Deployments that cannot accept it run x86-64.
+secret to a state it cannot measure. Deployments that cannot accept it run x86-64 — and must wait for
+sealing to ship there, because until it does, x86-64 differs only in having a fix available.
 
 **The admin channel's blast radius.** Administration is a second session *type* on the same authenticated
 transport, gated by `CapAdmin` and exposing a fixed, enumerated verb set — enroll-key, revoke-key,
@@ -400,7 +397,9 @@ socket**, serving one or more remote clients whose sessions are mutually isolate
    every client and admin pre-shared key; until the HKDF ratchet ships there is no forward secrecy, so
    those keys also decrypt every session an attacker recorded earlier. Physical possession of the machine,
    a decommissioned drive, or a backup is therefore a total, retroactive loss of serving confidentiality.
-   On x86-64 the store is TPM-sealed and this entry does not apply. See *The serving transport* above.
+   On x86-64 sealing is specified but **not yet implemented**, so the entry applies there too today; the
+   difference is that x86-64 can close it and the primary platform cannot. See *The serving transport*
+   above.
 3. **Hostile remote clients and the inbound protocol.** The connection/auth/request path parses
    attacker-controlled bytes reachable from the network. It must be `#![no_std]`, fuzzed, and
    Kani-checked, fail-closed on any malformed length/offset/type tag, and never grow a pool from
