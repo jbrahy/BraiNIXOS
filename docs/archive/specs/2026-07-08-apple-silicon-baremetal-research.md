@@ -7,7 +7,7 @@
 >
 > | This memo said | Now |
 > |---|---|
-> | Apple Silicon **deferred / out of active scope** | **Primary platform** — Mac mini M2 (`Mac14,3`, `T8112`, 32 GB) |
+> | Apple Silicon **deferred / out of active scope** | **Primary platform** — Mac mini **M2 Pro** (`Mac14,12`, SoC `T6020`, 32 GB unified memory) |
 > | AS-4 (end-to-end serving on M-series) **NO-GO** | **In scope** — the MVP exit criterion |
 > | "must never block the x86-64 MVP" (§8) | x86-64 is now the **secondary**, attested platform |
 > | INV-BOOT/AS "must be surfaced to the owner before any implementation phase is funded" (risk 2) | **Surfaced and signed off** — see `docs/NORTH_STAR.md` |
@@ -16,6 +16,15 @@
 > them.** §6 risk 3 (the RTKit + ANS2 NVMe + PCIe + NIC chain, "where the stream can silently consume the
 > project") remains the most accurate statement of the schedule risk in the tree. Read it as a live
 > warning, not a historical one.
+>
+> **⚠️ Machine identity corrected 2026-08-02.** The "Now" row above previously read *Mac mini M2
+> (`Mac14,3`, `T8112`)*, which contradicted `NORTH_STAR.md` and `ROADMAP.md`; the reference deployment is
+> a Mac mini **M2 Pro** (`Mac14,12`, SoC `T6020`, 32 GB unified memory), corrected on `874c875` after this
+> memo was archived. The row is fixed above. **The body below is unaffected and was not edited:** it names
+> no specific model or SoC, addressing "M-series" generically throughout, and its AIC/DART analysis
+> already says the backend must select the revision from ADT compatible strings at runtime and fail closed
+> on an unknown string (§AIC) — which is the right behavior on either SoC. `NORTH_STAR.md` and
+> `ROADMAP.md` remain authoritative on the machine.
 >
 > Authoritative scope and phasing: [`docs/ROADMAP.md`](../../ROADMAP.md). Authoritative invariants and the
 > INV-BOOT/AS and TCB-AS exceptions: [`docs/NORTH_STAR.md`](../../NORTH_STAR.md).

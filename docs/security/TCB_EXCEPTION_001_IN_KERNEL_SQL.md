@@ -35,7 +35,7 @@ and declining the userspace alternative.
 
 `NORTH_STAR.md` records seven hard lines that "do not cross without explicit
 sign-off." This feature crosses **three** of them. The north-star principle
-*"minimize and **name** the trust"* (NORTH_STAR.md:16) requires that any TCB
+*"minimize and **name** the trust"* (NORTH_STAR.md §*First principles*) requires that any TCB
 expansion be "written down and justified." This record is that justification.
 It does not make the violation safe. It makes it **named, bounded, and
 non-silent**, which is the minimum the north-star demands of a crossing it
@@ -50,9 +50,9 @@ file wins. It may only be amended or revoked by the project owner.
 
 | # | Hard line (NORTH_STAR.md) | Invariant endangered | How this feature crosses it |
 |---|---|---|---|
-| 1 | "No dynamic kernel heap. Fixed-size pool allocators only." (line 42) | **INV-MEM** | A relational engine with joins, transactions, query plans, and result sets is a dynamic-allocation workload by nature. |
-| 2 | "No new external crate dependencies." (line 43) + "dependency closure is itself: zero external code" (line 7) | INV-BOOT posture / "zero external dependencies" standing bar (THREAT_MODEL.md §*Trust boundary*) | No SQL engine may be vendored (SQLite, gluesql, redb, sled, sqlparser, …). The engine is hand-written in-tree. |
-| 3 | "The trusted set only ever shrinks." (line 35) | **INV-AUTH** (worst case) | A SQL engine is among the largest attack surfaces in computing; placing it in ring 0 is the single largest TCB expansion in the project's history. |
+| 1 | "No dynamic kernel heap. Fixed-size pool allocators only." (§*Hard lines*) | **INV-MEM** | A relational engine with joins, transactions, query plans, and result sets is a dynamic-allocation workload by nature. |
+| 2 | "No new external crate dependencies." (§*Hard lines*) + "dependency closure is itself: zero external code" (§*The destination*) | INV-BOOT posture / the "zero external dependencies" standing bar (THREAT_MODEL.md §*Per-invariant verification and blast radius*, "Standing bars, enforced in CI") | No SQL engine may be vendored (SQLite, gluesql, redb, sled, sqlparser, …). The engine is hand-written in-tree. |
+| 3 | "The trusted set only ever shrinks." (§*What advancing the goal means*) | **INV-AUTH** (worst case) | A SQL engine is among the largest attack surfaces in computing; placing it in ring 0 is the single largest TCB expansion in the project's history. |
 
 ## Blast radius accepted
 
@@ -103,7 +103,7 @@ them:
 5. **Structurally local-only.** The engine holds **no network capability** and
    exposes **no network endpoint**. "Not accessible to the outside" is a
    property of the capability graph, not of configuration — satisfying
-   "structure over secrecy" (NORTH_STAR.md:15) for the one property the owner
+   "structure over secrecy" (NORTH_STAR.md §*First principles*) for the one property the owner
    most cares about.
 6. **W^X unbroken (INV-MEM, the other half).** No engine page is ever writable
    and executable. Code and data pools are distinct and correctly attributed.
