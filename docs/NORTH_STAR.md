@@ -247,8 +247,9 @@ permanent and deliberate: a named hole in "every byte that runs is in-tree," not
 pays off.
 
 The serving transport needs no asymmetric crypto — it uses pre-shared per-client keys, HKDF-SHA256
-session-key derivation, and ChaCha20-Poly1305 records, and all four of those primitives are in-tree and
-constant-time by construction. INV-BOOT's release signature is the different case. Verifying an Ed25519
+session-key derivation, and ChaCha20-Poly1305 records, and all four of those primitives are constant-time
+by construction and are specified to be in-tree — `sha2` and `chacha20` are still vendored until that
+reimplementation lands. INV-BOOT's release signature is the different case. Verifying an Ed25519
 signature means computing `[8][s]B = [8]R + [8][k]A` over edwards25519, which requires decompressing a
 point by modular square root. That is curve25519 field arithmetic, and there is no formulation of the
 check that avoids it.
@@ -324,12 +325,13 @@ assurance problem than curve25519. Clients speak the BSP protocol or they do not
 - **No secret ever enters a build artifact.** Client and admin keys are enrolled at runtime and persisted
   by the kernel's credential store; none is ever compiled in. Session keys come from a symmetric HKDF
   ratchet — session key *n* is derived from chain key *n*, the chain then advances and the old key is
-  deleted — which buys forward secrecy from symmetric primitives alone. The break-glass admin key is
-  provisioned over the serial console and is **never rotatable over the network**, so a compromised admin
-  session cannot lock the owner out. The reason is the reproducible-build clause of INV-BOOT: a
-  compile-time secret means either the published payload contains the secret or the deployed payload
-  differs from the published one, and reproducibility that describes an image nobody runs is not
-  reproducibility.
+  deleted — which buys forward secrecy from symmetric primitives alone. Stated plainly: **until the
+  ratchet lands there is no forward secrecy**, and a disclosed pre-shared key retroactively decrypts
+  every recorded session. The break-glass admin key is provisioned over the serial console and is
+  **never rotatable over the network**, so a compromised admin session cannot lock the owner out. The
+  reason is the reproducible-build clause of INV-BOOT: a compile-time secret means either the published
+  payload contains the secret or the deployed payload differs from the published one, and
+  reproducibility that describes an image nobody runs is not reproducibility.
 - No copied code from reverse-engineering projects, regardless of their license. Documentation in,
   clean-room implementation out.
 - The auditor never holds spawn, kernel-mutation, or network capability. The served model never reads
