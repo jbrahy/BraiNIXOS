@@ -27,8 +27,12 @@ const CHAIN_LENGTH: usize = 32;
 /// that extending the longest run always outranks starting a new one. Against
 /// a run of `a`s this is the worst case: the encoder cannot collapse pairs in
 /// parallel, it must walk one byte at a time.
-fn chain_vocabulary() -> BuiltVocabulary {
-    let mut builder = VocabularyBuilder::new();
+///
+/// A run of `a`s is also a single segment under every pre-tokenizer mode, which
+/// is deliberate — it keeps the fixture worst-case rather than letting
+/// segmentation quietly do the work the bound is supposed to cover.
+fn chain_vocabulary_with(code: u32) -> BuiltVocabulary {
+    let mut builder = VocabularyBuilder::with_pretokenizer(code);
     for length in 2..=CHAIN_LENGTH {
         builder.add_token(&vec![b'a'; length]);
     }
@@ -38,6 +42,18 @@ fn chain_vocabulary() -> BuiltVocabulary {
     }
     builder.build()
 }
+
+/// The chain under the GPT-2 pre-tokenizer.
+fn chain_vocabulary() -> BuiltVocabulary {
+    chain_vocabulary_with(brainix_tokenizer::PRETOKENIZER_GPT2)
+}
+
+/// Every mode, for the tests that must hold under all of them.
+const ALL_MODES: [u32; 3] = [
+    brainix_tokenizer::PRETOKENIZER_NONE,
+    brainix_tokenizer::PRETOKENIZER_GPT2,
+    brainix_tokenizer::PRETOKENIZER_WHITESPACE_PREFIXED,
+];
 
 /// Encodes and returns the measured outcome, asserting the stated bound.
 fn encode_within_bound(
@@ -61,6 +77,15 @@ fn encode_within_bound(
         outcome.merge_iterations,
         input.len() - outcome.token_count,
         "every iteration must remove exactly one token"
+    );
+    assert!(
+        outcome.segment_count <= input.len(),
+        "the splitter produced more segments than there are bytes"
+    );
+    assert_eq!(
+        outcome.segment_count == 0,
+        input.is_empty(),
+        "a non-empty input must produce at least one segment"
     );
     outcome
 }
@@ -116,6 +141,50 @@ fn a_maximum_length_input_is_accepted_and_bounded() {
     let outcome = encode_within_bound(&vocabulary, &input);
     assert_eq!(outcome.merge_iterations, 0, "no rule applies to `z`");
     assert_eq!(outcome.token_count, MAX_ENCODE_INPUT_BYTES);
+}
+
+#[test]
+fn the_bound_holds_under_every_pretokenizer_mode() {
+    for code in ALL_MODES {
+        let built = chain_vocabulary_with(code);
+        let vocabulary = Vocabulary::parse(&built.bytes).unwrap();
+        for length in [2usize, 17, 512, 2048] {
+            let input = vec![b'a'; length];
+            encode_within_bound(&vocabulary, &input);
+        }
+        // Mixed input: segmentation differs per mode, and the bound must hold
+        // for every one of them.
+        let mixed = b"aaa aaaa\taaaaa  aaaaaa'saaa".repeat(32);
+        encode_within_bound(&vocabulary, &mixed);
+    }
+}
+
+#[test]
+fn segmentation_never_increases_the_merge_work() {
+    // Splitting can only partition the sequence, and merging within a
+    // partition costs no more than merging across it. The unsplit mode is
+    // therefore the worst case, which is what lets the bound be stated over
+    // the whole input rather than per mode.
+    let input = b"aaaa aaaaaa aaa aaaaaaaa".repeat(16);
+    let mut worst = 0usize;
+    for code in ALL_MODES {
+        let built = chain_vocabulary_with(code);
+        let vocabulary = Vocabulary::parse(&built.bytes).unwrap();
+        let outcome = encode_within_bound(&vocabulary, &input);
+        if code == brainix_tokenizer::PRETOKENIZER_NONE {
+            worst = outcome.merge_iterations;
+        }
+    }
+    for code in ALL_MODES {
+        let built = chain_vocabulary_with(code);
+        let vocabulary = Vocabulary::parse(&built.bytes).unwrap();
+        let outcome = encode_within_bound(&vocabulary, &input);
+        assert!(
+            outcome.merge_iterations <= worst,
+            "mode {code} did more merge work ({}) than the unsplit case ({worst})",
+            outcome.merge_iterations
+        );
+    }
 }
 
 #[test]

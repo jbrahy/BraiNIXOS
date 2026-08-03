@@ -35,6 +35,20 @@ pub enum VocabularyError {
     /// `reserved_tail`. A reserved field is not an extension point.
     NonZeroReservedField,
 
+    /// `pretokenizer` is `0`.
+    ///
+    /// **Zero is not a default and not "unspecified"** — it is the value a
+    /// converter that never heard of the field writes, which is exactly the
+    /// case the field exists to catch. There is no fallback, no operator
+    /// override, and no "try the common one".
+    PretokenizerUnspecified,
+
+    /// `pretokenizer` is a nonzero value this build does not implement.
+    /// Kept distinct from [`VocabularyError::PretokenizerUnspecified`] so a log
+    /// can tell "the converter is old" from "this vocabulary needs a mode we do
+    /// not have".
+    PretokenizerUnrecognized,
+
     /// `token_count` is below [`BXV1_MIN_TOKENS`](crate::BXV1_MIN_TOKENS). A
     /// vocabulary that cannot even name all 256 byte values cannot encode
     /// arbitrary input, and byte-level BPE has no other base case.
@@ -176,4 +190,14 @@ pub enum VocabularyError {
     /// for a validated vocabulary; retained for the same reason as
     /// [`VocabularyError::MergeBudgetExhausted`].
     MergeLookupInconsistent,
+
+    /// The pre-tokenizer returned a segment end at or before the position it
+    /// was asked about, or past the end of the input.
+    ///
+    /// Unreachable: every mode consumes at least one byte per call, and
+    /// `src/tokenizer/tests/pretokenize.rs` asserts that for every mode over
+    /// every byte value. It is checked anyway, because a splitter that failed
+    /// to advance would be an unbounded loop on the prompt path, and that is
+    /// the one failure this crate exists to make impossible.
+    SplitterMadeNoProgress,
 }

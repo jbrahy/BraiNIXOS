@@ -10,10 +10,14 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
+#![allow(clippy::cognitive_complexity, clippy::manual_range_contains)]
 
 mod common;
 
-use brainix_tokenizer::{Vocabulary, VocabularyError};
+use brainix_tokenizer::{
+    Pretokenizer, Vocabulary, VocabularyError, PRETOKENIZER_GPT2, PRETOKENIZER_NONE,
+    PRETOKENIZER_WHITESPACE_PREFIXED,
+};
 use common::*;
 
 /// Parses and returns the error, failing the test if the blob was accepted.
@@ -39,6 +43,54 @@ fn the_baseline_fixture_is_actually_valid() {
     let vocabulary = Vocabulary::parse(&built.bytes).unwrap();
     assert_eq!(vocabulary.token_count(), 259);
     assert_eq!(vocabulary.merge_count(), 3);
+    assert_eq!(vocabulary.pretokenizer(), Pretokenizer::Gpt2);
+}
+
+#[test]
+fn a_pretokenizer_of_zero_denies() {
+    // Zero is what a converter that never heard of the field writes, which is
+    // the case the field exists to catch. It is not a default and there is no
+    // fallback.
+    let built = valid();
+    let blob = patched_u32(&built.bytes, PRETOKENIZER_OFFSET, 0);
+    assert_eq!(refusal(&blob), VocabularyError::PretokenizerUnspecified);
+}
+
+#[test]
+fn an_unrecognized_pretokenizer_denies_distinguishably() {
+    let built = valid();
+    for code in [4u32, 7, 0x8000_0000, u32::MAX] {
+        let blob = patched_u32(&built.bytes, PRETOKENIZER_OFFSET, code);
+        assert_eq!(
+            refusal(&blob),
+            VocabularyError::PretokenizerUnrecognized,
+            "pretokenizer code {code} was accepted"
+        );
+    }
+}
+
+#[test]
+fn the_pretokenizer_is_checked_before_the_counts() {
+    // Ordering matters for diagnosis: a blob written by a converter that does
+    // not know the field should say so, not complain about a count it also got
+    // wrong as a consequence.
+    let built = valid();
+    let blob = patched_u32(&built.bytes, PRETOKENIZER_OFFSET, 0);
+    let blob = patched_u32(&blob, TOKEN_COUNT_OFFSET, u32::MAX);
+    assert_eq!(refusal(&blob), VocabularyError::PretokenizerUnspecified);
+}
+
+#[test]
+fn every_valid_pretokenizer_code_is_accepted() {
+    for code in [
+        PRETOKENIZER_NONE,
+        PRETOKENIZER_GPT2,
+        PRETOKENIZER_WHITESPACE_PREFIXED,
+    ] {
+        let built = VocabularyBuilder::with_pretokenizer(code).build();
+        let vocabulary = Vocabulary::parse(&built.bytes).unwrap();
+        assert_eq!(vocabulary.pretokenizer().code(), code);
+    }
 }
 
 // ---------------------------------------------------------------- header ---
@@ -540,7 +592,27 @@ fn every_single_byte_flipped_in_the_header_is_either_harmless_or_denied() {
             if let Ok(vocabulary) = Vocabulary::parse(&blob) {
                 assert_eq!(vocabulary.token_count(), 259);
                 assert_eq!(vocabulary.merge_count(), 3);
+                if !(PRETOKENIZER_OFFSET..PRETOKENIZER_OFFSET + 4).contains(&offset) {
+                    assert_eq!(vocabulary.pretokenizer(), Pretokenizer::Gpt2);
+                }
             }
         }
     }
+}
+
+#[test]
+fn one_bit_of_the_pretokenizer_field_changes_the_meaning_of_the_whole_blob() {
+    // Pinned rather than treated as a flaw: `2` and `3` differ in one bit and
+    // are both valid, so a single flipped bit silently retokenizes every
+    // prompt. Nothing structural can catch that — which is exactly why BXW1
+    // §5.4 binds this blob by SHA-256 before this decoder ever sees it, and
+    // why that binding is not optional.
+    let built = valid();
+    let blob = patched_byte(
+        &built.bytes,
+        PRETOKENIZER_OFFSET,
+        PRETOKENIZER_GPT2 as u8 ^ 1,
+    );
+    let vocabulary = Vocabulary::parse(&blob).unwrap();
+    assert_eq!(vocabulary.pretokenizer(), Pretokenizer::WhitespacePrefixed);
 }

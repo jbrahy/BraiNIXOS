@@ -13,6 +13,7 @@
 //! bounds-checked against a `const` before any arithmetic uses them.
 
 use crate::error::VocabularyError;
+use crate::pretokenize::Pretokenizer;
 
 /// Bytes in a little-endian `u16`.
 const U16_LEN: usize = 2;
@@ -62,8 +63,11 @@ const TOKEN_BYTES_LENGTH_OFFSET: usize = 44;
 /// Offset of `total_size`.
 const TOTAL_SIZE_OFFSET: usize = 48;
 
+/// Offset of `pretokenizer`.
+const PRETOKENIZER_OFFSET: usize = 52;
+
 /// Offset of the first byte of `reserved_tail`.
-const RESERVED_TAIL_OFFSET: usize = 52;
+const RESERVED_TAIL_OFFSET: usize = 56;
 
 /// Reads a little-endian `u16` at `offset`, or `None` if it does not fit.
 pub(crate) fn read_u16_le(blob: &[u8], offset: usize) -> Option<u16> {
@@ -88,6 +92,9 @@ pub(crate) struct Header {
     pub(crate) token_count: u32,
     /// Number of merge records.
     pub(crate) merge_count: u32,
+    /// The pre-tokenizer this vocabulary was trained behind. No default: the
+    /// blob states it or the blob is refused.
+    pub(crate) pretokenizer: Pretokenizer,
     /// Declared offsets, in the order the sections appear.
     pub(crate) declared: DeclaredOffsets,
 }
@@ -142,12 +149,14 @@ pub(crate) fn decode_header(blob: &[u8]) -> Result<Header, VocabularyError> {
     require_header_space(blob)?;
     require_identity(blob)?;
     require_zeroed_fields(blob)?;
+    let pretokenizer = Pretokenizer::from_code(read_field(blob, PRETOKENIZER_OFFSET)?)?;
     let token_count = read_field(blob, TOKEN_COUNT_OFFSET)?;
     let merge_count = read_field(blob, MERGE_COUNT_OFFSET)?;
     require_counts_in_range(token_count, merge_count)?;
     Ok(Header {
         token_count,
         merge_count,
+        pretokenizer,
         declared: read_declared_offsets(blob)?,
     })
 }

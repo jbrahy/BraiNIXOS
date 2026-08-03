@@ -20,17 +20,31 @@
 //! lowest rank" never needs a tie-break between two different rules. The
 //! leftmost tie-break is between two occurrences of the *same* rule.
 //!
+//! # Segments
+//!
+//! Encoding runs the vocabulary's pre-tokenizer first and applies BPE **within
+//! each segment only** — see [`crate::Pretokenizer`] for why a vocabulary
+//! trained behind a splitter is silently mis-tokenized without one. Each
+//! segment is seeded and merged inside its own window of the caller's output
+//! slice, so a merge cannot see across a boundary and therefore cannot fire
+//! across one. That is a property of the borrow, not of a check.
+//!
 //! # The work bound
 //!
-//! Let `N` be the input length in bytes. The sequence starts at exactly `N`
-//! tokens (one per byte), every iteration removes exactly one token, and the
-//! loop stops at one token, so there are **at most `N − 1` merge iterations**.
-//! Each iteration scans at most `N − 1` recorded ranks to find the minimum and
-//! performs at most three merge-table lookups, each a binary search over at
-//! most `BXV1_MAX_MERGES` records.
+//! Let `N` be the input length in bytes and `L₁..L_k` the segment lengths,
+//! which sum to `N`. Each segment's sequence starts at exactly `Lᵢ` tokens (one
+//! per byte), every iteration removes exactly one token, and the loop stops at
+//! one token, so a segment costs at most `Lᵢ − 1` iterations and the whole
+//! input costs at most `Σ(Lᵢ − 1) ≤ N − 1` — **the bound is unchanged by
+//! segmentation, and the quadratic term strictly improves.** Each iteration
+//! scans at most `Lᵢ − 1` recorded ranks to find the minimum and performs at
+//! most three merge-table lookups, each a binary search over at most
+//! `BXV1_MAX_MERGES` records.
 //!
-//! Total: `≤ (N − 1)²` rank comparisons and `≤ 3N` binary searches, with `N`
-//! bounded by [`MAX_ENCODE_INPUT_BYTES`](crate::MAX_ENCODE_INPUT_BYTES). The
+//! Total: `≤ Σ(Lᵢ − 1)² ≤ (N − 1)²` rank comparisons and `≤ 3N` binary
+//! searches, plus `O(1)` splitter work per input byte with a constant of four
+//! byte examinations. `N` is bounded by
+//! [`MAX_ENCODE_INPUT_BYTES`](crate::MAX_ENCODE_INPUT_BYTES). The
 //! quadratic term is what forces that ceiling to be a `const` — an unbounded
 //! `N` here would be a denial-of-service hole, since the work an attacker buys
 //! grows faster than the bytes they send.
@@ -60,12 +74,15 @@ impl Vocabulary<'_> {
     /// validated as UTF-8, and no byte of it is ever replaced or dropped — see
     /// the crate documentation for why that rule is the deliberate one.
     ///
+    /// The vocabulary's pre-tokenizer runs first, and BPE is applied within
+    /// each segment only.
+    ///
     /// Both `scratch` and `output` must hold at least `input.len()` entries.
-    /// That is the honest requirement rather than a conservative one: the
-    /// seeded sequence is one token per input byte, so a shorter output slice
-    /// could not hold the starting state even though the finished sequence is
-    /// usually far shorter. A slice that is too small is an error, never a
-    /// truncated encode.
+    /// That is the honest requirement rather than a conservative one: each
+    /// segment seeds one token per byte, so a shorter output slice could not
+    /// hold the starting state of a single-segment input even though the
+    /// finished sequence is usually far shorter. A slice that is too small is
+    /// an error, never a truncated encode.
     ///
     /// On any error nothing is claimed: the returned length is the only thing
     /// that says how much of `output` is meaningful, and no error path returns
@@ -94,9 +111,57 @@ impl Vocabulary<'_> {
         output: &mut [u32],
     ) -> Result<EncodeOutcome, VocabularyError> {
         require_encode_capacity(input, scratch, output)?;
-        seed_byte_tokens(self, input, output)?;
-        seed_pair_ranks(self, input.len(), output, scratch)?;
-        run_merges(self, input.len(), output, scratch)
+        let mut cursor = EncodeCursor::start();
+        while cursor.position < input.len() {
+            cursor = self.encode_one_segment(input, cursor, scratch, output)?;
+        }
+        Ok(cursor.outcome())
+    }
+
+    /// Splits off the segment beginning at the cursor and BPE-encodes it,
+    /// returning the cursor for the next segment.
+    fn encode_one_segment(
+        &self,
+        input: &[u8],
+        cursor: EncodeCursor,
+        scratch: &mut [u32],
+        output: &mut [u32],
+    ) -> Result<EncodeCursor, VocabularyError> {
+        let end = self.pretokenizer().segment_end(input, cursor.position)?;
+        if end <= cursor.position || end > input.len() {
+            return Err(VocabularyError::SplitterMadeNoProgress);
+        }
+        let segment = input
+            .get(cursor.position..end)
+            .ok_or(VocabularyError::SplitterMadeNoProgress)?;
+        let count = self.encode_segment(segment, cursor.written, scratch, output)?;
+        cursor.advance(end, segment.len(), count)
+    }
+
+    /// Seeds and merges one segment inside its own window of the output slice,
+    /// and returns how many tokens it collapsed to.
+    ///
+    /// The window is what confines BPE to the segment: a merge cannot see, and
+    /// therefore cannot fire across, a boundary the pre-tokenizer drew.
+    fn encode_segment(
+        &self,
+        segment: &[u8],
+        written: usize,
+        scratch: &mut [u32],
+        output: &mut [u32],
+    ) -> Result<usize, VocabularyError> {
+        let end = written
+            .checked_add(segment.len())
+            .ok_or(VocabularyError::ArithmeticOverflow)?;
+        let window = output
+            .get_mut(written..end)
+            .ok_or(VocabularyError::TokenOutputTooSmall)?;
+        let ranks = scratch
+            .get_mut(..segment.len())
+            .ok_or(VocabularyError::ScratchTooSmall)?;
+        seed_byte_tokens(self, segment, window)?;
+        seed_pair_ranks(self, segment.len(), window, ranks)?;
+        run_merges(self, segment.len(), window, ranks)
     }
 
     /// Decodes token identifiers back to bytes, returning how many were
@@ -286,18 +351,70 @@ fn read_pair(tokens: &[u32], position: usize) -> Result<(u32, u32), VocabularyEr
 pub struct EncodeOutcome {
     /// Number of token identifiers written to the output slice.
     pub token_count: usize,
-    /// Number of merge iterations performed. Never more than
-    /// `input.len() − 1`.
+    /// Number of merge iterations performed, summed over every segment. Never
+    /// more than `input.len() − 1`.
     pub merge_iterations: usize,
+    /// Number of segments the pre-tokenizer produced. Always at least one for
+    /// a non-empty input.
+    pub segment_count: usize,
 }
 
-/// Runs the merge loop to a fixed point and reports what it did.
+/// Where the segment loop is: how far through the input, how far through the
+/// output, and what it has spent so far.
+#[derive(Debug, Clone, Copy)]
+struct EncodeCursor {
+    position: usize,
+    written: usize,
+    iterations: usize,
+    segments: usize,
+}
+
+impl EncodeCursor {
+    /// The cursor before the first segment.
+    fn start() -> Self {
+        Self {
+            position: 0,
+            written: 0,
+            iterations: 0,
+            segments: 0,
+        }
+    }
+
+    /// Moves past a segment that seeded `seeded` tokens and collapsed to
+    /// `count`.
+    fn advance(
+        self,
+        position: usize,
+        seeded: usize,
+        count: usize,
+    ) -> Result<Self, VocabularyError> {
+        let spent = seeded.checked_sub(count).ok_or(overflow())?;
+        Ok(Self {
+            position,
+            written: self.written.checked_add(count).ok_or(overflow())?,
+            iterations: self.iterations.checked_add(spent).ok_or(overflow())?,
+            segments: self.segments.checked_add(1).ok_or(overflow())?,
+        })
+    }
+
+    /// The finished tally.
+    fn outcome(self) -> EncodeOutcome {
+        EncodeOutcome {
+            token_count: self.written,
+            merge_iterations: self.iterations,
+            segment_count: self.segments,
+        }
+    }
+}
+
+/// Runs the merge loop over one segment to a fixed point and returns how many
+/// tokens survived.
 fn run_merges(
     vocabulary: &Vocabulary<'_>,
     initial: usize,
     tokens: &mut [u32],
     ranks: &mut [u32],
-) -> Result<EncodeOutcome, VocabularyError> {
+) -> Result<usize, VocabularyError> {
     let mut count = initial;
     let mut budget = initial;
     while count > 1 {
@@ -310,16 +427,7 @@ fn run_merges(
             None => break,
         }
     }
-    Ok(finish(initial, count))
-}
-
-/// Turns the starting and ending token counts into an outcome. Every iteration
-/// removed exactly one token, so the difference *is* the iteration count.
-fn finish(initial: usize, count: usize) -> EncodeOutcome {
-    EncodeOutcome {
-        token_count: count,
-        merge_iterations: initial.saturating_sub(count),
-    }
+    Ok(count)
 }
 
 /// Returns the position of the lowest-ranked applicable pair, leftmost on a

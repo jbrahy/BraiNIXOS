@@ -39,12 +39,17 @@
 //!   handle into an unvalidated vocabulary, but that pass is defence in depth on
 //!   top of the per-read checks, never a substitute for them.
 //! - **Bounded work.** Encoding an `N`-byte prompt performs **at most `N − 1`
-//!   merge iterations**, because the token sequence starts at `N` entries and
-//!   every iteration removes exactly one. `N` is itself bounded by
-//!   [`MAX_ENCODE_INPUT_BYTES`], so the total work is bounded by a compile-time
-//!   constant and not by anything a client sends. The budget is enforced by a
-//!   counter, so termination is a property of the program rather than of an
-//!   argument.
+//!   merge iterations**, because each segment's token sequence starts at one
+//!   entry per byte and every iteration removes exactly one. `N` is itself
+//!   bounded by [`MAX_ENCODE_INPUT_BYTES`], so the total work is bounded by a
+//!   compile-time constant and not by anything a client sends. Pre-tokenization
+//!   adds `O(1)` per byte and only *reduces* the merge term. The budget is
+//!   enforced by a counter, so termination is a property of the program rather
+//!   than of an argument.
+//! - **Pre-tokenization is an explicit, enumerated property of the
+//!   vocabulary.** [`Pretokenizer`] has no default: the blob names its mode or
+//!   the blob is refused. Getting this wrong is silent — see that type's
+//!   documentation — so it is treated exactly as BXW1 treats `rope_pairing`.
 //!
 //! # Bytes in, bytes out — the invalid-UTF-8 rule
 //!
@@ -82,11 +87,15 @@
 
 mod codec;
 mod error;
+mod pretokenize;
 mod raw;
 mod validate;
 
 pub use crate::codec::EncodeOutcome;
 pub use crate::error::VocabularyError;
+pub use crate::pretokenize::{
+    Pretokenizer, PRETOKENIZER_GPT2, PRETOKENIZER_NONE, PRETOKENIZER_WHITESPACE_PREFIXED,
+};
 
 use crate::raw::{read_u32_le, Sections};
 
@@ -189,6 +198,7 @@ pub struct Vocabulary<'a> {
     blob: &'a [u8],
     token_count: u32,
     merge_count: u32,
+    pretokenizer: Pretokenizer,
     sections: Sections,
 }
 
@@ -211,6 +221,7 @@ impl<'a> Vocabulary<'a> {
             blob,
             token_count: header.token_count,
             merge_count: header.merge_count,
+            pretokenizer: header.pretokenizer,
             sections,
         };
         crate::validate::validate_all(&vocabulary)?;
@@ -227,6 +238,15 @@ impl<'a> Vocabulary<'a> {
     /// Number of merge rules.
     pub fn merge_count(&self) -> u32 {
         self.merge_count
+    }
+
+    /// The pre-tokenizer this vocabulary was trained behind.
+    ///
+    /// Read from the blob, never defaulted. Encoding runs this splitter first
+    /// and applies BPE **within each segment only** — see
+    /// [`Pretokenizer`] for why getting this wrong is silent.
+    pub fn pretokenizer(&self) -> Pretokenizer {
+        self.pretokenizer
     }
 
     /// The bytes a token spells.

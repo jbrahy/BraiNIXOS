@@ -16,6 +16,8 @@
     clippy::cognitive_complexity
 )]
 
+use brainix_tokenizer::PRETOKENIZER_GPT2;
+
 /// Offset of `magic`.
 pub const MAGIC_OFFSET: usize = 0;
 /// Offset of `version_major`.
@@ -44,8 +46,10 @@ pub const TOKEN_BYTES_OFFSET_OFFSET: usize = 40;
 pub const TOKEN_BYTES_LENGTH_OFFSET: usize = 44;
 /// Offset of `total_size`.
 pub const TOTAL_SIZE_OFFSET: usize = 48;
+/// Offset of `pretokenizer`.
+pub const PRETOKENIZER_OFFSET: usize = 52;
 /// Offset of the first byte of `reserved_tail`.
-pub const RESERVED_TAIL_OFFSET: usize = 52;
+pub const RESERVED_TAIL_OFFSET: usize = 56;
 
 /// Bytes in the fixed header.
 pub const HEADER_BYTES: usize = 64;
@@ -101,11 +105,12 @@ impl BuiltVocabulary {
 pub struct VocabularyBuilder {
     pub tokens: Vec<Vec<u8>>,
     pub merges: Vec<(u32, u32, u32)>,
+    pub pretokenizer: u32,
 }
 
 impl VocabularyBuilder {
     /// A vocabulary holding exactly the 256 byte tokens, in byte order, and no
-    /// merges. Token `i` spells byte `i`.
+    /// merges, declaring the GPT-2 pre-tokenizer. Token `i` spells byte `i`.
     pub fn new() -> Self {
         let mut tokens = Vec::new();
         for byte_value in 0..256usize {
@@ -114,7 +119,15 @@ impl VocabularyBuilder {
         Self {
             tokens,
             merges: Vec::new(),
+            pretokenizer: PRETOKENIZER_GPT2,
         }
+    }
+
+    /// The same, declaring a specific pre-tokenizer code.
+    pub fn with_pretokenizer(code: u32) -> Self {
+        let mut builder = Self::new();
+        builder.pretokenizer = code;
+        builder
     }
 
     /// Appends a token and returns its identifier.
@@ -204,6 +217,7 @@ impl VocabularyBuilder {
         }
         bytes.extend_from_slice(&(region as u32).to_le_bytes());
         bytes.extend_from_slice(&(total as u32).to_le_bytes());
+        bytes.extend_from_slice(&self.pretokenizer.to_le_bytes());
         bytes.resize(HEADER_BYTES, 0);
         bytes
     }

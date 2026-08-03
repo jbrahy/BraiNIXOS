@@ -172,7 +172,8 @@ little-endian. `BXV1_HEADER_BYTES = 64`.
 | 40 | 4 | `u32` | `token_bytes_offset` | MUST equal `1088 + 12 × token_count + 20 × merge_count` |
 | 44 | 4 | `u32` | `token_bytes_length` | MUST equal `total_size − token_bytes_offset` |
 | 48 | 4 | `u32` | `total_size` | Total blob bytes, header inclusive. MUST equal the object length the caller supplied (§7.2 rule H13) |
-| 52 | 12 | `[u8;12]` | `reserved_tail` | Every byte MUST be zero |
+| 52 | 4 | `u32` | `pretokenizer` | Enumerated, §5.4. **No zero value and no default** |
+| 56 | 8 | `[u8;8]` | `reserved_tail` | Every byte MUST be zero |
 
 Every offset in the table is **asserted, never followed**. The decoder computes
 each one from `token_count` and `merge_count` with checked arithmetic and
@@ -183,9 +184,21 @@ cross-checked, not so a reader can chase a pointer.
 **Reserved fields are not extension points.** A nonzero `flags` or a nonzero
 `reserved_tail` byte is a DENY, not a forward-compatible unknown. Like BXW1 §3.1
 and BSP v2 §5.5, BXV1 has no in-band evolution path: **a v2 is a new magic and a
-new document.** The cost is stated: adding a special-token table, a
-pre-tokenization rule, or a scoring field means a format version bump and a
-converter run over every blob, not a flag.
+new document.** The cost is stated: adding a special-token table or a scoring
+field means a format version bump and a converter run over every blob, not a
+flag.
+
+**`pretokenizer` at offset 52 was part of `reserved_tail` until 2026-08-03**,
+and the change is recorded here rather than smoothed over. It is **not** an
+in-band extension and does not weaken the paragraph above: v1.0 had no converter
+and no blob had ever existed when the field was added (§11 question 2), so this
+is an edit to the format *before* there is anything to be compatible with, not a
+reserved byte repurposed under a running system. This is the same situation, and
+the same resolution, as BXW1 §3.1's `rope_pairing`. The consequence is
+deliberate and desirable: a hypothetical blob written against the earlier draft
+carries `0x00000000` there, which §5.4 admits no meaning for, so it **denies**
+rather than silently defaulting to one of the modes. §5.4 explains why the
+alternative is worse than a refused load.
 
 ### 3.2 Token table — one fixed record per token
 
@@ -307,6 +320,64 @@ less — and it is paid deliberately: sharing would make the tiling check
 quadratic, would remove the one-`u32`-of-state property, and would make "every
 byte accounted for" unprovable in a single pass.
 
+### 3.8 Padding and reserved regions — the complete list
+
+Folded in from a sibling task's BXW1-loader findings: **every region of a BXV1
+blob that is not live data is enumerated here, and each is marked either
+validated or explicitly unvalidated.** A region in neither category is a gap in
+this document, not a gap in the reader.
+
+| Region | Bytes | Status |
+|---|--:|---|
+| `flags` (offset 8) | 4 | **Validated.** MUST be zero (rule H6) |
+| `reserved_tail` (offset 56) | 8 | **Validated.** Every byte MUST be zero (rule H7) |
+| Alignment padding | **none exists** | Not applicable. §3 states it and this table restates it: the format has no pad byte anywhere, between any two sections or inside any record, so there is no unvalidated pad to reason about |
+| Gaps between token byte spans | **none permitted** | **Validated.** Rules K4–K7 make the token-bytes region tile exactly, so a gap is a DENY rather than an unvalidated region |
+| Trailing bytes after the last token | **none permitted** | **Validated.** Rule K7 |
+
+There is consequently **no byte of an accepted BXV1 blob that no rule reaches**,
+and therefore no unvalidated-but-digest-covered region at all. That is a
+stronger position than BXW1 §3, which must permit up to `BXV1_ALIGN − 1` pad
+bytes between extents and validates them as zero (its rule D19); BXV1 gets there
+by having no alignment requirement to pad for, which §3.9 explains.
+
+### 3.9 Implied constraints, stated outright
+
+Also from the sibling findings: **a constraint a reader has to derive by
+composing two rules is a constraint that will eventually be enforced by only
+one of them.** Every such property in this format is therefore written down as
+its own statement, alongside the rules that enforce it.
+
+1. **Every section begins on a 4-byte boundary.** The header is 64 bytes and
+   every record size (4, 8, 16) is a multiple of 4, so this follows. It is
+   stated so a reader does not have to derive it — **and, equally important,
+   nothing depends on it.** Readers are byte-wise (§2), so the format specifies
+   **no alignment requirement, enforces none, and relies on none.** There is no
+   `BXV1_ALIGN`. If a future record size were not a multiple of 4, nothing in
+   the decoder would break.
+2. **`BXV1_BYTE_TOKEN_TABLE_BYTES` is exactly `4 × 256`.** It is a fixed 1024
+   and not a function of `token_count`; the 256 is the size of the byte
+   alphabet, not a bound anyone may tune.
+3. **The sum of every token's `byte_length` equals `token_bytes_length`.** This
+   is implied by rules K4, K5 and K7 acting together — the exact shape the
+   findings warn about — so it is stated here as a normative property in its own
+   right. A future edit that relaxes any one of K4/K5/K7 must be checked against
+   this sentence.
+4. **The vocabulary contains at least 256 tokens whose bytes are pairwise
+   distinct single bytes, one for each byte value.** This is implied by rule B3
+   holding for all 256 entries together with rule X4 forbidding duplicates.
+   Rule H8 (`token_count ≥ 256`) states only the weaker numeric consequence, so
+   the full property is written out here. Everything in §5.3's byte-level claim
+   rests on it.
+5. **`token_count` and `merge_count` are independent.** A vocabulary may have
+   zero merges. Nothing requires `merge_count = token_count − 256`, and no rule
+   should be added that assumes it — a converter that drops unreachable merges
+   produces a legal blob.
+6. **No token identifier is reserved.** The format assigns no special meaning to
+   identifier 0 or to any other. BOS and EOS live in BXW1's header (§4), and a
+   consumer that treats an identifier specially is doing so on BXW1's authority,
+   not this format's.
+
 ---
 
 ## 4. What the format deliberately does not carry
@@ -320,8 +391,11 @@ Stated explicitly, because each absence is a decision rather than an oversight:
 - **No scores or probabilities.** A rank total order is all the encoder consumes.
   A score field would be a float from a hostile blob, which means a bit-pattern
   validation rule (BXW1 §4.7) for a value that changes nothing.
-- **No pre-tokenization regex.** Real BPE tokenizers split on a regex before
-  merging. BXV1 does not, and §10 states what that costs and what it buys.
+- **No pre-tokenization regex.** Pre-tokenization is carried as an **enumerated
+  mode** (§5.4), not as a pattern the blob supplies. A blob-supplied regex would
+  be a program from a hostile source executed on the prompt path, with its own
+  catastrophic-backtracking failure mode; an enumerated mode is a number with
+  three legal values.
 - **No normalization, no case folding, no Unicode tables.** Bytes in, bytes out.
 - **No digest and no signature.** Integrity belongs to the BXW1 loader (§8). A
   self-describing digest inside the artifact it covers proves nothing an
@@ -336,8 +410,13 @@ Stated explicitly, because each absence is a decision rather than an oversight:
 
 ### 5.1 Encode — the merge rule, stated exactly
 
-1. Seed: the token sequence is one byte token per input byte, in order, taken
-   from the byte-token table. An `N`-byte input seeds exactly `N` tokens.
+0. Split: the input is divided into segments by the vocabulary's `pretokenizer`
+   mode (§5.4). Steps 1–3 run **independently on each segment, in order**, and
+   the resulting token sequences are concatenated. **No merge ever spans a
+   segment boundary.**
+1. Seed: within a segment, the token sequence is one byte token per byte, in
+   order, taken from the byte-token table. An `L`-byte segment seeds exactly `L`
+   tokens.
 2. Repeat: among all adjacent pairs of the current sequence that match a merge
    rule, apply **the rule with the lowest rank**. If that rule matches at more
    than one position, apply it at the **leftmost** of them. Applying a rule
@@ -367,43 +446,7 @@ have to either fail on a valid vocabulary or misreport what the model produced.
 from a complete cover of the byte alphabet and every merge preserves the
 concatenation of the sequence's bytes (§3.5).
 
-### 5.3 The work bound
-
-Let `N` be the input length in bytes.
-
-- The sequence starts at exactly `N` tokens and every iteration removes exactly
-  one, and the loop stops at one token. Therefore **at most `N − 1` merge
-  iterations**.
-- Each iteration scans at most `N − 1` recorded ranks to find the minimum, and
-  performs at most three merge lookups, each a binary search of at most
-  `log2(BXV1_MAX_MERGES) = 20` probes.
-- Seeding performs `N` byte-token lookups and `N − 1` merge lookups.
-
-So the whole encode is **`≤ (N − 1)²` rank comparisons and `≤ 3N` binary
-searches**. The quadratic term is why `N` MUST be bounded by a build-time
-`const`: `MAX_ENCODE_INPUT_BYTES = 16384`, equal to BSP v2 §8's
-`MAX_PROMPT_BYTES`, which is the size of the fixed per-session buffer a prompt is
-reassembled into. An input above it is a DENY before any work is done.
-
-At the ceiling the worst case is `16383² ≈ 2.7 × 10⁸` `u32` comparisons over a
-compact array — around a tenth of a second on the reference machine, which is
-under the ~118 ms BXW1 §8.2 budgets for a **single** decoded token at the maximum
-model size. An attacker's best case is therefore to buy less than one token's
-worth of compute with a maximum-size prompt, which is the bound this design was
-chosen to reach.
-
-**The bound is enforced, not merely argued.** The merge loop carries a budget of
-`N` iterations and denies with `MergeBudgetExhausted` if it is ever exhausted.
-That path is unreachable given the argument above, and it is checked anyway,
-because "unreachable" is an argument in a document and the counter is a property
-of the program — the same reasoning BXW1 §7.6 gives for keeping `checked_mul`
-where overflow is provably impossible.
-
-`Vocabulary::encode_measured` reports the iteration count, so the bound is
-observable rather than inferred; `src/tokenizer/tests/bounded_work.rs` drives it
-with a vocabulary built to maximize it and asserts the bound holds.
-
-### 5.4 Invalid UTF-8 — the rule
+### 5.3 Invalid UTF-8 — the rule
 
 **The tokenizer is byte-level and never inspects UTF-8 structure.** Encode takes
 `&[u8]`, decode writes `&mut [u8]`, and neither validates, rejects, replaces, nor
@@ -427,6 +470,202 @@ What renders bytes safely is the client, and BSP v2 §10.2 already says token
 bytes are opaque model output rendered by the client and never interpreted as
 control (`INV-MODEL-003`).
 
+### 5.4 Pre-tokenization — the field, and why it has no default
+
+*Added 2026-08-03 by owner decision, closing the blocker recorded as open
+question 1 of the previous draft. Offset 52, formerly part of `reserved_tail` —
+see §3.1 for why that is an edit to the format rather than an in-band extension.*
+
+**A vocabulary trained behind a pre-tokenizer encodes merges that assume certain
+boundaries are never crossed.** Encoding without the same splitting lets those
+merges fire across a boundary the trainer forbade, and the resulting token
+sequence is one the model was never trained on. Nothing crashes, no rule in this
+document is violated, and no structural test fails — the model produces
+confident nonsense. Only end-to-end tokenization parity against the trainer
+would catch it. That is the same silent-wrongness class as BXW1's `rope_pairing`
+ambiguity, and it is resolved the same way.
+
+**Which pre-tokenizer applies is a property of whoever trained the vocabulary,
+not of this runtime**, so it belongs in the blob. Hard-coding any single rule
+would silently mis-tokenize every model that used a different one, which is
+strictly worse than refusing to serve.
+
+`pretokenizer` is therefore an enumerated `u32` at offset 52 with **no default**:
+
+| Value | Mode | Meaning |
+|--:|---|---|
+| `0` | — | **DENY.** Not "unspecified", not a default — it is the value a converter that never heard of the field writes, which is exactly the case the field exists to catch. No fallback, no operator override, no "try the common one" |
+| `1` | `None` | No splitting. The whole input is one segment. For vocabularies genuinely trained without a pre-tokenizer — an explicit, numbered choice, so that "no pre-tokenizer" and "the converter forgot" are never the same bytes |
+| `2` | `Gpt2` | §5.5 |
+| `3` | `WhitespacePrefixed` | §5.6 |
+| anything else | — | **DENY**, with a reason distinct from `0`'s so a log can tell "the converter is old" from "this vocabulary needs a mode this build does not have" |
+
+**There is no blob-supplied pattern.** The reference pre-tokenizers are published
+as regular expressions, and BXV1 carries **none of them as data**. A
+blob-supplied regex would be a program from a hostile source executed on the
+prompt path, with a catastrophic-backtracking failure mode of its own — the
+precise failure §5.7's bound exists to prevent. Modes are enumerated and each is
+a hand-written, bounded, left-to-right splitter that can be audited on its own.
+
+**Every mode consumes at least one byte per call**, which is what makes the
+segment loop terminate. That is a requirement on any mode added later, it is
+asserted exhaustively over every byte value in `tests/pretokenize.rs`, and it is
+checked again at the call site (rule E6).
+
+**Segmentation is a partition.** The segments of an input are contiguous,
+non-overlapping, and cover every byte, so §5.3's round-trip property is
+unaffected by which mode applies.
+
+### 5.5 Mode `2` — `Gpt2`
+
+The GPT-2-family rule, stated in bytes. Four byte classes:
+
+| Class | Bytes |
+|---|---|
+| `LETTER` | `0x41..=0x5A`, `0x61..=0x7A`, and **every byte `≥ 0x80`** |
+| `DIGIT` | `0x30..=0x39` |
+| `SPACE` | `0x20`, and `0x09..=0x0D` |
+| `OTHER` | everything else: the remaining ASCII punctuation and control bytes |
+
+The seven **contraction** segments, in this order: `'s`, `'t`, `'re`, `'ve`,
+`'m`, `'ll`, `'d`.
+
+Scanning left to right, the segment beginning at position `p` ends as follows.
+The first matching clause wins.
+
+1. If the bytes at `p` begin with one of the seven contractions, the segment is
+   exactly that contraction.
+2. If `class(input[p]) ≠ SPACE`, the segment is the maximal run of
+   `class(input[p])` starting at `p`.
+3. Otherwise `input[p]` is `SPACE`. Let `R` be the maximal `SPACE` run starting
+   at `p` and `k = |R|`.
+   1. If `R` ends the input, the segment is all of `R`.
+   2. Else if `k ≥ 2`, the segment is the first `k − 1` bytes of `R` — the run
+      **yields its final byte** to the following segment, which is what makes a
+      word carry its own leading space.
+   3. Else (`k = 1`, followed by a non-`SPACE` byte): if `input[p]` is exactly
+      `0x20`, the segment is that space **plus** the maximal run of
+      `class(input[p+1])` starting at `p+1`. If `input[p]` is any other
+      whitespace byte, the segment is that single byte.
+
+Clause 3.3's asymmetry is the original's, not an invention: the reference
+pattern's optional prefix is a literal space, not `\s?`, so a tab or a newline
+is never absorbed into the following word. It is reproduced rather than tidied
+up, because "tidier than the trainer" is the same defect as "different from the
+trainer".
+
+Worked examples, each pinned by a test:
+
+| Input | Segments |
+|---|---|
+| `Hello world` | `Hello`, ` world` |
+| `don't stop` | `don`, `'t`, ` stop` |
+| `ab 123 !!` | `ab`, ` 123`, ` !!` |
+| `a  b` | `a`, ` `, ` b` |
+| `a   b` | `a`, `  `, ` b` |
+| `trailing   ` | `trailing`, `   ` |
+| `a\nb` | `a`, `\n`, `b` |
+| `a \nb` | `a`, ` `, `\n`, `b` |
+| `he'D` | `he`, `'`, `D` |
+| `v2.0` | `v`, `2`, `.`, `0` |
+
+**Where this diverges from the Unicode original, stated outright.** The
+reference pattern is written over Unicode general categories (`\p{L}`, `\p{N}`).
+Honouring them exactly would mean shipping Unicode tables, which §4 says this
+format does not have. Treating every byte `≥ 0x80` as `LETTER` is correct for
+the letters of every multi-byte script and **wrong** for:
+
+- non-ASCII digits (`U+FF10` FULLWIDTH DIGIT ZERO and the like), which the
+  original places in `\p{N}`;
+- non-ASCII punctuation and symbols (`—`, `“`, `€`), which the original places
+  in neither `\p{L}` nor `\p{N}`;
+- non-ASCII whitespace (`U+00A0`, `U+3000`), which the original treats as `\s`.
+
+For predominantly-ASCII prompts the two agree. For text that mixes scripts with
+non-ASCII digits or punctuation they do not, and the tokenization will differ
+from the trainer's at those points. **This is a known, bounded divergence with no
+runtime detection**, and closing it means either Unicode tables or a v2 mode —
+recorded as open question 6.
+
+### 5.6 Mode `3` — `WhitespacePrefixed`
+
+The SentencePiece-family whitespace convention. A segment boundary sits
+immediately before every `0x20` that is **not** itself preceded by a `0x20`;
+that is, before each whitespace run, which the following word then carries as a
+prefix.
+
+Formally: the segment beginning at `p` ends at the smallest `e > p` such that
+`input[e] == 0x20` and `input[e−1] ≠ 0x20`, or at the end of the input if no
+such `e` exists.
+
+Only `0x20` is significant. Tabs and newlines are ordinary bytes.
+
+| Input | Segments |
+|---|---|
+| `Hello world` | `Hello`, ` world` |
+| `a  b` | `a`, `  b` |
+| `  ab` | `  ab` |
+| `don't stop` | `don't`, ` stop` |
+| `a\nb` | `a\nb` |
+
+**The `U+2581` substitution is deliberately not performed.** The reference
+implementation replaces each space with `▁` (`E2 96 81`) before splitting. Doing
+that here would break the byte-exact round trip of §5.3 — three bytes out for
+one byte in, and no way back — which is a hard invariant of this format.
+
+**What a converter must do instead:** rewrite `▁` back to `0x20` in the token
+bytes it emits. A converter is required in any case (§10.8), the rewrite is
+mechanical, and the result is that mode `3` reproduces the trainer's
+tokenization exactly while every byte still round-trips. A vocabulary whose
+tokens literally retain `▁` will not match prompts containing spaces, and
+nothing in this format can detect that — it is a converter obligation, stated
+here because there is nowhere else to state it.
+
+### 5.7 The work bound
+
+Let `N` be the input length in bytes and `L₁ … L_k` the lengths of the segments
+§5.4's mode produces, so `ΣLᵢ = N`.
+
+- **Splitting** is a single left-to-right pass that examines each byte a bounded
+  number of times — at most **four**, the three-byte contraction lookahead of
+  §5.5 plus the byte itself. So `O(1)` per input byte with a stated constant.
+- **Merging** runs per segment. A segment's sequence starts at exactly `Lᵢ`
+  tokens and every iteration removes exactly one, stopping at one token, so a
+  segment costs at most `Lᵢ − 1` iterations and the whole input costs at most
+  `Σ(Lᵢ − 1) ≤ N − 1`. **The bound is therefore unchanged by segmentation**, and
+  the quadratic term below strictly improves.
+- Each iteration scans at most `Lᵢ − 1` recorded ranks to find the minimum, and
+  performs at most three merge lookups, each a binary search of at most
+  `log2(BXV1_MAX_MERGES) = 20` probes.
+- Seeding performs `N` byte-token lookups and at most `N` merge lookups.
+
+So the whole encode is **`≤ Σ(Lᵢ − 1)² ≤ (N − 1)²` rank comparisons and `≤ 3N`
+binary searches**, plus `≤ 4N` byte examinations for splitting. The quadratic
+term is why `N` MUST be bounded by a build-time `const`:
+`MAX_ENCODE_INPUT_BYTES = 16384`, equal to BSP v2 §8's `MAX_PROMPT_BYTES`, which
+is the size of the fixed per-session buffer a prompt is reassembled into. An
+input above it is a DENY before any work is done.
+
+At the ceiling the worst case — mode `None`, or a single-segment prompt under
+any mode — is `16383² ≈ 2.7 × 10⁸` `u32` comparisons over a compact array,
+around a tenth of a second on the reference machine, which is under the ~118 ms
+BXW1 §8.2 budgets for a **single** decoded token at the maximum model size. An
+attacker's best case is therefore to buy less than one token's worth of compute
+with a maximum-size prompt, which is the bound this design was chosen to reach.
+
+**The bound is enforced, not merely argued.** The merge loop carries a budget of
+`Lᵢ` iterations per segment and denies with `MergeBudgetExhausted` if it is ever
+exhausted; the segment loop denies with `SplitterMadeNoProgress` if a mode ever
+fails to advance. Both paths are unreachable given the arguments above, and both
+are checked anyway, because "unreachable" is an argument in a document and a
+counter is a property of the program — the same reasoning BXW1 §7.6 gives for
+keeping `checked_mul` where overflow is provably impossible.
+
+`Vocabulary::encode_measured` reports the merge-iteration and segment counts, so
+the bound is observable rather than inferred;
+`src/tokenizer/tests/bounded_work.rs` drives it with a vocabulary built to
+maximize it, under every mode, and asserts the bound holds.
+
 ---
 
 ## 6. Bounds and constants
@@ -448,7 +687,10 @@ model; the *presence of a hard `const` bound on each* is not.
 | `BXV1_MAX_MERGES` | `1 << 20` | a trained byte-level vocabulary has roughly `token_count − 256` merges |
 | `BXV1_MAX_TOKEN_BYTES` | `256` | bounds the byte output one identifier can demand from decode, so a decode buffer is sized from a `const` and never from the blob |
 | `BXV1_MAX_BLOB_BYTES` | `64 MiB` | the same value `BXW1_MAX_VOCAB_BLOB_BYTES` states (BXW1 §8.1) |
-| `MAX_ENCODE_INPUT_BYTES` | `16384` | equal to BSP v2 §8's `MAX_PROMPT_BYTES`; §5.3 is why it must be a `const` |
+| `MAX_ENCODE_INPUT_BYTES` | `16384` | equal to BSP v2 §8's `MAX_PROMPT_BYTES`; §5.7 is why it must be a `const` |
+| `PRETOKENIZER_NONE` | `1` | §5.4 |
+| `PRETOKENIZER_GPT2` | `2` | §5.5 |
+| `PRETOKENIZER_WHITESPACE_PREFIXED` | `3` | §5.6 |
 
 **The fixed sections at maximum size.** At `token_count = merge_count = 2²⁰` the
 six fixed sections occupy `64 + 1024 + 12 × 2²⁰ + 20 × 2²⁰ = 33,555,520` bytes ≈
@@ -502,6 +744,8 @@ a handle or an error.
 | H12 | Any declared section offset ≠ its derived value | DENY. Offsets are asserted, never followed | `SectionOffsetMismatch` |
 | H13 | `total_size` ≠ the object length | DENY, in **both** directions. A `total_size` below the object length leaves trailing bytes nothing accounts for; above it is a read past the end. The object length is the authority; `total_size` is only ever compared to it | `TotalSizeMismatch` |
 | H14 | `token_bytes_length` ≠ `total_size − token_bytes_offset`, or `token_bytes_offset > total_size` | DENY | `TokenBytesRegionMismatch` |
+| H15 | `pretokenizer == 0` | DENY (§5.4). **Zero is not a default and not "unspecified"** — it is the value a converter that never heard of the field writes, which is exactly the case the field exists to catch. No fallback, no operator override, and no "try the common one". Checked **before** the counts, so a blob from an old converter says so rather than complaining about a consequence | `PretokenizerUnspecified` |
+| H16 | `pretokenizer` nonzero and not in `{1, 2, 3}` | DENY, with a reason distinct from H15's so a log can tell an old converter from a vocabulary needing a mode this build lacks | `PretokenizerUnrecognized` |
 
 ### 7.3 Token-table rules (per record, in identifier order)
 
@@ -553,8 +797,9 @@ a handle or an error.
 | E1 | `input.len() > MAX_ENCODE_INPUT_BYTES` | DENY, before any work (§5.3) | `PromptTooLong` |
 | E2 | `output.len() < input.len()` | DENY. Never a truncated encode | `TokenOutputTooSmall` |
 | E3 | `scratch.len() < input.len()` | DENY | `ScratchTooSmall` |
-| E4 | The merge loop exceeding `N` iterations | DENY. Unreachable; enforced anyway (§5.3) | `MergeBudgetExhausted` |
+| E4 | The merge loop exceeding a segment's length in iterations | DENY. Unreachable; enforced anyway (§5.7) | `MergeBudgetExhausted` |
 | E5 | A recorded rank whose pair no longer resolves | DENY. Unreachable for a validated vocabulary; enforced anyway | `MergeLookupInconsistent` |
+| E6 | A pre-tokenizer returning a segment end at or before the position it was asked about, or past the end of the input | DENY. Unreachable — every mode consumes at least one byte — and enforced anyway, because a splitter that failed to advance would be an unbounded loop on the prompt path, which is the one failure this format exists to make impossible | `SplitterMadeNoProgress` |
 | D1 | A token identifier `≥ token_count` passed to decode | DENY | `TokenIdOutOfRange` |
 | D2 | Decoded bytes not fitting the caller's output slice | DENY. Never a truncated decode | `ByteOutputTooSmall` |
 
@@ -570,7 +815,11 @@ targets exist to falsify:
   checked `get_mut`.
 - It cannot cause the decoder or the encoder to loop unboundedly: every loop is
   over a count bounded by a `const` (`token_count`, `merge_count`, the 256 byte
-  values, `rank ≤ 20` binary-search probes) or by the enforced merge budget.
+  values, `≤ 20` binary-search probes) or by the enforced merge budget, and the
+  segment loop advances by at least one byte per iteration (rule E6).
+- It cannot select an unimplemented or unspecified pre-tokenizer, and it cannot
+  supply a pattern of its own: the mode is a `u32` with three legal values
+  (§5.4).
 - It cannot cause a panic, an arithmetic wrap, or an unchecked cast.
 - It cannot produce a partially valid vocabulary: `Vocabulary::parse` returns a
   handle only after every rule above has passed over the whole blob.
@@ -638,9 +887,14 @@ permitted to pass on another's evidence.
 1. **Whole-blob decoder** — arbitrary bytes into `Vocabulary::parse`. Assert:
    never panics, never allocates, never reads outside the slice, and returns a
    handle only when every §7 rule passes.
-2. **Encoder against a valid vocabulary** — arbitrary prompt bytes. Assert:
-   total, bounded by `(N − 1)` merge iterations, never writes past the caller's
-   slices, and `decode(encode(x)) == x`.
+2. **Encoder against a valid vocabulary** — arbitrary prompt bytes, under each
+   mode. Assert: total, bounded by `(N − 1)` merge iterations, never writes past
+   the caller's slices, and `decode(encode(x)) == x`.
+2a. **Pre-tokenizer alone** — arbitrary bytes into each mode's splitter. Assert:
+   total; every call advances by at least one byte; the segments partition the
+   input exactly (contiguous, non-overlapping, covering); and no mode's output
+   equals another's on the corpus as a whole, which is the fuzz-scale form of
+   the mutation guard in §9's property test 6.
 3. **Encoder against an arbitrary accepted vocabulary** — arbitrary blob and
    arbitrary prompt, encoding only when the blob parses. Assert the same
    properties hold for *every* structurally valid vocabulary, not only for
@@ -658,9 +912,14 @@ permitted to pass on another's evidence.
    ascending, contiguous, and exactly cover `token_bytes_offset .. total_size`.
 4. No reachable path sizes, extends, or indexes a buffer from a blob-supplied
    length, offset, or count.
-5. The merge loop terminates for all inputs, in at most `N − 1` iterations.
+5. The merge loop terminates for all inputs, in at most `N − 1` iterations
+   summed over segments, and the segment loop terminates because every mode
+   advances.
 6. `Vocabulary::parse` returns `Ok` **iff** every rule in §7 passes, for all
    inputs.
+7. Each mode's `segment_end` is total, strictly advancing, and never past the
+   end of the input, for all inputs and all positions — the property §5.4
+   asserts and rule E6 enforces.
 
 **Property tests** (present in `src/tokenizer/tests/`):
 
@@ -671,9 +930,19 @@ permitted to pass on another's evidence.
 3. **Merge-order correctness** — vocabularies where greedy left-to-right and
    rank priority provably disagree, with the rank-priority answer pinned.
 4. **Bounded work** — a vocabulary constructed to maximize merge iterations,
-   asserted against the `N − 1` bound.
+   asserted against the `N − 1` bound under **every** mode, plus an assertion
+   that segmentation never *increases* the merge work.
 5. **Adversarial blobs** — one fixture per rule in §7, each asserting the
    **specific** variant rather than merely that an error occurred.
+6. **Pre-tokenization** — each mode's exact segmentation pinned by worked
+   example (§5.5, §5.6); all three modes asserted to disagree on one input, at
+   both the segment level and the token level; BPE asserted unable to merge
+   across a boundary, with a control case proving the spanning rule *does* fire
+   without the split; and every mode asserted to advance over every byte value.
+   **Mutation-tested**: wiring `Gpt2` to `None`'s splitter must fail the suite.
+   A test that only checked "some segmentation happened" would pass with every
+   mode wired to the same splitter, which is exactly the defect §5.4 exists to
+   prevent.
 
 **Test vectors:** a fixed set of small blobs checked into the tree, so a
 converter and this decoder are checked against the same bytes rather than
@@ -683,18 +952,17 @@ against each other. **Not yet present** — see §11.
 
 ## 10. Costs stated plainly
 
-1. **No pre-tokenization.** Real BPE tokenizers split the input on a regex
-   (whitespace, punctuation, digit runs) before merging, which both bounds the
-   merge work per segment and changes which merges are reachable. BXV1 does not,
-   which means (a) the work bound is quadratic in the whole prompt rather than
-   linear in it with a small constant, and (b) **a vocabulary trained with a
-   pre-tokenizer will not reproduce its trainer's tokenization here**, because
-   merges that the regex forbade can now fire across a boundary. A model whose
-   tokenizer depends on pre-tokenization must have that behaviour added, and
-   adding it is a format version bump plus a second hostile-input parser on the
-   prompt path. This is the largest cost in this document and the most likely
-   reason for a v2.
-2. **Quadratic encode.** §5.3's arithmetic is acceptable only because
+1. **A fixed, small set of pre-tokenizer modes.** Three modes are implemented
+   (§5.4). A vocabulary trained behind any other splitter **cannot be served at
+   all** — there is no fallback and no "closest match", because a closest match
+   is exactly the silent mis-tokenization the field exists to prevent. Adding a
+   mode is a new numbered value, a new hand-written splitter, and its own tests;
+   it is not a configuration change.
+1a. **`Gpt2` approximates Unicode classes in bytes.** §5.5 enumerates where it
+   diverges: non-ASCII digits, non-ASCII punctuation, and non-ASCII whitespace.
+   For predominantly-ASCII prompts the two agree; for mixed-script text they do
+   not, and there is **no runtime detection** of the difference. Open question 6.
+2. **Quadratic encode.** §5.7's arithmetic is acceptable only because
    `MAX_ENCODE_INPUT_BYTES` is 16 KiB and a decoded token already costs ~118 ms.
    Raising the prompt ceiling raises the encode cost quadratically. A
    linked-list-plus-heap encoder would make it `O(N log N)` at the cost of ~4×
@@ -716,23 +984,34 @@ against each other. **Not yet present** — see §11.
 7. **BXV1 is not a filter.** §5.4. It will faithfully encode any byte sequence,
    including one designed to be malformed text.
 8. **A converter is required.** No existing tokenizer file can be renamed into a
-   BXV1 blob: the sort indices, the byte-token table, and the exact tiling must
-   be computed.
+   BXV1 blob: the sort indices, the byte-token table, the exact tiling, and the
+   `pretokenizer` mode must all be computed or determined. For a
+   SentencePiece-family vocabulary the converter must additionally rewrite `▁`
+   back to `0x20` in the token bytes (§5.6).
+9. **One bit changes the meaning of every prompt.** `pretokenizer` values `2`
+   and `3` differ in a single bit and are both legal, so a flipped bit silently
+   retokenizes everything. Nothing structural can catch that, which is why the
+   SHA-256 binding of §8 is not optional. Pinned by a test so the property is
+   recorded rather than assumed.
 
 ---
 
 ## 11. Open questions for the owner
 
-1. **Does the served model's tokenizer depend on pre-tokenization?** If it does,
-   cost 10.1 is not a cost but a blocker, and the regex — or a bounded
-   hand-written splitter that reproduces it — becomes a v2 requirement and a new
-   Full-tier hostile-input parser. *Settled by:* naming the model family and
-   inspecting its tokenizer configuration. **This is the question that decides
-   whether BXV1 v1.0 is sufficient.**
+1. ~~**Does the served model's tokenizer depend on pre-tokenization?**~~ —
+   **RESOLVED 2026-08-03: assume it does, and carry the mode in the blob.**
+   Pre-tokenization is an enumerated `pretokenizer` field with no default
+   (§5.4), and three modes are implemented as hand-written bounded splitters
+   (§5.5, §5.6). A regex engine was **rejected**: a general engine on the prompt
+   path is a large new hostile-input surface with a catastrophic-backtracking
+   failure mode, which is the failure §5.7's bound exists to prevent. Hard-coding
+   a single rule was **rejected** because it silently mis-tokenizes every model
+   that used a different one, and the failure is invisible without end-to-end
+   parity testing against the trainer.
 2. **The converter does not exist.** Nothing in the tree produces a BXV1 blob
    from an upstream tokenizer, so no real vocabulary has ever been parsed. The
    test fixtures are synthetic. *Settled by:* writing the converter, which also
-   settles question 1.
+   settles questions 6 and 7.
 3. **`BXV1_MAX_TOKEN_BYTES = 256`.** Chosen to bound decode output from a
    `const`. Real byte-level BPE tokens rarely exceed 32 bytes. *Settled by:*
    the converter reporting the true maximum for the served vocabulary.
@@ -745,3 +1024,18 @@ against each other. **Not yet present** — see §11.
    C7 currently requires exact equality, which forbids it. *Settled by:* an owner
    ruling; the conservative reading (exact equality) is what is implemented, and
    relaxing it would be a `INV-PARSE-004` weakening that needs writing down.
+6. **Is `Gpt2`'s byte-level approximation of `\p{L}`/`\p{N}` close enough?**
+   §5.5 states the three divergence classes: non-ASCII digits, non-ASCII
+   punctuation, non-ASCII whitespace. Closing them means either shipping Unicode
+   category tables — new data, new size, and a new thing to keep current with
+   whichever Unicode version the trainer used — or a v2 mode that does. *Settled
+   by:* tokenization-parity testing against the trainer on representative
+   mixed-script text, once the converter of question 2 exists. **Until then the
+   `Gpt2` mode is exact for ASCII and approximate otherwise, and no runtime check
+   will tell anyone which case they are in.**
+7. **Which mode does the served vocabulary actually need?** Question 1 settled
+   *how* the mode is carried, not *which one is right for the model in hand*.
+   That is read from the trainer's tokenizer configuration, and getting it wrong
+   is silent. *Settled by:* the converter determining it from the source
+   tokenizer rather than an operator choosing it — an operator-chosen mode is a
+   guess wearing a configuration field's clothes.
