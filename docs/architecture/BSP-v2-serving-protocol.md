@@ -9,10 +9,12 @@ its sizing discipline, and its message grammar are retained here.
 **Governs:** the single authenticated, capability-gated inbound socket a remote
 client uses to reach the confined inference tenant, and the second session type
 on that same socket by which the machine is administered.
-**Status:** design spec. Precise enough to drive Kani harnesses and libFuzzer/AFL
-targets against every parser and every state transition. Nothing here rests on
-obscurity (NORTH_STAR "Structure over secrecy"). **Nothing here is implemented** —
-see §14, which states exactly what does not exist yet.
+**Status:** normative spec, **partly implemented as of 2026-08-03**. Precise enough
+to drive Kani harnesses and libFuzzer/AFL targets against every parser and every
+state transition. Nothing here rests on obscurity (NORTH_STAR "Structure over
+secrecy"). The wire decoder and the transport cryptography have landed; the
+listener, the credential store, and every §13 proof artifact have not — see §14,
+which states exactly which is which.
 
 This spec is normative. "MUST", "MUST NOT", "REJECT" are hard requirements.
 "REJECT" always means the fail-closed action defined in §12 (deny, do not
@@ -142,6 +144,16 @@ Each credential record holds:
 | `counter` | 8 | Chain position *n*, big-endian `u64`. |
 | `role` | 1 | `0x01` = client (`CapServe`), `0x02` = admin (`CapAdmin`). |
 | `flags` | 1 | Bit 0: break-glass. No other bit is defined; a set undefined bit fails the record closed. |
+
+**Deviation recorded, in the safe direction: `K_id` is not retained at all.** The
+table above describes what the credential *is*; the shipped key schedule
+(`src/transport-crypto/`) stores only `PRK_id = HKDF-Extract(LABEL_ID_SALT, K_id)`,
+the precomputable value §5.3's scan actually consumes. `PRK_id` is a one-way
+function of `K_id`, nothing in this protocol needs `K_id` after that `Extract`, and
+a store that holds less yields less to the disclosure of §2.4. This is *stronger*
+than this section requires, not weaker, and it is written down here so a later
+reader does not repair it back into a literal `K_id` field. A conforming
+implementation MAY retain `K_id`; it SHOULD NOT.
 
 `K_id` and the chain are separated deliberately: identification MUST survive a
 ratchet advance, and a desynchronized client MUST still be identifiable so the
@@ -276,8 +288,8 @@ tag comparison is constant-time.
 `open_packet` enforces, fail-closed:
 
 - decrypts the 4-byte length with `K_1`, then **REJECTs if `packet_length < 2` or
-  `packet_length > 35000`** — an absolute, client-independent bound, checked
-  **before** any buffer is touched;
+  `packet_length > RECORD_PLAINTEXT_CAPACITY`** — an absolute, client-independent
+  bound, checked **before** any buffer is touched;
 - REJECTs on Poly1305 tag mismatch (constant-time compare) — this is the
   authentication check; a forged/replayed/corrupt record never reaches the message
   decoder;
@@ -287,27 +299,77 @@ tag comparison is constant-time.
 Plaintext inside the frame is `padding_length[1] || payload || padding`, padded so
 `1 + payload + padding` is a multiple of 8 with at least 4 padding bytes.
 
-BSP adds two record-layer rules on top:
+**Both padding rules bind both ends, and that is stated here because a sender
+obligation nobody checks is not a rule.** A sender MUST produce a plaintext whose
+total length is a multiple of 8 and whose `padding_length` is `≥ 4`. A receiver
+MUST verify both on every record it opens, after decryption and in addition to the
+containment test `padding_length + 1 ≤ packet_length`, and REJECT + drop on either.
+A receiver that accepts what the format forbids has defined a second, looser
+grammar, and two implementations that disagree about which grammar is the real one
+do not interoperate. The receiver-side check is not defensive duplication: it is
+the only place either rule is enforced against a peer this side did not write.
 
-- **`BSP_MAX_RECORD_PLAINTEXT`** (§8) is the BSP payload ceiling and MUST be `≤`
-  the `seal_packet`/`open_packet` internal plaintext buffer (today `4096`). The
+BSP adds three record-layer rules on top:
+
+- **`RECORD_PLAINTEXT_CAPACITY` (§8) is the internal plaintext buffer, and the
+  figure is derived, not chosen.** The record plaintext is the *framed* form
+  `padding_length[1] || payload || padding`, so a buffer sized to the payload
+  ceiling cannot hold a maximum-size payload once framed. The derivation, in full,
+  so no implementation has to repeat it:
+
+  ```
+  RECORD_PLAINTEXT_CAPACITY = BSP_MAX_RECORD_PLAINTEXT + 1 + MAX_PADDING
+                            = 4096                     + 1 + 255
+                            = 4352
+  ```
+
+  `+ 1` is the `padding_length` byte; `255` is the largest value a one-byte
+  `padding_length` can express, and therefore the largest padding run the format
+  admits. A maximum-size payload with minimum legal padding frames to
+  `1 + 4096 + 7 = 4104` bytes — already past the `4096` this section previously
+  named — and the ceiling above covers every legal padding run, not just the
+  minimum one. The buffer MUST be a single shared named `const`; deriving it
+  independently at two call sites is how the two figures drift apart again.
+- **`BSP_MAX_RECORD_PLAINTEXT`** (§8) is the BSP **payload** ceiling — the
+  recovered `payload`, after `padding_length` and padding are removed. The
   `payload_out` BSP passes is a `BSP_MAX_RECORD_PLAINTEXT` BSS buffer; a larger
-  inner packet ⇒ REJECT. If `BSP_MAX_RECORD_PLAINTEXT` is raised above 4096, that
-  internal buffer MUST become a shared named `const` in the same change.
+  recovered payload ⇒ REJECT (§12 row R4). Because
+  `payload = packet_length − 1 − padding_length` and `padding_length ≤ 255`, a
+  `packet_length` above `RECORD_PLAINTEXT_CAPACITY` necessarily yields a payload
+  above `BSP_MAX_RECORD_PLAINTEXT`; the length check above is therefore row R4
+  applied before any buffer is touched, never a bound this construction lacks.
 - **Sequence numbers** are the per-direction AEAD nonces: a 64-bit big-endian
   nonce whose low 32 bits are the sequence. Each direction starts at `0` at its
   first data record and increments by exactly `1` per record. The receiver derives
   the expected sequence locally; it is **never on the wire**. A record that fails
   to authenticate at the expected sequence ⇒ REJECT + drop, which closes replay
-  and reorder. Sequence MUST NOT wrap; on reaching `MAX_RECORD_SEQ` the session is
-  torn down (§9.4).
+  and reorder. Sequence MUST NOT wrap. **The boundary is pinned, because "on
+  reaching" and "would exceed" are off by one and both wordings were in this
+  document:** the record *at* `MAX_RECORD_SEQ` is legal and is processed; the
+  **advance past** `MAX_RECORD_SEQ` is what denies, and it tears the session down
+  (§9.4, §12 row R5). Teardown therefore happens at a record boundary rather than
+  mid-record, and the counter never wraps and never saturates into reuse.
 
-**Code provenance note.** These functions live in `src/kernel/src/ssh/transport.rs`
-today. P2-T2 factors them into `src/brainix-transport-crypto/` and P2-T6 deletes
-the SSH bridge; the construction survives that move, the SSH protocol around it
-does not. One function does **not** survive: `derive_direction_keys` is the SSH
-exchange-hash KDF and there is no SSH exchange hash in v2. Directional keys come
-from HKDF-Expand (§5.4).
+**A known, accepted observable: "record not yet complete" is distinguishable from
+"record failed to authenticate."** §4.2 orders the `packet_length` range check
+*before* the tag check, so a peer that forges four prefix bytes learns one bit — in
+range ⇒ the receiver waits for more bytes, out of range ⇒ it drops. This is stated
+rather than left implied, and it is not repairable within this construction:
+folding "has not arrived yet" into an authentication failure would drop the
+connection on any legitimate short read and make the stream framing unusable. The
+leak is one bit about a value the peer cannot steer, and it is what the ordering
+above mandates. Every *post*-decryption fault — tag mismatch, wrong sequence, and
+each of the padding rules — is by contrast reported identically and carries no
+distinguishing detail, because those are reachable only through key material and a
+distinct answer would be an oracle on the keystream (§12 rows R1–R4).
+
+**Code provenance note.** These functions originated in
+`src/kernel/src/ssh/transport.rs`. P2-T2 **ported** them to
+`src/transport-crypto/` — a copy, not a move, because P2-T6 is what deletes the SSH
+bridge and the kernel path is still live until it does (§14). The construction
+survives the port, the SSH protocol around it does not. One function did **not**
+come across: `derive_direction_keys` is the SSH exchange-hash KDF and there is no
+SSH exchange hash in v2. Directional keys come from HKDF-Expand (§5.4).
 
 The decoded record payload is a **BSP message** (§10): `type[1] || body`.
 
@@ -704,8 +766,11 @@ attacker after §5.3 removed its ability to forge the counter.
 ## 6. The session-key ratchet
 
 Owner decision 9. This is the mechanism that recovers forward secrecy from
-symmetric primitives alone (`INV-BOOT-007`). **It is specified here and not
-implemented** (§14).
+symmetric primitives alone (`INV-BOOT-007`). **It exists as a library and drives
+nothing** — the advance, the catch-up bound, and §6.2's monotonic commit are
+implemented and tested in `src/transport-crypto/`, and no deployed path calls them,
+because there is no listener and no credential store to commit to (§14). The
+deployed forward-secrecy position is therefore still the one §5.6h states.
 
 ### 6.1 Chain advance
 
@@ -888,7 +953,9 @@ tunable, the *presence of a hard const bound on each* is not):
 | `LEN_LABEL` | `16` | every HKDF label, NUL-padded |
 | `MAX_ENROLLED_KEYS` | `32` | fixed credential table; also the constant-work factor of the §5.3 scan |
 | `MAX_CHAIN_CATCHUP` | `64` | bound on forward chain resolution per handshake (§6.3) |
-| `BSP_MAX_RECORD_PLAINTEXT` | `4096` | max BSP message bytes per data record; `≤` AEAD internal buffer (§4.2) |
+| `BSP_MAX_RECORD_PLAINTEXT` | `4096` | max BSP message **payload** bytes per data record, after framing is removed (§4.2) |
+| `MAX_PADDING` | `255` | largest run a one-byte `padding_length` can express (§4.2) |
+| `RECORD_PLAINTEXT_CAPACITY` | `4352` | AEAD internal plaintext buffer; **derived**: `BSP_MAX_RECORD_PLAINTEXT + 1 + MAX_PADDING = 4096 + 1 + 255` (§4.2). Also the `packet_length` ceiling of §12 row R1 |
 | `MAX_PROMPT_BYTES` | `16384` | total prompt per request; fixed **per-session** BSS buffer, reassembled across `PromptChunk` records |
 | `MAX_PROMPT_CHUNK` | `4032` | one `PromptChunk` payload; `≤ BSP_MAX_RECORD_PLAINTEXT − header` |
 | `MAX_TOKEN_CHUNK` | `512` | one outbound `TokenChunk` payload |
@@ -901,10 +968,10 @@ tunable, the *presence of a hard const bound on each* is not):
 | `MAX_INFLIGHT_PER_SESSION` | `1` | at most one active inference per session |
 | `HS_TIMEOUT` | `5 s` | wall-clock bound on each pre-`ESTABLISHED` state |
 | `IDLE_TIMEOUT` | `120 s` | max idle in `ESTABLISHED` before server teardown |
-| `MAX_RECORD_SEQ` | `u32::MAX` | per-direction; reaching it forces teardown (§9.4) |
+| `MAX_RECORD_SEQ` | `u32::MAX` | per-direction; the record **at** this value is legal, the advance **past** it forces teardown (§4.2, §9.4, §12 row R5) |
 
 **Total inbound serving memory is therefore fixed at build time:**
-`MAX_SESSIONS × (session control block + MAX_PROMPT_BYTES + 2 × BSP_MAX_RECORD_PLAINTEXT + K_c2s + K_s2c + KV region)`
+`MAX_SESSIONS × (session control block + MAX_PROMPT_BYTES + 2 × RECORD_PLAINTEXT_CAPACITY + K_c2s + K_s2c + KV region)`
 plus `MAX_ENROLLED_KEYS × credential record`. No client input changes this figure
 (`INV-MEM`, `INV-SERVE-002`).
 
@@ -1030,7 +1097,11 @@ question:
 | `0x9X` | server → client | admin session |
 
 A `0x1X` tag on a client session and a `0x0X` tag on an admin session are both
-REJECT. **No message carries a session, KV, or weights selector**
+REJECT (§12 row M2). **The direction half of the partition is enforced too:** a
+`0x8X` or `0x9X` tag is server → client, so one arriving *inbound* from the peer is
+equally a REJECT (§12 row M11). Both halves are decoding errors rather than policy
+questions, which is what §11 rests on. **No message carries a session, KV, or
+weights selector**
 (`INV-SERVE-001`, `INV-MODEL`): the only correlation field is `request_id`.
 
 ### 10.1 `request_id` — scoped, inert correlation token
@@ -1042,6 +1113,14 @@ server validates it only as: "equals the `request_id` of the in-flight request i
 *this* slot." It never selects a session, a KV entry, a weights view, a credential,
 or a buffer. A duplicate or garbage `request_id` cannot reach another session
 because it is only ever compared within the one slot bound to this connection.
+
+**`request_id == 0` is legal and is not reserved.** §10.3's `Error` body says
+"`request_id[4]` (or `0` if none)", which reads as a reservation; it is not one. It
+is a **sender convention** for the one case where a denial cannot be attributed to
+an open request, and a peer may open a request with `request_id = 0` and have it
+echoed normally. Reserving the value would turn an inert correlation token into a
+namespace — a small one, but a namespace, and §10.1 exists to say this field is not
+that. The full `u32` range, `0` and `u32::MAX` included, is the peer's to choose.
 
 ### 10.2 Client session — client → server
 
@@ -1065,7 +1144,7 @@ client length ever sizes memory.
 | `0x81` | `Accepted` | `request_id[4]` | acks a valid `InferCommit`; streaming begins |
 | `0x82` | `TokenChunk` | `request_id[4]`, `tokens[u16 len ≤ MAX_TOKEN_CHUNK]` | one or more emitted; `tokens` are opaque model output bytes, rendered by the client and never interpreted as control by BSP (`INV-MODEL-003`) |
 | `0x83` | `StreamEnd` | `request_id[4]`, `finish_reason[1]` | `finish_reason ∈ {0 OK, 1 LENGTH, 2 CANCELLED, 3 MODEL_ERROR}`; returns slot to idle |
-| `0x8E` | `Error` | `request_id[4]` (or `0` if none), `error_code[2]` | non-fatal protocol error at message level; §12 says which faults are `Error`-then-continue vs. drop |
+| `0x8E` | `Error` | `request_id[4]` (or `0` if none — a sender convention, not a reservation; §10.1), `error_code[2]` (§12.1) | non-fatal protocol error at message level; §12 says which faults are `Error`-then-continue vs. drop |
 | `0x8F` | `Bye` | (empty) | teardown ack; connection closes after |
 
 ### 10.4 Admin session — the six verbs
@@ -1080,8 +1159,16 @@ capability (`INV-AUTH-009`).
 | `0x12` | `RevokeKey` | `request_id[4]`, `handle[16]` | Handle MUST exist ⇒ else `Error{ERR_NO_SUCH_KEY}`. Handle MUST NOT be the break-glass handle ⇒ else `Error{ERR_FORBIDDEN}`, unconditionally and non-configurably (`INV-BOOT-008`). On success the record's `K_id` and `CK_n` are zeroized and the slot is returned to the fixed table; live sessions authenticated by that credential are torn down (§9.4) |
 | `0x13` | `LoadWeights` | `request_id[4]`, `weights_digest[32]` | **Reboot-class — see the note below the table.** Activates the weight blob whose measured digest is exactly this value; the digest is verified before first use (`INV-MODEL-002`) and a mismatch, an absent blob, or a blob whose own Ed25519 signature does not verify ⇒ `Error{ERR_NO_SUCH_WEIGHTS}`. **The blob is not carried over BSP** — this verb names a digest, never a path and never a byte stream; see §15 question 4 |
 | `0x14` | `ReadAuditLog` | `request_id[4]`, `cursor[8]`, `max_records[2]` | `max_records ≤ MAX_AUDIT_RECORDS` — else `Error{ERR_LIMIT}`. Read-only; returns `AuditChunk` records and a next cursor. Reading grants no authority (`INV-SERVE-005`) |
-| `0x15` | `RestartServer` | `request_id[4]`, `target[1]` | `target` is an enumerated server identity (`servd`, `inferd`, `auditd`, `gpud`), not a name and not a path; an unknown value ⇒ `Error{ERR_BAD_TARGET}`. Restart re-launches with the target's existing frozen manifest and mints nothing (`INV-FAIL-002`) |
+| `0x15` | `RestartServer` | `request_id[4]`, `target[1]` | `target` is an enumerated server identity — **`0x01` `servd`, `0x02` `inferd`, `0x03` `auditd`, `0x04` `gpud`** — not a name and not a path; any other value, `0x00` included, ⇒ `Error{ERR_BAD_TARGET}`. Restart re-launches with the target's existing frozen manifest and mints nothing (`INV-FAIL-002`) |
 | `0x16` | `Reboot` | `request_id[4]` | Reboots the machine. The admin session is torn down before the reboot proceeds |
+
+**`RestartServer`'s target values are normative and 1-based** *(pinned 2026-08-03;
+this table previously named the four identities and assigned no numbers, which made
+the verb unimplementable by two parties independently).* They are 1-based to match
+`role`, the protocol's only other enumerated authority byte, where `0x00` is
+likewise not a value. `0x00` is therefore not "unspecified" and not "default": it is
+what a peer that never read this table sends, and it denies. The set is closed —
+adding a fifth identity is a new numbered value here, never an unnumbered name.
 
 **How `EnrollKey` can target the break-glass identity at all**, since the caller
 supplies key material and not a handle: `handle = Expand(PRK_enroll,
@@ -1133,7 +1220,7 @@ network, and its finiteness is checkable by reading the table above.
 | `0x90` | `AdminOk` | `request_id[4]`, `status[2]` | verb completed; `status` is an enumerated result code |
 | `0x91` | `KeyEnrolled` | `request_id[4]`, `handle[16]` | reply to `EnrollKey`; the handle is the non-secret name `RevokeKey` will later use |
 | `0x92` | `AuditChunk` | `request_id[4]`, `next_cursor[8]`, `records[u16 len ≤ MAX_AUDIT_CHUNK]` | zero or more; `records` are opaque audit bytes, rendered by the client, never interpreted as control |
-| `0x9E` | `Error` | `request_id[4]`, `error_code[2]` | admin-side non-fatal error |
+| `0x9E` | `Error` | `request_id[4]`, `error_code[2]` (§12.1) | admin-side non-fatal error |
 | `0x9F` | `Bye` | (empty) | teardown ack; connection closes after |
 
 ### 10.6 What is deliberately absent
@@ -1230,12 +1317,12 @@ Kani/fuzz assertion target.
 | K5 | selector matches the **break-glass** credential | `flags` bit 0, checked at match (§2.5) | Drop, unconditionally and before any chain resolution. The break-glass credential authenticates on the serial transport only; on this listener it is never accepted, whatever else is well-formed |
 | S1 | no free session slot | pool acquire | Drop (server at capacity; existing sessions unaffected — `INV-SERVE-001`) |
 | S2 | credential already at `MAX_SESSIONS_PER_CREDENTIAL`, or admin at `MAX_ADMIN_SESSIONS` | admission check (§9.1) | Drop (`INV-SERVE-003`) |
-| R1 | AEAD `enc_length` decodes `< 2` or `> 35000` | record-layer bound | Drop |
+| R1 | AEAD `enc_length` decodes `< 2` or `> RECORD_PLAINTEXT_CAPACITY` (`4352`) | record-layer bound, pre-touch | Drop. **This bound governs, and it replaces the `35000` this row previously named** — see the note below the table |
 | R2 | AEAD tag mismatch (forged/corrupt/replayed record) | Poly1305, constant-time | Drop |
 | R3 | record at unexpected sequence (replay/reorder/gap) | seq mismatch ⇒ auth fail | Drop |
 | R4 | inner payload > `BSP_MAX_RECORD_PLAINTEXT` | `payload_out` bound | Drop |
-| R5 | sequence would exceed `MAX_RECORD_SEQ` | counter guard | Drop (teardown) |
-| M1 | unknown `type` tag | message decoder | Error+keep (`ERR_BAD_TYPE`) or Drop if policy-strict — see §15 question 1 |
+| R5 | the advance **past** `MAX_RECORD_SEQ` (the record *at* it is legal and is processed) | counter guard | Drop (teardown at the record boundary) |
+| M1 | unknown `type` tag | message decoder | **Drop** (§15 question 1 answered 2026-08-03 — strict). `ERR_BAD_TYPE` keeps its number for a future lenient row and is emitted by nothing today |
 | M2 | tag from the wrong range for this session type (`0x1X` on client, `0x0X` on admin) | tag-range guard (§10) | Drop (type confusion inside an authenticated channel ⇒ treat as attack) |
 | M3 | message body shorter than its fixed fields | fixed reader | Drop |
 | M4 | var-bytes `len` > field MAX | §3 reader | Drop |
@@ -1245,6 +1332,8 @@ Kani/fuzz assertion target.
 | M8 | `PromptChunk` running total > declared or > `MAX_PROMPT_BYTES` | reassembly guard | Drop (declared-length lie ⇒ attack) |
 | M9 | `InferCommit` accumulated ≠ declared | commit check | Error+keep (`ERR_INCOMPLETE`) |
 | M10 | message of a type invalid in the current state | state guard | Error+keep (`ERR_STATE`) |
+| M11 | a **server → client** tag (`0x8X` / `0x9X`) arriving *inbound* from the peer | tag-range guard (§10) | Drop. §10 partitions the tag space by direction as well as by session type; M2 named only the session-type half and a response tag arriving inbound matched no row. It is the same class of type confusion and takes the same action |
+| M12 | bytes remaining after a fixed-size body's last field | fixed reader `finish()` | Drop. A payload longer than its type requires is a disagreement between the record length and the message grammar, and a decoder that ignores the excess is one an attacker can use to smuggle bytes past a downstream length check |
 | A1 | `EnrollKey` with `role` outside `{0x01, 0x02}` | verb decoder | Drop (an out-of-range authority byte is not a benign mistake) |
 | A2 | `EnrollKey` with the credential table full | table bound | Error+keep (`ERR_NO_CAPACITY`) |
 | A3 | `RevokeKey` on an unknown handle | table lookup | Error+keep (`ERR_NO_SUCH_KEY`) |
@@ -1256,12 +1345,74 @@ Kani/fuzz assertion target.
 
 **Design rule for the M-rows and A-rows:** anything that could only arise from a
 *non-conforming or hostile* peer after authentication and that indicates
-framing, type, or state corruption (M2, M3, M4, M8, A1) is **Drop**, because inside
+framing, type, or state corruption (M1, M2, M3, M4, M8, M11, M12, A1) is **Drop**,
+because inside
 an authenticated channel such corruption implies a broken or hostile peer, not a
 recoverable hiccup. Faults a benign peer could plausibly hit — over-limit, busy,
 incomplete, unknown handle — are **Error+keep** so the channel is usable without
 weakening isolation. Both branches are fail-closed: neither ever allocates, grows
 a pool, advances a chain, or advances session state on bad input.
+
+**Why row R1's ceiling moved from `35000` to `4352`, and which governs.** The two
+figures were a genuine contradiction: R1 admitted a `packet_length` up to `35000`
+while R4 caps the recovered payload at `BSP_MAX_RECORD_PLAINTEXT = 4096`, so every
+value in `4353..=35000` was accepted by one row and necessarily denied by the other,
+and the two rows disagreed about how far a receiver must be prepared to buffer.
+**`RECORD_PLAINTEXT_CAPACITY` governs.** `35000` was never a BSP bound — it is the
+outer sanity limit of the `chacha20-poly1305@openssh.com` construction §4.2 borrowed,
+and §0 already disclaims interoperability with the protocol it came from, so nothing
+is owed to it. Applying `4352` at R1 is exactly R4 enforced earlier
+(`payload = packet_length − 1 − padding_length` with `padding_length ≤ 255`, so
+`packet_length > 4352 ⇒ payload > 4096`), and enforcing it before any buffer is
+touched is what §4.2 requires of the length check. R4 stays as its own row because
+it is also the sender-side bound and because a `packet_length` within `4352` can
+still recover an over-large payload if `padding_length` is small — R1 is necessary
+and not sufficient.
+
+**The R-rows are indistinguishable to the peer, deliberately.** R1, R2, R3, and each
+receiver-side padding rule of §4.2 all deny with the same answer carrying no
+detail, because every one of them past the length check is reachable only after
+decryption under the session key and a distinct answer would be an oracle on the
+keystream. The cost is stated: a genuine interoperability bug in the record layer is
+harder to diagnose from a log, because the log says only that authentication failed.
+The one thing a peer *can* still distinguish is "the record has not fully arrived"
+from "the record failed" — §4.2 records that as a known, accepted observable and
+explains why the ordering that produces it is not repairable here.
+
+### 12.1 Error codes — normative wire values
+
+The `error_code[2]` of `Error` (`0x8E` on a client session, `0x9E` on an admin
+session) is a big-endian `u16` from exactly this table. *(Assigned 2026-08-03. This
+section named twelve codes and numbered none of them, which made §12 unimplementable
+and made two independent implementations unable to interoperate even when both were
+correct. The values below are the ones already in `src/bsp/`; they are now the
+format's, not that crate's.)*
+
+| Code | Value | Emitted by |
+|---|--:|---|
+| `ERR_BAD_TYPE` | `0x0001` | reserved for row M1, which is **Drop** (see above); no path emits it today |
+| `ERR_LIMIT` | `0x0002` | rows M5, A7 |
+| `ERR_BUSY` | `0x0003` | row M6 |
+| `ERR_NO_REQUEST` | `0x0004` | row M7 |
+| `ERR_INCOMPLETE` | `0x0005` | row M9 |
+| `ERR_STATE` | `0x0006` | row M10 |
+| `ERR_NO_CAPACITY` | `0x0007` | row A2 |
+| `ERR_NO_SUCH_KEY` | `0x0008` | row A3 |
+| `ERR_FORBIDDEN` | `0x0009` | row A4 |
+| `ERR_NO_SUCH_WEIGHTS` | `0x000A` | row A5 |
+| `ERR_BAD_TARGET` | `0x000B` | row A6 |
+| `ERR_DUPLICATE` | `0x000C` | §10.4 `EnrollKey` on a duplicate `handle` |
+
+`0x0000` is not a code and is not "no error": there is no message that carries an
+`error_code` and does not mean one. Every other value is unassigned; a receiver
+MUST treat an unassigned code as an error it does not recognize and MUST NOT infer a
+class from the numeric range. Assigning a new code is an edit to this table, and the
+numbering above is fixed — a future code takes `0x000D`, never a renumbering.
+
+**The set is deliberately coarse.** A code names the *class* of refusal and never the
+value that caused it, never a slot index, never a handle, and never a count. A
+richer code space would leak server-side state through a field the peer is already
+allowed to read.
 
 ---
 
@@ -1323,44 +1474,91 @@ clients:
 
 ---
 
-## 14. Implementation status — what does not exist
+## 14. Implementation status — what exists and what does not
 
 Recorded because NORTH_STAR requires that an unbuilt control never be described in
 the present tense, and because this document otherwise reads like a description of
-a running system. As of 2026-08-02, **none of BSP v2 is implemented**:
+a running system. **Rewritten 2026-08-03**: the previous wording said "none of BSP
+v2 is implemented", which stopped being true the day two crates landed against this
+spec. What follows is split so neither half can be read as the other.
 
-- There is no `servd`, no BSP listener, and no BSP parser. The inbound path in
-  tree is still `boot/ssh_bridge.rs`, which holds `static mut` session state on a
-  single-core cooperative path and is scheduled for deletion at P2-T6.
+### 14.1 What has shipped
+
+Library code only. Every item below is a workspace crate with tests; none of them
+is reachable from a socket, because nothing yet listens on one.
+
+- **The wire decoder — `src/bsp/`** (`brainix-bsp`). §3's three readers, §4.1's
+  fixed-length handshake framing, §4.2's record framing and padding checks, §5.1's
+  three messages, §5.5's state machine, §10's tag partition, §10.2–§10.5's messages
+  and the six verbs, and §12's disposition per failure. It decodes byte layouts and
+  nothing else: it holds no key material, computes no hash, and compares nothing in
+  constant time.
+- **The transport cryptography — `src/transport-crypto/`**
+  (`brainix-transport-crypto`). §5.2's enrollment derivation, §5.3's blinded
+  selector and its constant-work scan, §5.4's transcript hashes and key schedule,
+  §4.2's seal/open with sequence-as-nonce, and §5.5's two handshake drivers. It
+  re-parses no structure — every layout comes from `src/bsp/`.
+- **§6's ratchet exists as a library, and only as one.** `advance`, catch-up
+  bounded at `MAX_CHAIN_CATCHUP`, and §6.2's monotonic compare-and-swap commit are
+  implemented and tested in `src/transport-crypto/`. **No deployed path drives
+  them**, because there is no listener and the credential store below persists no
+  chain position — so §5.6h's no-forward-secrecy statement is still the deployed
+  reality, unchanged.
+- **HMAC-SHA256, HKDF-SHA256, Poly1305, and zeroization are now in-tree**, in
+  `src/transport-crypto/`. None of the four was ever vendored.
+- **The serving stack this protocol carries traffic for** landed the same day and
+  is likewise library-only: the weight-format loader `src/bxw1/`, the tokenizer
+  `src/tokenizer/`, the tensor kernels `src/tensor/`, and the transformer forward
+  pass `src/transformer/`. BSP names none of them on the wire (§10.6) and they are
+  listed here only so "the model side does not exist either" is not carried forward
+  as a stale claim.
+
+### 14.2 What does not exist
+
+- **There is no `servd` and no BSP listener.** Nothing binds a socket, owns the
+  session pool, owns the clock, or supplies the CSPRNG — so §9.1's slot pool
+  (rows S1–S2), `HS_TIMEOUT`, `IDLE_TIMEOUT`, and §5.6c's server-nonce freshness
+  obligation are specified and unenforced. The inbound path in tree is still
+  `boot/ssh_bridge.rs`, which holds `static mut` session state on a single-core
+  cooperative path and is scheduled for deletion at P2-T6.
 - `src/kernel/src/boot/credential_store.rs` persists to virtio-blk and **seals
-  nothing**. Enrollment, revocation, handles, roles, and the break-glass flag are
-  specified here and not built.
-- **The ratchet does not exist.** §6 is a design. Until it ships, a deployed
-  implementation holds a chain that never advances, which is exactly the
-  no-forward-secrecy state of §5.6h.
-- `sha2` and `chacha20` are still vendored. The in-tree SHA-256, HKDF, ChaCha20,
-  and Poly1305 set is specified and not yet written; the record layer's current
-  home is `src/kernel/src/ssh/transport.rs`, which P2-T2 relocates.
-- No fuzz target, Kani harness, Prusti obligation, or test vector from §13 exists.
+  nothing**. Enrollment, revocation, handles, roles, the break-glass flag, and the
+  persisted chain position are specified here and not built — which is also why
+  §6's ratchet has nowhere to commit to.
+- **Row A4's break-glass refusal is implemented nowhere.** It is a credential-store
+  fact, and there is no credential store; §2.5 and §12 row K5 are specified and
+  unenforced.
+- `sha2` and `chacha20` are **still vendored**. The in-tree SHA-256 and ChaCha20
+  are specified and not yet written. The record layer's original home
+  `src/kernel/src/ssh/transport.rs` still exists — P2-T2 *ported* the construction
+  rather than moving it, and P2-T6 deletes the SSH bridge.
+- **No fuzz target and no Kani harness from §13 exists** for either crate, and no
+  Prusti contract and no independent audit report. §13's `(key_material, role,
+  nonces) → (selector, confirms, directional keys)` vectors do not exist either;
+  what exists is RFC known-answer coverage of the primitives, which is a different
+  obligation. Both crates are **Full** tier and both are short of it.
 - **The reboot-class `LoadWeights` semantics of §10.4 are unbuilt in every
   part** *(added 2026-08-03)*: there is no admin verb dispatch (P2-T14), no
   teardown sequence, no kernel unseal of a destroyed weight generation (P3-T2),
   and no `modeld` to re-run (P3-T3a). The verb fails closed today because
   nothing implements it, not because a check refuses it.
 
-Nothing in §§1–13 may be cited as an implemented control until the corresponding
-line above is struck.
+Nothing in §§1–13 may be cited as an implemented control except against §14.1, and
+§14.1 grants only "this code exists and is tested", never "this control is enforced
+on a live socket" — no socket is live.
 
 ---
 
 ## 15. Open questions for the owner
 
-1. **M1 Drop-vs-Error policy.** Carried over from v1 §12 and still open. Should an
-   unknown message `type` drop the connection (strict) or emit `Error` and continue
-   (lenient)? This spec defaults strict for framing/type/state-corruption rows and
-   lenient for limit/busy rows; confirm the boundary. Note that v2 makes one row
-   strictly stricter than v1: a tag from the wrong session-type range (M2) is
-   always Drop.
+1. *(Answered 2026-08-03 — **strict**. An unknown message `type` is Drop, row M1.
+   §12's own design rule puts every framing/type/state-corruption row on the Drop
+   side, and the lenient reading lets an authenticated peer probe the whole tag
+   space indefinitely at no cost and with the channel still open. The boundary is
+   confirmed as the spec already drew it: corruption Drops, limit/busy/incomplete
+   keep. `ERR_BAD_TYPE` retains its number in §12.1 and is emitted by nothing.
+   Retained as a numbered placeholder so §-references to later questions do not
+   shift.)*
 2. **`chain_counter` on the wire.** Sending the chain position in plaintext is what
    makes catch-up (§6.3) possible, and catch-up is what turns a lost final
    handshake message into a self-healing event instead of a lockout. It also leaks
