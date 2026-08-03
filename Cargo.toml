@@ -2,6 +2,7 @@
 members = [
     "src/adt",
     "src/tensor",
+    "src/tokenizer",
     "src/kernel",
     "src/bootloader",
     "src/bootloader-verify",
