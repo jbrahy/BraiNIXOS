@@ -1240,6 +1240,6 @@ If an invariant is weakened, security is weakened, even if the code still compil
 
 Two corollaries, added 2026-08-02:
 
-**A weakened invariant is written down or it is a lie.** The Apple-primary decision cost real assurance — remote attestation and sealing are gone on the platform the product ships on. That is recorded as INV-BOOT/AS with owner sign-off, restated in §7, and guarded by INV-BOOT-AS-001..003. The failure mode this discipline prevents is not the loss itself; it is the loss being quietly forgotten and the platform later described as though it were attested.
+**A weakened invariant is written down or it is a lie.** The Apple-primary decision cost real assurance — remote attestation and sealing are gone on the primary platform. That is recorded as INV-BOOT/AS with owner sign-off, restated in §7, and guarded by INV-BOOT-AS-001..003. The failure mode this discipline prevents is not the loss itself; it is the loss being quietly forgotten and the platform later described as though it were attested.
 
 **Serving inverted the threat picture, and the invariants moved with it.** BraiNIX now accepts connections from hostile remote clients and runs a model that adversaries prompt directly. §13, §14, and §15 exist because the old invariant set — written for an internal-only microkernel — did not cover any of that. An invariant set that lags the system's actual attack surface provides confidence, not security.

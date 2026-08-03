@@ -11,7 +11,9 @@ trusting any other document.
 When two documents disagree, the higher one wins and the lower one is drift to be fixed.
 
 1. **[`NORTH_STAR.md`](NORTH_STAR.md)** — the contract: destination, first principles, invariants, hard
-   lines, non-goals. Named invariant exceptions (INV-BOOT/AS, TCB-AS) live here and nowhere else.
+   lines, non-goals. Named invariant exceptions (INV-BOOT/AS, TCB-AS, the conditionally signed TCB-AS/GPU,
+   and the Ed25519 release-signature verification exception) live here and nowhere else; the fifth,
+   TCB-EXCEPTION-001, predates them and has its own file. See *Governance* below.
 2. **[`THREAT_MODEL.md`](THREAT_MODEL.md)** — attacker model, trust boundary, per-invariant verification
    and blast radius, deployment threat profile.
 3. **[`ROADMAP.md`](ROADMAP.md)** — phasing, task breakdown, status, per-component "done" gate, risks.
@@ -159,6 +161,8 @@ only)* and `../.planning/planning-keep/ARCHIVED.md` *(local only)*.
 | [`security/THREAT_MODEL.md`](security/THREAT_MODEL.md) | [`THREAT_MODEL.md`](THREAT_MODEL.md) — there was a duplicate threat model with conflicting content; the top-level one is authoritative. |
 | [`security/PROJECT_DESCRIPTION.md`](security/PROJECT_DESCRIPTION.md) | [`NORTH_STAR.md`](NORTH_STAR.md) + [`../README.md`](../README.md) |
 | [`security/SECURITY.md`](security/SECURITY.md) | [`operations/DEVICE_ISOLATION_POLICY.md`](operations/DEVICE_ISOLATION_POLICY.md) — it was a Phase 08 device-isolation note, not a security policy. Disclosure policy is [`../SECURITY.md`](../SECURITY.md). |
+| [`architecture/BSP-v1-serving-protocol.md`](architecture/BSP-v1-serving-protocol.md) | [`architecture/BSP-v2-serving-protocol.md`](architecture/BSP-v2-serving-protocol.md) — decision #16 replaced v1's signature-over-ephemeral-key-agreement handshake and compile-time client allowlist with the pre-shared-key handshake on 2026-08-02. Its record layer, sizing discipline, and message grammar were carried into v2. |
+| [`REMOTE_MANAGEMENT_SHELL_SPEC.md`](REMOTE_MANAGEMENT_SHELL_SPEC.md) | [`architecture/BSP-v2-serving-protocol.md`](architecture/BSP-v2-serving-protocol.md) — decision #17 chose the admin session type's frozen six-verb set over a shell on 2026-08-02; a general-purpose remote shell is a NORTH_STAR non-goal. Not deferred — answered differently. |
 | [`dev-rules.md`](dev-rules.md) | [`../PROJECT_RULES.md`](../PROJECT_RULES.md) — near-duplicate, same title inside. |
 | [`security-rules.md`](security-rules.md) | [`security/SECURITY_INVARIANTS.md`](security/SECURITY_INVARIANTS.md) |
 

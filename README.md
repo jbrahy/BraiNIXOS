@@ -62,7 +62,7 @@ contract, attacker model, and verification posture.
 - **Microkernel core** — the smallest possible ring-0 surface; drivers, filesystem, network stack, the serving front end, and the inference engine live in userspace.
 - **Capability-mediated everything** — no ambient authority; every resource is an unforgeable, typed, bounded, revocable token.
 - **KPTI & W^X, structurally** — the kernel is not mapped in user page tables; no page is ever writable *and* executable.
-- **Secure serving path** — an authenticated, capability-gated inbound protocol (in-tree Ed25519 / X25519 / ChaCha20-Poly1305) with mutually isolated per-client sessions.
+- **Secure serving path** — an authenticated, capability-gated inbound protocol (pre-shared client keys, HKDF-SHA256 key schedule, ChaCha20-Poly1305 records) with mutually isolated per-client sessions.
 - **In-tree inference engine** — a `no_std` transformer runtime; the served model runs as a confined tenant with weights in fixed reserved regions.
 - **Decomposed network stack** — link, IP, and transport run as isolated servers chained only by synchronous IPC.
 - **Multi-arch by design** — a hardware abstraction layer with **Apple Silicon (aarch64)** and **x86-64** as compile-time backends.
@@ -122,7 +122,7 @@ Early, actively developed. BraiNIX pivoted from an internal-only hardened microk
   `rust-src`, `rustfmt`, `clippy`, and `llvm-tools-preview` components.
 - Bare-metal target `x86_64-unknown-none` today. `aarch64-unknown-none` is added by the HAL extraction; the
   Apple Silicon boot stub needs a custom in-tree target spec beyond that.
-- For Apple Silicon bring-up (not yet started): a Mac mini M2 in Permissive Security, a debug UART cable,
+- For Apple Silicon bring-up (not yet started): a Mac mini M2 Pro in Permissive Security, a debug UART cable,
   and a macOS stub install that must remain on disk. Provisioning requires physical presence.
 - For the live boot: Docker (the dev container ships QEMU, GRUB, `xorriso`, and `swtpm`).
 

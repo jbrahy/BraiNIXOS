@@ -46,7 +46,8 @@ update, with no upstream remedy. These are accepted costs, not open questions.
 
 ## Status at a glance
 
-**Wave 1 — COMPLETE** (all five deliverables merged):
+**Wave 1 — COMPLETE** (all five deliverables merged; P2-T1's deliverable was later superseded and the task
+re-opened in Wave 2 — see its row below):
 
 | Task | Deliverable | Commit |
 |---|---|---|
@@ -134,7 +135,7 @@ P2 (serving path) ──▶ P3 (inference engine) ──▶ ⟦ P3-T9 — HARD G
 ```
 
 Two independent tracks converge. The **platform track** (P1 → P4 → AS-*) is serial and hardware-gated. The
-**product track** (P2 → P3) is architecture-neutral, developed and proven on x86-64 under QEMU, and is not
+**serving track** (P2 → P3) is architecture-neutral, developed and proven on x86-64 under QEMU, and is not
 blocked by any Apple work. Running both concurrently is the whole reason the HAL exists.
 
 **P3-T9 is a hard gate, not a milestone (decision #13).** Neither AS-4 nor AS-5 may be started or re-rated
@@ -211,7 +212,7 @@ takes its capacity first.
 ### Phase 4 — aarch64 core + QEMU `virt` harness
 
 **Descoped from the original "aarch64 server bring-up."** With Apple as the primary target, GICv3, SMMUv3,
-and the Graviton/Ampere real-metal checklist are no longer product goals. What survives is the part Apple
+and the Graviton/Ampere real-metal checklist are no longer goals. What survives is the part Apple
 shares — the aarch64 *core* — plus the QEMU `virt` machine as a bring-up harness. That harness matters: it
 is the only way to debug aarch64 core code with a working console before facing hardware where nothing
 works until the UART does.
@@ -246,7 +247,7 @@ not re-opened, until the x86-64/QEMU serving path is proven end to end.
 
 - **AS-4a** Storage: RTKit co-processor mailbox protocol + ANS2 NVMe (non-standard, tag-based NVMMU quirks). **S** impl / **O** audit. Deps: AS-3. Verify: weights read from disk on hardware. *Interim unblock: payload-embedded weights let AS-4b and the serving path proceed before this lands.*
 - **AS-4b** Network: PCIe bring-up + the mini's built-in Ethernet NIC driver, as capability-bounded `devd-*` servers — never in the kernel. **S** impl / **O** audit. Deps: AS-3. Verify: NIC TX/RX on hardware.
-- **AS-4c** e2e: remote `bsp-client` → Mac mini M2 → auth → prompt → streamed tokens; 2 isolated clients. Deps: AS-4a, AS-4b, P3-A, **P3-T9**. Verify: **CPU-serving capability demonstrated on the primary platform.** This is a demonstration, not the finish line — the terminal criterion is AS-5 (decision #12).
+- **AS-4c** e2e: remote `bsp-client` → Mac mini M2 Pro → auth → prompt → streamed tokens; 2 isolated clients. Deps: AS-4a, AS-4b, P3-A, **P3-T9**. Verify: **CPU-serving capability demonstrated on the primary platform.** This is a demonstration, not the finish line — the terminal criterion is AS-5 (decision #12).
 - **AS-A** Whole-platform security audit, including the TCB-AS enumeration and the INV-BOOT/AS degradation restated in the release notes. **O**. Gate.
 
 **Honest rating of AS-4:** the memo rated this chain NO-GO and named it "where the stream can silently
@@ -370,5 +371,5 @@ Close this documentation gate first. Then two Wave 2 tasks start in parallel, sh
 **AS-0-T1/T2 is Wave 3** (decision #19) — unblocked but unreserved, and any Wave 2 slippage takes its
 capacity first.
 
-Before AS-1 can begin, the hardware rig must exist: the Mac mini M2 in Permissive Security, a debug UART
+Before AS-1 can begin, the hardware rig must exist: the Mac mini M2 Pro in Permissive Security, a debug UART
 cable, and m1n1 installed as a lab instrument.
