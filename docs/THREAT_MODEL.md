@@ -221,17 +221,18 @@ AGX design and implementation may proceed, but five preconditions must all be gr
 is ever loaded**; they are AS-5-T0's acceptance criteria.
 
 1. Every GPU-fronting DART instance defaults to deny-all (`INV-DEV-004`).
-2. A Kani proof on the **DART backend / HAL IOMMU trait** that its API surface admits no widening
+2. A Kani proof on **the DART backend's IOMMU trait** that its API surface admits no widening
    operation, proving no consumer — `gpud` included — can widen its own DMA window (`INV-DEV-006`). The
    proof is an obligation of the confinement, not of the driver.
 3. GPU completion records are fuzzed and Kani-checked as hostile input (`INV-PARSE-001`).
 4. The tenant mapping policy above is enforced: weights read-only and permanent, KV cache per session,
    never two tenants resident (`INV-SERVE-006`).
 5. No iBoot-locked DART on the GPU path — or, if one exists, its locked semantics honestly represented in
-   the HAL trait rather than papered over.
+   **the DART backend's IOMMU trait** rather than papered over.
 
-*(Naming note, 2026-08-03: the HAL is cancelled. Preconditions 2 and 5 are unchanged in substance — "the
-HAL IOMMU trait" now means the DART backend's own IOMMU trait, which is where the obligation lives.)*
+*(History, 2026-08-03: preconditions 2 and 5 named the HAL IOMMU trait when signed on 2026-08-02. The
+HAL was cancelled the next day, so the criteria now name the DART backend's own IOMMU trait directly.
+The obligation is unchanged in scope; only its home is named differently.)*
 
 **If any precondition proves unsatisfiable on real hardware, the exception self-voids and AS-5 stops.**
 Until all five are green, no build ships with the GPU enabled. That is the correct failure mode: the

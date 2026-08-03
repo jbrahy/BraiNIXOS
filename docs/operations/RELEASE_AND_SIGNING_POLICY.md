@@ -151,21 +151,33 @@ This upholds INV-BOOT-003 (dev and prod cryptographic material remain separate).
 
 The binary signing process follows these steps in order. Each step must complete successfully before the next begins.
 
+> **Target note (2026-08-03).** The commands in Steps 1 and 2 name `x86_64-unknown-none`. That is the
+> **frozen reference** build target — the only bare-metal target that exists today — and it is shown here
+> because it is the working command, **not because x86-64 is a release platform.** It is not: x86-64 was
+> dropped on 2026-08-03 (§0), and no artifact built from it is shipped, signed for deployment, or
+> delivered to any machine. **The release artifact is the Image4 payload for Apple Silicon** (§0), built
+> against the in-tree aarch64 target spec that lands with the boot stub at AS-1. Steps 3–8 below are
+> target-independent — they operate on a hash, not on a triple — and apply unchanged to that artifact.
+> These two commands are replaced, not supplemented, when the aarch64 target exists.
+
 ### Step 1: Reproducible Build
 
 Build the kernel binary using the pinned toolchain and vendored dependencies:
 
 ```
+# Frozen reference target — see the target note above. The release artifact is the
+# Apple Silicon Image4 payload; this command is replaced when the aarch64 target lands (AS-1).
 cargo build --release --offline --target x86_64-unknown-none
 ```
 
-The build is reproducible: identical source, toolchain, and dependencies produce an identical binary hash. The build environment is a deterministic Docker container with pinned base image.
+The build is reproducible: identical source, toolchain, and dependencies produce an identical binary hash. The build environment is a deterministic Docker container with pinned base image. **Reproducibility is a property of the artifact and carries to the aarch64 build unchanged** (§0).
 
 ### Step 2: Hash Binary
 
 Compute the SHA-256 hash of the output binary:
 
 ```
+# Frozen reference path — see the target note above.
 sha256sum target/x86_64-unknown-none/release/brainix-kernel > brainix-kernel.sha256
 ```
 

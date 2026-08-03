@@ -140,18 +140,21 @@ implementation work may proceed. It is conditional: five preconditions must all 
 firmware is ever loaded**, and they are the acceptance criteria for AS-5-T0.
 
 1. Every GPU-fronting DART instance defaults to deny-all.
-2. A Kani proof on the **DART backend / HAL IOMMU trait** that its API surface admits no widening
+2. A Kani proof on **the DART backend's IOMMU trait** that its API surface admits no widening
    operation — proving that no consumer, `gpud` included, can widen its own DMA window (`INV-DEV-006`).
    The proof belongs to the confinement, not to the driver.
 3. GPU completion records are fuzzed and Kani-checked as hostile input (`INV-PARSE-001`).
 4. The tenant mapping policy above is enforced: weights read-only and permanent, KV cache per session,
    never two tenants resident.
 5. No iBoot-locked DART on the GPU path — or, if one exists, its locked semantics are honestly
-   represented in the HAL trait rather than papered over.
+   represented in **the DART backend's IOMMU trait** rather than papered over.
 
-*(Naming note, 2026-08-03: the HAL is cancelled — an eleven-trait abstraction with one backend abstracts
-nothing. Preconditions 2 and 5 are unchanged in substance; "the HAL IOMMU trait" now means the DART
-backend's own IOMMU trait, which is where that obligation lives. The obligation moved home, not scope.)*
+*(History, 2026-08-03: preconditions 2 and 5 read "the DART backend / HAL IOMMU trait" and "the HAL
+trait" when they were signed on 2026-08-02. The HAL was cancelled the next day — an eleven-trait
+abstraction with one backend abstracts nothing — so the criteria now name the DART backend's own IOMMU
+trait directly. **The obligation is unchanged in scope; only its home is named differently.** Recorded
+here because these are signed pass/fail acceptance criteria for AS-5-T0, and a signed criterion should
+not be edited silently.)*
 
 **If any precondition proves unsatisfiable on real hardware, this exception self-voids and AS-5 stops.**
 That is the correct failure mode, not an obstacle to route around. Until all five are green, no build

@@ -84,7 +84,7 @@ and reviewed rather than arriving as a surprise.
 | aarch64 boot stub / entry | Entry ABI from iBoot, establishing our own MMU state, exception vectors, and stack before any abstraction exists. Nothing about the inherited state may be assumed. | AS-1 |
 | s5l UART console | MMIO writes before any safe abstraction layer exists — the aarch64 analogue of the existing COM1 entry. | AS-1 |
 | aarch64 page tables / MMU | Raw PTE writes, TLB maintenance. Distinct from the x86-64 reference: 16 KiB granule, different descriptor format. | ~~P4-T2~~ **AS-1** (Phase 4 cancelled 2026-08-03; the work was absorbed, not dropped) |
-| aarch64 exception vectors / context switch | Inline assembly for vector entry, register save/restore, FP/NEON state. | P4-T3, P4-T4 |
+| aarch64 exception vectors / context switch | Inline assembly for vector entry, register save/restore, FP/NEON state. | ~~P4-T3, P4-T4~~ **AS-1** (Phase 4 cancelled 2026-08-03; P4-T3's GICv3 backend was harness-only and is cancelled outright, P4-T4 was absorbed — the vector-entry and context-switch unsafe surface lands at AS-1 against AIC and the s5l UART) |
 | AIC interrupt controller | MMIO register access, FIQ path, implementation-defined IPI system registers. | AS-2 |
 | DART IOMMU | MMIO register access and page-table entry writes for **every discovered instance**. | AS-3 |
 | RTKit / ANS2 / PCIe / NIC | Mailbox MMIO, DMA descriptor rings, device register access — in capability-bounded driver servers, **never in the kernel**. | AS-4 |

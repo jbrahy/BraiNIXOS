@@ -314,12 +314,12 @@ and on AS-5-T0's five preconditions, which are unchanged and unwaivable.
 
 - **AS-5-T0** DART/GPU confinement proof. **O**. Deps: AS-3. **Gate for everything below**, and the acceptance criteria of the conditionally signed TCB-AS/GPU exception (decision #10, NORTH_STAR.md). All five must be green **before GPU firmware is ever loaded**; each is pass/fail, and none is waivable:
   1. Every GPU-fronting DART instance defaults to **deny-all**.
-  2. A **Kani proof on the DART backend / HAL IOMMU trait** that its API surface admits no widening operation — proving that no consumer, `gpud` included, can widen its own DMA window (`INV-DEV-006`). The proof belongs to the confinement (Full tier), **not** to the driver; stating it as a proof about `gpud` would contradict the tiering rule of decision #15.
+  2. A **Kani proof on the DART backend's IOMMU trait** that its API surface admits no widening operation — proving that no consumer, `gpud` included, can widen its own DMA window (`INV-DEV-006`). The proof belongs to the confinement (Full tier), **not** to the driver; stating it as a proof about `gpud` would contradict the tiering rule of decision #15.
   3. GPU completion records are **fuzzed and Kani-checked as hostile input** (`INV-PARSE-001`).
   4. The **tenant-mapping policy of decision #14** is enforced: weights read-only and permanent, KV cache per session, **never two tenants resident simultaneously**.
-  5. **No iBoot-locked DART on the GPU path** — or, if one exists, its locked semantics are honestly represented in the HAL trait rather than papered over.
+  5. **No iBoot-locked DART on the GPU path** — or, if one exists, its locked semantics are honestly represented in **the DART backend's IOMMU trait** rather than papered over.
 
-  *(Naming note, #21: the HAL is cancelled. Preconditions 2 and 5 are unchanged in substance — "the HAL IOMMU trait" now means the AS-3 DART backend's own IOMMU trait, which is where the obligation lives. The obligation moved home, not scope.)*
+  *(History, #21: preconditions 2 and 5 named the HAL IOMMU trait when signed on 2026-08-02; the HAL was cancelled on 2026-08-03, so they now name the AS-3 DART backend's own IOMMU trait directly. The obligation is unchanged in scope; only its home is named differently. Recorded because these are signed pass/fail criteria and a signed criterion should not be edited silently.)*
 
   **If any precondition proves unsatisfiable on real hardware, the exception self-voids and AS-5 stops.** That is the correct failure mode, not an obstacle to route around. Until all five are green, no build ships with the GPU enabled.
 - **AS-5-T1** RTKit GPU endpoint over the mailbox layer built in AS-4a. **S**. Deps: AS-4a.

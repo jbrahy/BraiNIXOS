@@ -42,11 +42,13 @@ The two costs of that decision are stated once here and again where they bite:
 ## 0. Non-negotiables inherited
 
 From NORTH_STAR hard lines and THREAT_MODEL §"Dominant threats" — *No remote
-attestation on the primary platform* and *Hostile remote clients and the inbound
-protocol*. **This spec cites dominant threats by name, never by rank.** That list
-is explicitly a re-ranking for the shipping deployment, so a rank is a moving
-target and a rank citation rots silently; BSP v1 carried three such citations and
-all three went stale.
+attestation, anywhere* (renamed there on 2026-08-03 when x86-64 was dropped; it
+was *No remote attestation on the primary platform*) and *Hostile remote clients
+and the inbound protocol*. **This spec cites dominant threats by name, never by
+rank.** That list is explicitly a re-ranking for the shipping deployment, so a
+rank is a moving target and a rank citation rots silently; BSP v1 carried three
+such citations and all three went stale. A *name* can still change — as one just
+did — but it changes visibly and is repaired in one place.
 
 - **No new external crate.** BSP uses exactly four primitives: **SHA-256, HKDF,
   ChaCha20, Poly1305**. All four are constant-time by construction (fixed
@@ -197,7 +199,7 @@ break-glass channel." A protocol spec may not resolve a north-star silence by
 widening, and the earlier draft of this section did exactly that.
 
 The security reason, beyond the authority argument: under the at-rest ruling of
-§2.4 the credential store is plaintext on disk on the primary platform. A
+§2.4 the credential store is plaintext on disk, on the only platform there is. A
 network-capable break-glass credential would therefore be a **permanent,
 by-definition-unrevocable remote administrative credential recoverable by disk
 theft** — the one credential an attacker most wants and the one the design
@@ -1163,11 +1165,12 @@ machine rather than the published image (`INV-BUILD-004`). Until §6 ships, the
 honest statement is the one in §5.6h: disclosure decrypts everything ever
 recorded.
 
-**No remote attestation on the primary platform.** Also undefended, also by
+**No remote attestation, on the only platform there is.** Also undefended, also by
 structure. A completed handshake proves the peer holds the credential and proves
 nothing about the software behind it (§0). This spec contains no field, message,
-or claim that could be mistaken for an attestation, and adding one on the primary
-platform would be a false claim in wire format.
+or claim that could be mistaken for an attestation, and adding one would be a
+false claim in wire format — with no second platform on which it could ever be a
+true one.
 
 ---
 

@@ -11,9 +11,11 @@
 > The obligations this document defined did not go away — they moved home. The W^X and page-table
 > proof obligation attaches to the **aarch64 MMU** directly; the `INV-DEV-006` no-widening proof
 > attaches to the **DART backend's own IOMMU trait** (AS-3). Both remain **Full tier** in
-> [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) §16. Where
-> `NORTH_STAR.md`, `THREAT_MODEL.md`, or `ROADMAP.md` still say "the HAL IOMMU trait" in the
-> TCB-AS/GPU preconditions, they mean that DART trait; the obligation is unchanged in scope.
+> [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) §16. The TCB-AS/GPU
+> preconditions in `NORTH_STAR.md`, `THREAT_MODEL.md`, and `ROADMAP.md` named "the HAL IOMMU trait"
+> when they were signed on 2026-08-02; **they now name that DART trait directly**, each with a dated
+> history note, because they are signed pass/fail acceptance criteria for AS-5-T0 and a signed
+> criterion should not be edited silently. The obligation is unchanged in scope.
 >
 > **No code is removed by this cancellation.** `src/kernel/src/arch/**` stays in tree and stays
 > building as the frozen reference implementation the aarch64 port is written against
