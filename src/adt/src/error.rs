@@ -106,8 +106,16 @@ pub enum AdtError {
     /// whole value is never adopted as the string (spec §9.5).
     UnterminatedStringValue,
 
-    /// A node name is longer than the 63 characters Apple's own declaration
-    /// allows (spec §4.5). A policy bound with a distinct reason.
+    /// A node's `name` property has a value longer than 64 bytes — 63 name
+    /// characters plus the terminator (spec §9.5). Bounding the *value* is
+    /// what stops a crafted tree presenting a huge "node name" to every path
+    /// comparison at every level. A policy bound with a distinct reason.
+    NodeNameValueTooLong,
+
+    /// A node name decodes to more than the 63 characters Apple's own
+    /// declaration allows (spec §4.5). A policy bound with a distinct reason,
+    /// kept separate from [`AdtError::NodeNameValueTooLong`] so a log can tell
+    /// an over-long value from an over-long string inside a legal value.
     NodeNameTooLong,
 
     /// A fixed-shape property does not have the exact length its form requires

@@ -7,8 +7,37 @@
 //! can make a later read safe on its own.
 
 use crate::error::AdtError;
-use crate::property::{AddressRange, CellCounts, Property, MAX_NODE_NAME_LEN};
-use crate::raw::{decode_node_header, decode_property, end_of_properties, walk_node_end};
+use crate::property::{AddressRange, CellCounts, Property, MAX_NODE_NAME_LEN, MAX_NODE_VALUE_LEN};
+use crate::raw::{decode_node_header, decode_property, first_child_offset, walk_node_end};
+
+/// The properties AS-1 depends on, and the only ones for which a duplicate
+/// name rejects the node (spec §9.9 rule (b)).
+///
+/// A duplicate of any property outside this list is **ignored**: lookup
+/// returns the first match, as rule (a) makes normative. Rejecting every
+/// duplicate instead would turn one duplicated vendor property that nothing
+/// reads into an unbootable board with no console, which is a strictly worse
+/// failure than ignoring a property nothing reads.
+///
+/// This list is the audit surface for that decision. Adding a property AS-1
+/// comes to depend on means adding it here.
+const AS1_CRITICAL_PROPERTIES: [&[u8]; 10] = [
+    b"name",
+    b"compatible",
+    b"reg",
+    b"ranges",
+    b"#address-cells",
+    b"#size-cells",
+    b"cpu-impl-reg",
+    b"chip-id",
+    b"device_type",
+    b"state",
+];
+
+/// Whether a duplicate of `name` must reject the node.
+fn is_as1_critical(name: &[u8]) -> bool {
+    AS1_CRITICAL_PROPERTIES.contains(&name)
+}
 
 /// A borrowed cursor onto one node of a validated tree.
 #[derive(Debug, Clone, Copy)]
@@ -79,7 +108,7 @@ impl<'a> Node<'a> {
     /// Iterates this node's children in layout order.
     pub fn children(&self) -> Result<ChildIter<'a>, AdtError> {
         let header = decode_node_header(self.blob, self.offset)?;
-        let first = end_of_properties(self.blob, self.offset, header.property_count)?;
+        let first = first_child_offset(self.blob, self.offset, header)?;
         let child_depth = self
             .depth
             .checked_add(1)
@@ -102,11 +131,19 @@ impl<'a> Node<'a> {
     /// and remove properties, so every read in AS-1 must have a defined
     /// behaviour for absence (spec §8). This is that behaviour.
     ///
-    /// Semantics on a duplicate name: **denied**. The format does not forbid
-    /// duplicates, but "first match" and "last match" readers would then
-    /// disagree about the same tree (spec §9.9). The whole property list is
-    /// scanned so that a duplicate is detected rather than shadowed.
+    /// **Lookup semantics (spec §9.9 rule (a), normative): the first matching
+    /// property in node order wins, and the scan stops there.** Two conforming
+    /// implementations must agree about the same tree, so "first match" is
+    /// fixed rather than incidental.
+    ///
+    /// **Duplicate rejection (rule (b)) is narrow and applies at the point of
+    /// use.** For the ten properties AS-1 actually depends on
+    /// ([`AS1_CRITICAL_PROPERTIES`]) the full property list is scanned and a
+    /// repeated name denies with [`AdtError::DuplicateProperty`]. For every
+    /// other name a duplicate is ignored — the ambiguity is only exploitable
+    /// where something reads it.
     pub fn find_property(&self, name: &[u8]) -> Result<Option<Property<'a>>, AdtError> {
+        let critical = is_as1_critical(name);
         let mut found: Option<Property<'a>> = None;
         for item in self.properties()? {
             let property = item?;
@@ -115,6 +152,9 @@ impl<'a> Node<'a> {
                     return Err(AdtError::DuplicateProperty);
                 }
                 found = Some(property);
+                if !critical {
+                    return Ok(found);
+                }
             }
         }
         Ok(found)
@@ -136,6 +176,16 @@ impl<'a> Node<'a> {
         let property = self
             .find_property(b"name")?
             .ok_or(AdtError::MissingNameProperty)?;
+
+        // Bound the *value length* first (spec §9.5). The format bounds a node
+        // name only by 0x7FFFFFFF, so without this a single crafted `name`
+        // property presents a huge "node name" to every path comparison at
+        // every level of the walk. Bounding the decoded string instead would
+        // accept `"uart0\0"` followed by a megabyte of junk.
+        if property.value().len() > MAX_NODE_VALUE_LEN {
+            return Err(AdtError::NodeNameValueTooLong);
+        }
+
         let name = property.as_c_str()?;
         if name.len() > MAX_NODE_NAME_LEN {
             return Err(AdtError::NodeNameTooLong);
@@ -197,7 +247,7 @@ impl<'a> Node<'a> {
     /// The address returned is untranslated: it is stated in the parent's
     /// child address space. Use [`crate::NodePath::translated_reg`] to walk it
     /// up through `ranges`.
-    pub fn reg(&self, cells: CellCounts, index: usize) -> Result<AddressRange, AdtError> {
+    pub(crate) fn reg(&self, cells: CellCounts, index: usize) -> Result<AddressRange, AdtError> {
         self.property(b"reg")?.reg_container(cells, index)
     }
 }

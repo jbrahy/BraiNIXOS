@@ -137,10 +137,12 @@ pub(crate) fn decode_node_header(blob: &[u8], offset: usize) -> Result<NodeHeade
         return Err(AdtError::PropertyCountExceedsCeiling);
     }
 
-    // Minimum bytes the children alone consume: every child is at least its
-    // own 8-byte node header. Combining this with the property minimum is
-    // strictly stronger than testing it alone, and remains sound because a
-    // well-formed node genuinely needs both.
+    // Header-time *pre-check* on the child count. This is an early reject
+    // only: it measures against the bytes remaining from the node's own
+    // offset, which counts the node's properties as space available to its
+    // children, so it can accept a count that cannot possibly fit. It does
+    // **not** discharge the real test, which needs the first-child offset and
+    // therefore the whole property walk — see `first_child_offset`.
     let children_minimum = (child_count as usize)
         .checked_mul(NODE_HEADER_LEN)
         .ok_or(AdtError::ChildCountExceedsBuffer)?;
@@ -247,6 +249,37 @@ pub(crate) fn end_of_properties(
     Ok(cursor)
 }
 
+/// Walks the node's properties and returns its first-child offset `F`, after
+/// applying the **real** child-count minimum-space test.
+///
+/// This is the test the header-time pre-check does not discharge. Each child
+/// needs at least its own 8-byte header, and the space actually available to
+/// the children starts at `F` — not at the node's offset, which would count
+/// the node's own properties as room for its children.
+///
+/// `F` is an *extent* offset: it may legitimately equal the buffer length,
+/// which is exactly the case when `child_count` is zero and the node is the
+/// last in the blob. It becomes a read offset only when the count says a child
+/// record exists there, and the full read-offset test is applied then.
+pub(crate) fn first_child_offset(
+    blob: &[u8],
+    offset: usize,
+    header: NodeHeader,
+) -> Result<usize, AdtError> {
+    let first = end_of_properties(blob, offset, header.property_count)?;
+    let available = blob
+        .len()
+        .checked_sub(first)
+        .ok_or(AdtError::ChildCountExceedsBuffer)?;
+    let children_minimum = (header.child_count as usize)
+        .checked_mul(NODE_HEADER_LEN)
+        .ok_or(AdtError::ChildCountExceedsBuffer)?;
+    if children_minimum > available {
+        return Err(AdtError::ChildCountExceedsBuffer);
+    }
+    Ok(first)
+}
+
 /// Fully validates the subtree rooted at `start` and returns its extent end.
 ///
 /// The walk is iterative over an explicit fixed-size stack, so the depth limit
@@ -284,7 +317,7 @@ pub(crate) fn walk_node_end(
         budget = budget.checked_sub(1).ok_or(AdtError::WalkBudgetExhausted)?;
 
         let header = decode_node_header(blob, offset)?;
-        let cursor = end_of_properties(blob, offset, header.property_count)?;
+        let cursor = first_child_offset(blob, offset, header)?;
 
         if header.child_count > 0 {
             if depth >= limit {

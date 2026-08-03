@@ -215,6 +215,37 @@ fn a_node_claiming_more_children_than_remain_denies() {
     );
 }
 
+#[test]
+fn the_child_count_space_test_is_measured_from_the_first_child_offset() {
+    // The header-time pre-check measures against the bytes remaining from the
+    // *node's* offset, which counts the node's own properties as room for its
+    // children. This blob passes that pre-check and must still be rejected by
+    // the real test, which measures from the first-child offset F.
+    //
+    //   adt_len          = 20000
+    //   property_count   = 1, with a 4000-byte value
+    //   child_count      = 2000
+    //   pre-check:  8 + 36 + 2000 x 8 = 16044 <= 20000            -> passes
+    //   F           = 8 + 36 + 4000  = 4044
+    //   real test:  2000 x 8 = 16000 > 20000 - 4044 = 15956       -> denies
+    //
+    // Getting this wrong is not a safety hole — the child walk fails later
+    // regardless — but it reports `TruncatedNodeHeader` instead of
+    // `ChildCountExceedsBuffer`, which is the wrong diagnosis on a board with
+    // no console, and it burns a full property walk first.
+    let mut blob = Vec::new();
+    blob.extend_from_slice(&1u32.to_le_bytes());
+    blob.extend_from_slice(&2000u32.to_le_bytes());
+    blob.extend_from_slice(&property("name", &vec![0u8; 4000]));
+    assert_eq!(blob.len(), 4044);
+    blob.resize(20_000, 0);
+
+    assert_eq!(
+        DeviceTree::parse(&blob).unwrap_err(),
+        AdtError::ChildCountExceedsBuffer
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Names
 // ---------------------------------------------------------------------------
@@ -242,6 +273,9 @@ fn a_name_property_value_with_no_nul_denies_rather_than_adopting_the_value() {
 
 #[test]
 fn a_node_name_longer_than_63_characters_denies() {
+    // 64 characters plus the terminator is a 65-byte value, so the *value*
+    // bound fires first. That subsumption is why `NodeNameTooLong` is now
+    // unreachable and kept only as defence in depth.
     let long_name = "n".repeat(64);
     let leaf = node(&[property("name", &cstr(&long_name))], &[]);
     let root = node(&[property("name", &cstr("root"))], &[leaf]);
@@ -253,7 +287,7 @@ fn a_node_name_longer_than_63_characters_denies() {
         .next()
         .expect("one child")
         .expect("decodes");
-    assert_eq!(child.name().unwrap_err(), AdtError::NodeNameTooLong);
+    assert_eq!(child.name().unwrap_err(), AdtError::NodeNameValueTooLong);
 }
 
 #[test]
@@ -273,6 +307,8 @@ fn a_node_with_no_name_property_denies() {
 
 #[test]
 fn a_duplicate_property_name_denies_rather_than_shadowing() {
+    // §9.9 rule (b): `chip-id` is one of the ten properties AS-1 depends on,
+    // so a duplicate of it rejects the node.
     let root = node(
         &[
             property("name", &cstr("root")),
@@ -286,6 +322,91 @@ fn a_duplicate_property_name_denies_rather_than_shadowing() {
         tree.root().property(b"chip-id").unwrap_err(),
         AdtError::DuplicateProperty
     );
+}
+
+#[test]
+fn every_as1_critical_property_rejects_a_duplicate() {
+    for critical in [
+        "name",
+        "compatible",
+        "reg",
+        "ranges",
+        "#address-cells",
+        "#size-cells",
+        "cpu-impl-reg",
+        "chip-id",
+        "device_type",
+        "state",
+    ] {
+        let mut properties = vec![property("name", &cstr("root"))];
+        properties.push(property(critical, b"aaaa"));
+        properties.push(property(critical, b"bbbb"));
+        let root = node(&properties, &[]);
+        let tree = DeviceTree::parse(&root).expect("structurally valid");
+        assert_eq!(
+            tree.root().property(critical.as_bytes()).unwrap_err(),
+            AdtError::DuplicateProperty,
+            "{critical}"
+        );
+    }
+}
+
+#[test]
+fn a_duplicate_of_a_property_as1_never_reads_is_ignored() {
+    // §9.9 rule (a) is normative: lookup returns the first match. Rejecting
+    // every duplicate instead would turn one duplicated vendor property that
+    // nothing reads into an unbootable board with no console.
+    let root = node(
+        &[
+            property("name", &cstr("root")),
+            property("vendor-blob", &u32_value(0x1111)),
+            property("vendor-blob", &u32_value(0x2222)),
+        ],
+        &[],
+    );
+    let tree = DeviceTree::parse(&root).expect("structurally valid");
+    let first = tree.root().property(b"vendor-blob").expect("first match");
+    assert_eq!(first.as_u32().expect("u32"), 0x1111);
+    assert_eq!(tree.root().name().expect("name"), b"root");
+}
+
+#[test]
+fn an_over_long_name_value_denies_on_the_value_length_not_the_string() {
+    // "uart0\0" followed by junk: the decoded string is five characters and
+    // would pass a string-length bound, but the value is 106 bytes and every
+    // path comparison at every level would re-scan it.
+    let mut value = cstr("uart0");
+    value.extend(core::iter::repeat_n(0x41u8, 100));
+    assert_eq!(value.len(), 106);
+
+    let leaf = node(&[property("name", &value)], &[]);
+    let root = node(&[property("name", &cstr("root"))], &[leaf]);
+    let tree = DeviceTree::parse(&root).expect("structurally valid");
+    let child = tree
+        .root()
+        .children()
+        .expect("children")
+        .next()
+        .expect("one child")
+        .expect("decodes");
+    assert_eq!(child.name().unwrap_err(), AdtError::NodeNameValueTooLong);
+
+    // Exactly 64 bytes of value — 63 characters plus the terminator — is the
+    // largest value accepted, and it decodes.
+    let mut at_limit = "n".repeat(63).into_bytes();
+    at_limit.push(0);
+    assert_eq!(at_limit.len(), 64);
+    let leaf = node(&[property("name", &at_limit)], &[]);
+    let root = node(&[property("name", &cstr("root"))], &[leaf]);
+    let tree = DeviceTree::parse(&root).expect("structurally valid");
+    let child = tree
+        .root()
+        .children()
+        .expect("children")
+        .next()
+        .expect("one child")
+        .expect("decodes");
+    assert_eq!(child.name().expect("name").len(), 63);
 }
 
 // ---------------------------------------------------------------------------
@@ -620,6 +741,56 @@ fn a_reg_whose_length_disagrees_with_the_cell_counts_denies() {
     let tree = DeviceTree::parse(&blob).expect("parse");
     let path = tree.resolve(b"/memory").expect("resolve");
     assert_eq!(path.reg(0).unwrap_err(), AdtError::RegContainerOutOfRange);
+}
+
+#[test]
+fn a_ranges_value_shorter_than_one_entry_denies() {
+    // Entry stride here is 4 x (2 + 2 + 2) = 24 bytes; the value carries 8.
+    let uart = node(
+        &[
+            property("name", &cstr("uart0")),
+            property("reg", &vec![0u8; 16]),
+        ],
+        &[],
+    );
+    let arm_io = node(
+        &[
+            property("name", &cstr("arm-io")),
+            property("#address-cells", &u32_value(2)),
+            property("#size-cells", &u32_value(2)),
+            property("ranges", &vec![0u8; 8]),
+        ],
+        &[uart],
+    );
+    let blob = node(
+        &[
+            property("name", &cstr("root")),
+            property("#address-cells", &u32_value(2)),
+            property("#size-cells", &u32_value(2)),
+        ],
+        &[arm_io],
+    );
+    let tree = DeviceTree::parse(&blob).expect("parse");
+    let path = tree.resolve(b"/arm-io/uart0").expect("resolve");
+    assert_eq!(
+        path.translated_reg(0).unwrap_err(),
+        AdtError::MalformedRangesEntry
+    );
+}
+
+#[test]
+fn reading_reg_on_the_root_denies_because_it_has_no_parent() {
+    // A `reg` is decoded with the *parent's* cell counts. The root has no
+    // parent, so there is no cell-count declaration that governs it and no
+    // default may be invented.
+    let tree = DeviceTree::parse(&GOLDEN).expect("parse");
+    let path = tree.resolve(b"/").expect("root");
+    assert!(path.parent().is_none());
+    assert_eq!(path.reg(0).unwrap_err(), AdtError::MissingParentNode);
+    assert_eq!(
+        path.translated_reg(0).unwrap_err(),
+        AdtError::MissingParentNode
+    );
 }
 
 #[test]

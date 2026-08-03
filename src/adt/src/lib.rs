@@ -76,7 +76,7 @@ pub use crate::error::AdtError;
 pub use crate::node::{ChildIter, Node, PropertyIter};
 pub use crate::property::{
     AddressRange, CellCounts, Property, RangesEntry, RangesIter, StringIter,
-    ADDRESS_SIZE_RECORD_LEN, MAX_NODE_NAME_LEN,
+    ADDRESS_SIZE_RECORD_LEN, MAX_NODE_NAME_LEN, MAX_NODE_VALUE_LEN,
 };
 
 use crate::raw::{walk_node_end, NODE_HEADER_LEN};
@@ -103,10 +103,10 @@ pub const MAX_VALUE_LEN: usize = 0x000f_ffff;
 ///
 /// A blob of N bytes can encode a chain of roughly N/8 nested nodes, so an
 /// unbounded walk in a boot stub with a small fixed stack is a guaranteed
-/// overflow. Real Apple trees are shallow. The limit is enforced by the size
-/// of the traversal stack, so it is a property of the data structure rather
-/// than of discipline.
-pub const MAX_TREE_DEPTH: usize = 16;
+/// overflow. Real Apple trees are shallow. BraiNIX policy per spec §9.0, whose
+/// table gives 8. The limit is enforced by the size of the traversal stack, so
+/// it is a property of the data structure rather than of discipline.
+pub const MAX_TREE_DEPTH: usize = 8;
 
 /// Maximum number of nodes in a resolved path: the root plus one per level.
 pub const MAX_PATH_NODES: usize = MAX_TREE_DEPTH + 1;

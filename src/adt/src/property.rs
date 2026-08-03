@@ -13,10 +13,18 @@ pub const ADDRESS_SIZE_RECORD_LEN: usize = 16;
 
 /// The longest node name accepted, in characters, excluding the terminator.
 ///
-/// Apple's own declaration allows 63. A node name is stored in a property
-/// *value*, so the format itself imposes no bound; this one is policy, and is
-/// reported through [`AdtError::NodeNameTooLong`].
+/// Apple's own declaration allows 63. BraiNIX policy per spec §9.0, reported
+/// through [`AdtError::NodeNameTooLong`].
 pub const MAX_NODE_NAME_LEN: usize = 63;
+
+/// The longest `name` property *value* accepted: 63 characters plus the NUL.
+///
+/// A node name lives inside a property value, which the format bounds only by
+/// `0x7FFFFFFF`, so this is the bound that actually caps the work a crafted
+/// tree can impose on path resolution. BraiNIX policy per spec §9.0 and §9.5,
+/// reported through [`AdtError::NodeNameValueTooLong`] — a distinct reason
+/// from the bound on the decoded string.
+pub const MAX_NODE_VALUE_LEN: usize = 64;
 
 /// A borrowed property: its fixed 32-byte name field and its untyped value.
 ///
