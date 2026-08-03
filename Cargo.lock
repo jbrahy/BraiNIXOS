@@ -157,6 +157,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-transport-crypto"
+version = "0.1.0"
+dependencies = [
+ "brainix-bsp",
+ "chacha20",
+ "sha2",
+ "subtle",
+]
+
+[[package]]
 name = "brainix-transportd"
 version = "0.1.0"
 dependencies = [
