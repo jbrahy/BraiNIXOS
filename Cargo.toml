@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "src/adt",
+    "src/adt-verify",
     "src/tensor",
     "src/tokenizer",
     "src/kernel",

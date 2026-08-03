@@ -30,6 +30,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-adt"
+version = "0.1.0"
+
+[[package]]
 name = "brainix-bootloader-verify"
 version = "0.1.0"
 dependencies = [
@@ -44,6 +48,7 @@ version = "0.1.0"
 name = "brainix-fuzz"
 version = "0.0.0"
 dependencies = [
+ "brainix-adt",
  "brainix-bootloader-verify",
  "brainix-devd-nic",
  "brainix-ipd",

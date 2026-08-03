@@ -28,6 +28,13 @@ name = "brainix-adt"
 version = "0.1.0"
 
 [[package]]
+name = "brainix-adt-verify"
+version = "0.1.0"
+dependencies = [
+ "brainix-adt",
+]
+
+[[package]]
 name = "brainix-auditd"
 version = "0.1.0"
 dependencies = [

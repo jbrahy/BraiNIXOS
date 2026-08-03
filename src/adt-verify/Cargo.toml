@@ -1,0 +1,18 @@
+[package]
+name = "brainix-adt-verify"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Kani proof harnesses for the Apple Device Tree decoder (AS-0-T3)"
+
+[features]
+# Installs a global allocator that denies every request, and enables the
+# `adt_decoder_performs_no_allocation` harness that runs the decoder under it.
+# Off by default so that a global allocator can never affect the other harnesses.
+deny-allocation = []
+
+[dependencies]
+brainix-adt = { path = "../adt" }
+
+[lints]
+workspace = true
