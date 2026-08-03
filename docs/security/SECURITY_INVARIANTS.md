@@ -25,11 +25,11 @@ contradict it, the entry below is wrong.
 
 | Headline (NORTH_STAR) | Decomposed here as |
 |---|---|
-| **INV-AUTH** | §1 `INV-AUTH-001..008`, §3 `INV-OBJ-002`, §12 `INV-FAIL-002` |
+| **INV-AUTH** | §1 `INV-AUTH-001..009`, §3 `INV-OBJ-002`, §12 `INV-FAIL-002` |
 | **INV-MEM** | §2 `INV-MEM-001..009`, §5 `INV-SCHED-004` |
 | **INV-IPC** | §4 `INV-IPC-001..006` |
-| **INV-BOOT** | §7 `INV-BOOT-001..005`, **`INV-BOOT-AS-001..003`**, §11 `INV-BUILD-001..003` |
-| **INV-SERVE** | **§13 `INV-SERVE-001..005`**, **§15 `INV-PARSE-001..004`** |
+| **INV-BOOT** | §7 `INV-BOOT-001..008`, **`INV-BOOT-AS-001..003`**, §11 `INV-BUILD-001..004` |
+| **INV-SERVE** | **§13 `INV-SERVE-001..006`**, **§15 `INV-PARSE-001..004`** |
 | **INV-MODEL** | **§14 `INV-MODEL-001..004`** |
 | **INV-AUDIT** | §9 `INV-AUD-001..003` |
 | **INV-GPU** | §8 `INV-DEV-001..003`, **`INV-DEV-004..006`** (DART) |
@@ -76,7 +76,8 @@ no other mechanism, and a document claiming an exemption not on this list is dri
 | **INV-BOOT/AS** | Apple Silicon | 2026-08-02 | Measurement, remote attestation, and sealing are structurally unavailable. See §7. |
 | **TCB-AS** | Apple Silicon | 2026-08-02 | SecureROM, iBoot1, iBoot2, sepOS are in the TCB by force — closed, unauditable, unremovable. |
 | **TCB-EXCEPTION-001** | All platforms | 2026-06-27 | Relational SQL engine in ring 0. See [`TCB_EXCEPTION_001_IN_KERNEL_SQL.md`](TCB_EXCEPTION_001_IN_KERNEL_SQL.md). |
-| **TCB-AS/GPU** | Apple Silicon | ⚠️ **PENDING — not signed** | Running AGX requires loading Apple's opaque, DMA-capable GPU firmware, which executes **concurrently with our kernel for the life of the system**. Until signed, no build ships with the GPU enabled. INV-GPU must be enforced and proven *before* the firmware is loaded, not after. |
+| **TCB-AS/GPU** | Apple Silicon | 2026-08-02 — **conditional** | Running AGX requires loading Apple's opaque, DMA-capable GPU firmware, which executes **concurrently with our kernel for the life of the system**. In force now, so design and implementation may proceed; conditional on five preconditions all being green **before GPU firmware is ever loaded** (they are AS-5-T0's acceptance criteria). If any proves unsatisfiable on real hardware, the exception **self-voids and AS-5 stops**. Until all five are green, no build ships with the GPU enabled. See `INV-DEV-004..006`, `INV-SERVE-006`, `INV-PARSE-001`. |
+| **Ed25519 verification stack** | All platforms | 2026-08-02 | `ed25519-dalek`, `curve25519-dalek`, `fiat-crypto`, `subtle` stay vendored **permanently, verify-only** — INV-BOOT's release signature requires curve25519 field arithmetic, and hand-rolling it would *lower* assurance. All signing paths go. The in-tree primitive set remains SHA-256, HKDF, ChaCha20, Poly1305, which are specified to be in-tree — `sha2` and `chacha20` are still vendored until that reimplementation lands. |
 
 ---
 
@@ -203,6 +204,30 @@ Any transfer of authority between security domains must be explicit, attributabl
 - transfer operations as distinct events
 - optional audit hooks for sensitive transfers
 - clear domain accounting
+
+---
+
+## INV-AUTH-009 — Administrative authority is a capability, not a shell
+Administration is a second session *type* on the same authenticated transport, distinguished from a
+client session by capability and by nothing else. An admin session holds `CapAdmin` (capability 14,
+alongside `Serve=11`, `Model=12`, `Gpu=13`) and may invoke only a fixed, enumerated verb set —
+enroll-key, revoke-key, load-weights, read-audit-log, restart-server, reboot. The verb set is frozen at
+accept and cannot be widened by anything the session says afterwards. `CapAdmin` does not imply
+`CapServe`, and `CapServe` never derives `CapAdmin`.
+
+**Why it matters:** A general-purpose remote shell is ambient authority wearing an admin badge — it can
+do whatever the process hosting it can do, which is precisely the property the capability model exists to
+forbid. An enumerated verb set is reviewable; "run this command" is not. Administration is explicitly not
+a shell, and the serial console — not a network path — is the break-glass channel.
+
+**Enforcement directions:**
+- `CapAdmin` is a distinct capability type, neither derived from nor derivable to `CapServe` (INV-AUTH-002, INV-AUTH-003)
+- the verb table is a compile-time enumeration; no verb dispatches to a general command interpreter
+- a verb needing authority the set does not cover requires a new named capability, never a widened `CapAdmin`
+- admin session establishment, every verb invoked, and every denial are observable to `auditd` (INV-AUTH-008, INV-SERVE-005)
+
+**Related:** INV-SERVE-001 — an admin session is still a session, and still cannot name another
+session's state. Introduced 2026-08-02 with the admin-channel decision.
 
 ---
 
@@ -691,6 +716,58 @@ The kernel must define when cryptographic operations may begin and what minimum 
 
 ---
 
+## INV-BOOT-006 — Key material is enrolled at runtime, never built in
+Client pre-shared keys and admin keys are enrolled while the system is running and persisted by the
+kernel's credential store (`src/kernel/src/boot/credential_store.rs`) — to virtio-blk on x86-64, to ANS2
+NVMe on Apple Silicon from AS-4a. Enrollment happens over the admin channel (`CapAdmin`, INV-AUTH-009) or
+over the serial console, and nowhere else.
+
+**Why it matters:** Runtime enrollment is what makes `INV-BUILD-004` achievable rather than aspirational:
+the published image can be byte-identical for every deployment precisely because it carries no
+deployment's secrets. It also makes revocation real — a key that was compiled in cannot be revoked
+without a rebuild.
+
+**Enforcement directions:**
+- the credential store is the only writer of key material to persistent storage
+- enrollment and revocation are attributable events (INV-AUTH-008)
+- a key that fails to persist fails the enrollment; there is no in-memory-only "temporarily enrolled" state
+- persistence is a HAL-backed choice of device, not a per-platform key format
+
+---
+
+## INV-BOOT-007 — Session keys ratchet forward and the old chain key is deleted
+Session key *n* is derived from chain key *n* by HKDF-SHA256; the chain then advances and chain key *n* is
+zeroized. No component retains a chain key it has advanced past. This buys forward secrecy from symmetric
+primitives alone — the serving transport holds no asymmetric key and needs none.
+
+**Why it matters, with its present cost stated plainly:** **until the ratchet ships there is
+no forward secrecy.** A disclosed pre-shared key retroactively decrypts every recorded session. That is
+the current state of the system, not a hypothetical future risk, and it is why the ratchet is an
+invariant rather than an enhancement.
+
+**Enforcement directions:**
+- derivation and advance-with-zeroization are one operation; no path derives a session key without advancing
+- chain-key storage is sanitized on advance and again on session teardown (INV-MEM-006, INV-SERVE-004)
+- a recorded-traffic test: material captured after an advance must not decrypt records sealed before it
+
+---
+
+## INV-BOOT-008 — The break-glass admin key is serial-provisioned and never network-rotatable
+The break-glass admin pre-shared key is provisioned over the serial console only. No admin verb, and no
+path reachable over the network, may rotate, revoke, or replace it.
+
+**Why it matters:** Every other key is rotatable over the admin channel, which means a compromised admin
+session could otherwise rotate all of them and lock the owner out of the owner's own machine permanently.
+The break-glass key is the floor under that failure: physical access wins. The cost is stated too — it is
+a long-lived key that cannot be rotated remotely, so its disclosure requires physical presence to repair.
+
+**Enforcement directions:**
+- the rotate and revoke verbs reject the break-glass key identity, and the rejection is not configurable
+- the serial provisioning path is compiled in unconditionally and is not gated by any network state
+- **Related:** INV-AUTH-009, INV-BOOT-006, INV-FAIL-003.
+
+---
+
 ## Apple Silicon: INV-BOOT/AS
 
 The exception is recorded in [`../NORTH_STAR.md`](../NORTH_STAR.md); these are its enforcement
@@ -862,6 +939,21 @@ The ability to publish trusted BraiNIX artifacts must be limited and auditable.
 
 ---
 
+## INV-BUILD-004 — No secret ever enters a build artifact
+No key, key seed, or other secret is compiled into a released image or produced as a build output. Client
+and admin keys are enrolled at runtime and persisted by the kernel's credential store (`INV-BOOT-006`).
+
+**Why it matters:** A compile-time secret is structurally incompatible with INV-BOOT's reproducible-build
+clause. Either the published payload contains the secret, or the deployed payload differs from the
+published one — and reproducibility that describes an image nobody runs is not reproducibility.
+
+**Enforcement directions:**
+- grep-gate against key, seed, and PSK literals in the build tree
+- `CLIENT_KEY_SEED` in `src/kernel/src/ssh/client_identity.rs` is an acknowledged development seed and is no longer the model; it does not ship
+- the reproducibility check runs against the artifact that is actually deployed, not a variant of it
+
+---
+
 # 12. Failure and Recovery Invariants
 
 ## INV-FAIL-001 — Failure modes are defined
@@ -928,6 +1020,33 @@ Connection, authentication, capability-grant, and request/response boundary even
 
 ---
 
+## INV-SERVE-006 — GPU residency is single-tenant, and weights are the only permanent mapping
+Where an accelerator serves inference, the mapping policy into its IOMMU window is fixed:
+
+- **Model weights are mapped read-only and permanently.** They are not client data, and there is nothing
+  to unmap between sessions.
+- **KV cache is mapped strictly per session** — mapped on session entry, unmapped and flushed on exit.
+- **Never two tenants resident simultaneously.** The GPU time-slices between clients; one session's KV
+  mapping is gone before the next session's is installed.
+- **Cross-tenant batching is forbidden**, whatever throughput it would buy.
+
+**Why it matters:** This is what keeps INV-SERVE intact with an accelerator in the path — isolation on the
+GPU is the same isolation as everywhere else, paid for in throughput rather than in invariants, so no
+INV-SERVE exception is needed. The cost is real and is stated rather than softened: the GPU's payoff
+shrinks to prefill acceleration plus time-sliced multi-client serving, because the batching that would
+make it a large concurrency win is exactly what this invariant forbids.
+
+**Enforcement directions:**
+- residency is a single-slot state in `gpud`: installing a KV mapping requires the previous one to be torn down first
+- weights are mapped without write permission at bring-up and the mapping is never re-issued per session
+- unmap-and-flush is part of session teardown (INV-SERVE-004), not a separate best-effort step
+- no dispatch path exists that can place two sessions' tensors in one batch
+
+**Related:** INV-SERVE-004, INV-DEV-004, INV-DEV-006, and TCB-AS/GPU precondition 4 in
+[`../NORTH_STAR.md`](../NORTH_STAR.md). Introduced 2026-08-02 with the GPU tenant-mapping decision.
+
+---
+
 # 14. Model Confinement Invariants
 
 Introduced 2026-08-02. Decomposes the headline **INV-MODEL**. The served model is central to the product
@@ -973,7 +1092,7 @@ easiest to check in review.
 "Foreign data" means anything the project did not produce: network bytes, disk bytes, device responses, **and firmware-supplied structures**. Every offset, length, and count is bounds-checked against its containing region. Malformed input denies the operation; it never proceeds best-effort.
 
 ## INV-PARSE-002 — Every such parser ships a fuzz target *and* a Kani harness
-Both. A fuzz target finds what the harness did not model; a harness proves what fuzzing cannot exhaust. One without the other does not satisfy the per-component gate in [`../ROADMAP.md`](../ROADMAP.md).
+Both. A fuzz target finds what the harness did not model; a harness proves what fuzzing cannot exhaust. One without the other does not satisfy the **Full tier** gate in §16, which replaces the uniform per-component gate previously stated in [`../ROADMAP.md`](../ROADMAP.md).
 
 The set, current and planned:
 
@@ -997,6 +1116,66 @@ Where two firmware sources describe the same fact — boot-args and the ADT both
 
 ---
 
+# 16. Proof Tier Assignment
+
+Introduced 2026-08-02 by owner decision. **The proof gate is tiered by TCB proximity**, replacing the
+uniform per-component gate that demanded the same six artifacts from every component regardless of what a
+compromise of it could reach.
+
+- **Full tier — all six artifacts:** invariant mapping, fuzz target, Kani harness, Prusti contracts,
+  security audit report, and no-regression bars.
+- **Reduced tier — tests and a security audit report only.** No Kani, no Prusti.
+
+**The rule.** Full tier covers the TCB, every parser of hostile input, and all crypto. Reduced tier covers
+capability-bounded servers whose compromise is contained by the capability model. The justification is the
+project's own principle: **IOMMU confinement, not driver correctness, is the control.** Proof effort moves
+to the confinement, because a proof that no consumer can widen a DMA window (`INV-DEV-006`) buys more
+assurance than a proof of any single driver — it holds for every driver, including the ones not written
+yet.
+
+Two corollaries decide the arguable cases:
+
+- **A hostile-input parser is Full tier wherever it lives.** Confinement bounds what a compromised
+  component can *reach*; it does not make a parser's bugs safe. A Full-tier parser inside a Reduced-tier
+  server does not inherit the server's tier.
+- **A proof's tier follows the thing being proven, not the thing being protected.** The `INV-DEV-006`
+  no-widening proof is a Full-tier obligation of the HAL IOMMU trait, not of `gpud`.
+
+**This is a rule, not a per-component judgment call.** Tier is read off the table below at design time. The
+table itself is audited at each phase gate; moving a component between tiers is an edit to this document
+with owner sign-off, never a decision taken while implementing. Components not yet written are listed at
+their planned tier — the tier is fixed before the code is, which is the point. A component absent from the
+table is not thereby Reduced tier; it is **unassessed**, and assessing it is a phase-gate obligation.
+
+| Component | Tier | Why |
+|---|---|---|
+| Kernel core | **Full** | TCB. Nothing contains it; a compromise is unbounded by definition. |
+| Capability subsystem | **Full** | TCB, and it *is* the containment every Reduced-tier assignment below relies on. |
+| IPC | **Full** | TCB. The only authorized channel between domains and the place rights transfer (`INV-IPC-002`). |
+| Context switch | **Full** | TCB. An error here leaks register and address-space state across every boundary at once. |
+| HAL MMU | **Full** | TCB. W^X and kernel/user separation are its output (`INV-MEM-003`, `INV-MEM-009`). |
+| HAL IOMMU / DART backend | **Full** | TCB, and the confinement the Reduced tier is justified by. Carries the `INV-DEV-006` no-widening proof. |
+| Crypto primitives (SHA-256, HKDF, ChaCha20, Poly1305) | **Full** | Handle key material; a silent defect still produces plausible output, so tests alone cannot find it. |
+| Credential store | **Full** | In-kernel and holds every client and admin secret (`INV-BOOT-006..008`, `INV-BUILD-004`). |
+| Transport handshake FSM and record layer | **Full** | Parses remote bytes *before* the peer is authenticated — the earliest hostile-input surface in the serving path. |
+| BSP request parser | **Full** | Hostile input from remote clients (`INV-PARSE-001`). |
+| ADT parser | **Full** | Hostile input from firmware, parsed earlier and with more authority than anything from the network (`INV-PARSE-003`). |
+| boot-args parser | **Full** | Same firmware source, same reasoning, same treatment. |
+| BXW1 weight loader | **Full** | Hostile input from disk, and the integrity gate for the weights themselves (`INV-MODEL-002`). |
+| Tokenizer vocab parser | **Full** | Hostile input from disk, consumed before any request is served. |
+| GPU completion-record parser | **Full** | Written by Apple's opaque GPU firmware, which the north star treats as hostile; TCB-AS/GPU precondition 3. |
+| RTKit mailbox | **Full** | Arguable, since it sits inside a confined driver — but it parses firmware-supplied message and endpoint structures, and the parser's tier wins over its host's. |
+| `servd` | **Full** | Arguable, since it is an ordinary userspace server — but it terminates the transport, holds session keys, and *mints* every per-session capability, so its compromise crosses all tenants at once and nothing above it contains that. |
+| `inferd` | Reduced | The archetypal confined tenant: exactly three capabilities, frozen at launch (`INV-MODEL-001`). Its embedded BXW1 and tokenizer parsers are Full tier in their own right. |
+| `auditd` | Reduced | Holds no spawn, kernel-mutation, or network capability; its compromise costs visibility, never privilege (`INV-AUD-002`). |
+| `devd-nic` | Reduced | Capability-bounded, DMA confined by the IOMMU. Any hostile-input parser it embeds is Full tier separately. |
+| `devd-ans2` | Reduced | Same containment: a compromised storage server reaches only its own IOMMU window. |
+| ANS2 NVMe driver | Reduced | Arguable, since it drives DMA — but that DMA is exactly what `INV-DEV-006` confines, and that proof is Full tier. |
+| `gpud` | Reduced | Confining the GPU is DART's job (TCB-AS/GPU precondition 2), not the driver's. Proving `gpud` correct instead of proving the confinement would invert the rule. |
+| PCIe driver | Reduced | Capability-bounded; enumeration and config-space access are bounded by the granted window. |
+
+---
+
 # Traceability Guidance
 
 Each subsystem specification should include an “invariant impact” section naming the invariants it must preserve.
@@ -1006,10 +1185,11 @@ Example:
 - Memory allocator changes → INV-MEM-005, INV-MEM-006, INV-MEM-009, INV-SCHED-004
 - Capability subsystem changes → INV-AUTH-002, 003, 004, 005 and INV-OBJ-002
 - New device support → INV-DEV-001..006 and INV-X86-006 / INV-ARM-005 where DMA or interrupt mapping is involved
-- Serving path changes → INV-SERVE-001..005, INV-PARSE-001, 002
+- Serving path changes → INV-SERVE-001..006, INV-PARSE-001, 002
 - Inference engine changes → INV-MODEL-001..004, INV-MEM-009
 - Apple Silicon platform work → INV-ARM-001..005, INV-PARSE-003, 004, INV-DEV-004, 005
-- Anything touching boot or release → INV-BOOT-001..005, INV-BOOT-AS-001..003, INV-BUILD-001..003
+- Anything touching boot or release → INV-BOOT-001..008, INV-BOOT-AS-001..003, INV-BUILD-001..004
+- Key handling, enrollment, or the admin channel → INV-AUTH-009, INV-BOOT-006..008, INV-BUILD-004
 
 ---
 
