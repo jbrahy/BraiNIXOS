@@ -754,15 +754,17 @@ invariant rather than an enhancement.
 
 ## INV-BOOT-008 — The break-glass admin key is serial-provisioned and never network-rotatable
 The break-glass admin pre-shared key is provisioned over the serial console only. No admin verb, and no
-path reachable over the network, may rotate, revoke, or replace it.
+path reachable over the network, may revoke or replace it.
 
-**Why it matters:** Every other key is rotatable over the admin channel, which means a compromised admin
-session could otherwise rotate all of them and lock the owner out of the owner's own machine permanently.
-The break-glass key is the floor under that failure: physical access wins. The cost is stated too — it is
-a long-lived key that cannot be rotated remotely, so its disclosure requires physical presence to repair.
+**Why it matters:** Every other key can be replaced over the admin channel — rotation is not a verb of its
+own, it is `enroll-key` followed by `revoke-key` (INV-AUTH-009's set is exactly six and is frozen) — which
+means a compromised admin session could otherwise replace all of them and lock the owner out of the
+owner's own machine permanently. The break-glass key is the floor under that failure: physical access
+wins. The cost is stated too — it is a long-lived key that cannot be replaced remotely, so its disclosure
+requires physical presence to repair.
 
 **Enforcement directions:**
-- the rotate and revoke verbs reject the break-glass key identity, and the rejection is not configurable
+- `enroll-key` and `revoke-key` both reject the break-glass key identity, and the rejection is not configurable
 - the serial provisioning path is compiled in unconditionally and is not gated by any network state
 - **Related:** INV-AUTH-009, INV-BOOT-006, INV-FAIL-003.
 
@@ -1133,13 +1135,18 @@ to the confinement, because a proof that no consumer can widen a DMA window (`IN
 assurance than a proof of any single driver — it holds for every driver, including the ones not written
 yet.
 
-Two corollaries decide the arguable cases:
+Three corollaries decide the arguable cases:
 
 - **A hostile-input parser is Full tier wherever it lives.** Confinement bounds what a compromised
   component can *reach*; it does not make a parser's bugs safe. A Full-tier parser inside a Reduced-tier
-  server does not inherit the server's tier.
+  server does not inherit the server's tier. Every Reduced-tier row below that has such a parser says so.
 - **A proof's tier follows the thing being proven, not the thing being protected.** The `INV-DEV-006`
   no-widening proof is a Full-tier obligation of the HAL IOMMU trait, not of `gpud`.
+- **An artifact that cannot be produced is a stated gap, never a downgrade.** Components are tiered by
+  the risk they carry, not by the assurance that is convenient to produce for them — vendored code
+  included. Where a Full-tier component cannot ship one of the six artifacts, its row names the missing
+  artifact and the reason. There is no third tier for "Full but hard," because an omission is
+  unfalsifiable and a named gap is not.
 
 **This is a rule, not a per-component judgment call.** Tier is read off the table below at design time. The
 table itself is audited at each phase gate; moving a component between tiers is an edit to this document
@@ -1155,7 +1162,9 @@ table is not thereby Reduced tier; it is **unassessed**, and assessing it is a p
 | Context switch | **Full** | TCB. An error here leaks register and address-space state across every boundary at once. |
 | HAL MMU | **Full** | TCB. W^X and kernel/user separation are its output (`INV-MEM-003`, `INV-MEM-009`). |
 | HAL IOMMU / DART backend | **Full** | TCB, and the confinement the Reduced tier is justified by. Carries the `INV-DEV-006` no-widening proof. |
+| In-kernel SQL engine (TCB-EXCEPTION-001) | **Full** | TCB by exception — ring 0, kernel address space — and it parses attacker-controlled B-tree and WAL pages *inside* the TCB. The size of the resulting Full-tier obligation is part of what that exception costs, and is one more reason the P2-T7 reframing is the point to re-examine ring-0 residency. |
 | Crypto primitives (SHA-256, HKDF, ChaCha20, Poly1305) | **Full** | Handle key material; a silent defect still produces plausible output, so tests alone cannot find it. |
+| Ed25519 verification stack (`ed25519-dalek`, `curve25519-dalek`, `fiat-crypto`, `subtle`) | **Full** | Crypto, and it decides whether a **forged release signature** is accepted — INV-BOOT's trust anchor. Assigned by risk, not by producibility: as permanently vendored code it can carry the invariant mapping, a fuzz target on the verify entry point, an audit report, and no-regression bars, but **Kani and Prusti cannot be produced for it** — the code is not ours to annotate and the group-operation and verification-equation layers are beyond harness scope. `fiat-crypto`'s field arithmetic is machine-verified upstream against a formal specification, which covers the field layer only; above it the gap is real and is stated rather than tiered away. |
 | Credential store | **Full** | In-kernel and holds every client and admin secret (`INV-BOOT-006..008`, `INV-BUILD-004`). |
 | Transport handshake FSM and record layer | **Full** | Parses remote bytes *before* the peer is authenticated — the earliest hostile-input surface in the serving path. |
 | BSP request parser | **Full** | Hostile input from remote clients (`INV-PARSE-001`). |
@@ -1167,12 +1176,12 @@ table is not thereby Reduced tier; it is **unassessed**, and assessing it is a p
 | RTKit mailbox | **Full** | Arguable, since it sits inside a confined driver — but it parses firmware-supplied message and endpoint structures, and the parser's tier wins over its host's. |
 | `servd` | **Full** | Arguable, since it is an ordinary userspace server — but it terminates the transport, holds session keys, and *mints* every per-session capability, so its compromise crosses all tenants at once and nothing above it contains that. |
 | `inferd` | Reduced | The archetypal confined tenant: exactly three capabilities, frozen at launch (`INV-MODEL-001`). Its embedded BXW1 and tokenizer parsers are Full tier in their own right. |
-| `auditd` | Reduced | Holds no spawn, kernel-mutation, or network capability; its compromise costs visibility, never privilege (`INV-AUD-002`). |
+| `auditd` | Reduced | Holds no spawn, kernel-mutation, or network capability; its compromise costs visibility, never privilege (`INV-AUD-002`). It stores model-derived and client-derived bytes but interprets none of them (`INV-MODEL-003`), so it owns no parser. |
 | `devd-nic` | Reduced | Capability-bounded, DMA confined by the IOMMU. Any hostile-input parser it embeds is Full tier separately. |
-| `devd-ans2` | Reduced | Same containment: a compromised storage server reaches only its own IOMMU window. |
-| ANS2 NVMe driver | Reduced | Arguable, since it drives DMA — but that DMA is exactly what `INV-DEV-006` confines, and that proof is Full tier. |
-| `gpud` | Reduced | Confining the GPU is DART's job (TCB-AS/GPU precondition 2), not the driver's. Proving `gpud` correct instead of proving the confinement would invert the rule. |
-| PCIe driver | Reduced | Capability-bounded; enumeration and config-space access are bounded by the granted window. |
+| `devd-ans2` | Reduced | Same containment: a compromised storage server reaches only its own IOMMU window. Its device-response decoders are the NVMe driver's, tiered in the row below. |
+| ANS2 NVMe driver | Reduced | Arguable, since it drives DMA — but that DMA is exactly what `INV-DEV-006` confines, and that proof is Full tier. Its decoders for device responses — completion queue entries, identify structures — are hostile-input parsers (`INV-PARSE-001`) and are Full tier separately. |
+| `gpud` | Reduced | Confining the GPU is DART's job (TCB-AS/GPU precondition 2), not the driver's. Proving `gpud` correct instead of proving the confinement would invert the rule. Both parsers it hosts — GPU completion records and the RTKit mailbox — are Full tier in the rows above. |
+| PCIe driver | Reduced | Capability-bounded; enumeration and config-space access are bounded by the granted window. Its config-space and capability-chain walkers are hostile-input parsers and are Full tier separately — a malicious device can present a cyclic capability list, and the walker must terminate and deny rather than loop. |
 
 ---
 
