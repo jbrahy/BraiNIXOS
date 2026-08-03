@@ -424,11 +424,34 @@ The client computes `key_selector` and sends it. The server, on receipt, iterate
 **Why this rather than a stable key id.** A stable public identifier would be
 simpler and would make lookup O(1). It would also put a constant on the wire that
 links every session of a given client to every other, and it would let anyone
-enumerate which identifiers a server accepts. The blinded selector costs a fixed
-`MAX_ENROLLED_KEYS × 2` SHA-256 compressions per `ClientHello` — a `const`, not a
-client-driven quantity — and removes both. The cost is stated in §8 and is the
-reason `MAX_ENROLLED_KEYS` is a hard bound rather than "however many are
-enrolled".
+enumerate which identifiers a server accepts. The blinded selector removes both,
+and its price is a fixed **`MAX_ENROLLED_KEYS × 5` SHA-256 compressions per
+`ClientHello`** — a `const`, not a client-driven quantity. The cost is restated in
+§8 and is the reason `MAX_ENROLLED_KEYS` is a hard bound rather than "however many
+are enrolled".
+
+**The multiplier, derived, because §5.7 and §8 rest their DoS argument on it.**
+`PRK_id` is precomputed, so a candidate costs exactly one `HKDF-Expand` with
+`L = 16`, which is one `HMAC-SHA256` over `info || 0x01`. With `PRK_id` at 32 bytes
+the HMAC key needs no pre-hashing, so the cost is:
+
+| Hash | Input | Bytes | Compressions (`⌈(n+9)/64⌉`) |
+|---|---|--:|--:|
+| inner | `ipad[64] \|\| info[56] \|\| 0x01` | 121 | 3 |
+| outer | `opad[64] \|\| inner_digest[32]` | 96 | 2 |
+| | | | **5** |
+
+Two honest notes. This figure was previously stated as `× 2`, which was wrong
+before the `chain_counter` binding and is wrong by more after it. And the binding
+itself raised the number: at the former 48-byte `info` the inner hash fit in 2
+blocks rather than 3, so the scan cost **4** compressions per candidate and now
+costs **5** — a 25% increase in the one quantity an unauthenticated attacker can
+scale with packet rate. That is the price of closing the amplification of §5.7,
+and it is a good trade — a fixed 25% on a `const` multiplier, against an attacker
+choosing up to `MAX_CHAIN_CATCHUP` HKDF advances per packet — but it is a price
+and it is recorded as one. Shrinking `LEN_LABEL` to 8 bytes would put `info` back
+at 48 and recover the block; uniform 16-byte labels across every derivation are
+worth more than one compression per slot, so the block is not recovered.
 
 ### 5.4 Transcript hashes and the session key schedule
 
@@ -659,8 +682,9 @@ attacker after §5.3 removed its ability to forge the counter.
   records the alternative and why it was not taken.
 - **Every inbound `ClientHello` costs the full selector scan, matched or not.** An
   unauthenticated peer can spend one 64-byte packet to buy `MAX_ENROLLED_KEYS`
-  selector derivations, and no admission limit applies before the scan because the
-  scan is what identifies the credential the limit would be applied to. This is
+  selector derivations — `MAX_ENROLLED_KEYS × 5` SHA-256 compressions, derived in
+  §5.3 — and no admission limit applies before the scan, because the scan is what
+  identifies the credential the limit would be applied to. This is
   inherent to blinded lookup, not a defect in it: the alternative that avoids it is
   the stable public key id §5.3 rejected. What matters is that the multiplier is a
   **fixed `const`** an attacker cannot steer — the chain-advance work that *could*
@@ -885,13 +909,20 @@ form of this claim is true and misleading, because an attacker sends many
 handshakes:
 
 - **Per inbound `ClientHello`, authenticated or not:** `MAX_ENROLLED_KEYS` selector
-  derivations. This is the floor, it applies to every packet including garbage, and
-  it is the standing cost of blinded lookup (§5.3, §5.7).
-- **Chain advances: zero, unless the peer holds the credential.** `chain_counter`
-  is covered by the selector (§5.3), so a counter the sender did not derive over
-  matches nothing and never reaches chain resolution; and resolution sits behind
-  admission control (§5.5), so even a legitimate counter's catch-up work is capped
-  at `MAX_SESSIONS_PER_CREDENTIAL × MAX_CHAIN_CATCHUP` concurrently.
+  derivations = `MAX_ENROLLED_KEYS × 5` SHA-256 compressions (derived in §5.3).
+  This is the floor, it applies to every packet including garbage, and it is the
+  standing cost of blinded lookup (§5.3, §5.7).
+- **Chain advances: zero for a counter the sender did not derive over; bounded by
+  admission for one it did.** `chain_counter` is covered by the selector (§5.3), so
+  a forged counter matches nothing and never reaches chain resolution. A **verbatim
+  replay** of a recorded `ClientHello` does still reach it — the recorded counter is
+  self-consistent — and costs up to `MAX_CHAIN_CATCHUP` advances while the server
+  sits at or below the recorded position, dropping to a single integer comparison
+  (row K3) once the server has advanced past it. That work is behind admission
+  control (§5.5), so it is capped at
+  `MAX_SESSIONS_PER_CREDENTIAL × MAX_CHAIN_CATCHUP` concurrently and cannot be
+  scaled with packet rate. What the binding removes is the attacker's ability to
+  *choose* the distance; it does not remove the replay.
 - **Everything downstream of admission** — key derivation, `ServerHello`, the
   session slot — is bounded by `MAX_SESSIONS` and `MAX_SESSIONS_PER_CREDENTIAL`.
 
