@@ -82,6 +82,16 @@ pub enum TensorError {
     /// `rope_dim` is zero, odd, or greater than `d_head` (BXW1 §7.2 rule H17).
     InvalidRopeDim,
 
+    /// A BXW1 `rope_pairing` value is not one of the two the format enumerates
+    /// (BXW1 §5.5, §7.2 rule H17a).
+    ///
+    /// **`0` is refused like any other unrecognized value.** It is not a
+    /// default and not "unspecified": it is what a converter that never heard
+    /// of the field writes, which is precisely the case the field exists to
+    /// catch. Defaulting here would mean the one case worth disambiguating is
+    /// the one case that is not disambiguated.
+    InvalidRopePairing,
+
     /// The RoPE position exceeds [`MAX_ROPE_POSITION`](crate::MAX_ROPE_POSITION).
     ///
     /// A stated accuracy bound, not a capacity one: beyond it the argument

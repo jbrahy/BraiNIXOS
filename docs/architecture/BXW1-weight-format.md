@@ -210,7 +210,7 @@ little-endian. `BXW1_HEADER_BYTES = 256`.
 | 140 | 4 | `u32` | `rope_dim` |
 | 144 | 4 | `u32` | `bos_token_id` |
 | 148 | 4 | `u32` | `eos_token_id` |
-| 152 | 4 | `u32` | `reserved_2` — MUST be zero |
+| 152 | 4 | `u32` | `rope_pairing` — enumerated, §5.5. **No zero value and no default** |
 | 156 | 4 | `u32` | `reserved_3` — MUST be zero |
 
 **Bytes 160–199 — tokenizer binding** — see §5.4.
@@ -226,7 +226,7 @@ The header is fixed-size with no variable-length field, so the decoder that read
 it is total: it requires exactly 256 bytes, reads exactly 256 bytes, and every
 field is at a compile-time offset. `tensor_count` is the only field that governs
 how much is read afterwards, and it is bounds-checked against a `const` before it
-is used (§7.2 rule H5). 80 of the 256 bytes are reserved padding; against a
+is used (§7.2 rule H5). 76 of the 256 bytes are reserved padding; against a
 maximum blob that is a rounding error six orders of magnitude below anything
 measurable, and it buys a decoder with no arithmetic in it.
 
@@ -236,6 +236,19 @@ for the same reason. Like BSP v2 §5.5, BXW1 has no in-band evolution path: **a
 v2 is a new magic and a new document.** The cost is stated: adding a dtype, a
 rank, or a metadata field means a format version bump and a converter run over
 every blob, not a flag.
+
+**`rope_pairing` at offset 152 was `reserved_2` until 2026-08-03**, and the
+change is recorded here rather than smoothed over. It is **not** an in-band
+extension and does not weaken the paragraph above: v1.0 was unimplemented when
+the field was defined (§11 — no loader, no converter, no blob has ever
+existed), so this is an edit to the format *before* there is anything to be
+compatible with, not a reserved byte being repurposed under a running system. A
+reserved field is still never an extension point once a blob exists. The
+consequence is deliberate and desirable: a hypothetical blob written against the
+earlier draft carries `0x00000000` there, which §5.5 admits no meaning for, so
+it **denies** rather than silently defaulting to one of the two conventions.
+That is the correct outcome, and §5.5 explains why the alternative is worse than
+a refused load.
 
 ### 3.2 Tensor table — one fixed record per tensor
 
@@ -347,10 +360,43 @@ multiply; there is no zero point, no offset, no per-tensor scale, and no
 asymmetry. A dequantized value is exactly representable as
 `scale × q` with no rounding beyond the f32 multiply itself.
 
-**Quantization (informative — the producer's side, not the loader's):** for each
-block, `scale = max(|x_j|) / 127.0` and `q_j = clamp(round_ties_even(x_j /
-scale), -127, 127)`. Using 127 rather than 128 keeps the quantized range
-symmetric, so the reference producer never emits `-128`. The loader nonetheless
+**Accumulation precision, normative.** A dot product over dequantized `Q8_0`
+values **accumulates in f32**, and the block's scale is applied **once per
+block, outside the 32 multiplies**:
+
+```
+acc = Σ_b  scale[b] × ( Σ_{j<32} (f32) q[b*32 + j] × x[b*32 + j] )
+```
+
+This is pinned rather than left to the kernel author because it is numerically
+visible and because P3-T6's logits-parity reference has to make the same choice
+or the parity test compares two different computations. f32 is specified — not a
+wider accumulator — because it is what a NEON implementation does, so the scalar
+and vector paths round identically and a vectorization pass cannot change
+results. Factoring the scale out of the block is algebraically identical to
+applying it per element and is *more* accurate, since the scale's rounding is
+applied once per 32 terms instead of 32 times; it is also where a vector
+implementation wants it. A wider block-level accumulator is permitted only if it
+is used by every implementation including the parity reference.
+
+**Quantization (the producer's side, not the loader's):** for each block,
+`scale = max(|x_j|) / 127.0` and `q_j = clamp(round_ties_even(x_j / scale),
+-127, 127)`. Using 127 rather than 128 keeps the quantized range symmetric, so
+the reference producer never emits `-128`.
+
+**The all-zero block, normative.** When `max(|x_j|) == 0` the formula above
+divides by zero, so the producer's output is specified instead of derived: a
+block whose every element is zero MUST be emitted as `scale = +0.0` (bit pattern
+`0x0000_0000`) and 32 zero quants. That is the only assignment consistent with
+§4.7, which explicitly admits exactly `+0.0` in the accepted scale set and would
+otherwise admit a value no producer could ever legally emit. The consumer needs
+no special case: `0.0 × q = 0.0` for every `q`, so the dequantization formula
+above is already correct for such a block and no branch belongs in the inner
+loop. A producer that emits a nonzero scale with all-zero quants is not
+malformed — it dequantizes identically — but it is not the canonical encoding
+and a converter MUST NOT produce it.
+
+The loader nonetheless
 performs **no validation on quant bytes at all**: all 256 bit patterns are valid
 `i8`, and the dequantization above is well-defined for every one of them
 including `-128`. This is the only field in the format that is unvalidated *by
@@ -530,6 +576,7 @@ parsing into a header whose totality is the point.
 | `rope_theta_bits` | `u32` | Binary32 bit pattern of the RoPE base θ | §4.7 rule, then `1.0e2 ≤ θ ≤ 1.0e8` |
 | `norm_eps_bits` | `u32` | Binary32 bit pattern of the normalization ε | §4.7 rule, then `1.0e-8 ≤ ε ≤ 1.0e-1` |
 | `rope_dim` | `u32` | Leading per-head dimensions RoPE rotates | `2 ..= d_head`, and `rope_dim % 2 == 0` |
+| `rope_pairing` | `u32` | Which two components form a rotated pair (§5.5) | MUST be `1` or `2`. **No zero value, no default** |
 | `bos_token_id` | `u32` | Beginning-of-sequence token | `< vocab_size` |
 | `eos_token_id` | `u32` | End-of-sequence token | `< vocab_size` |
 
@@ -540,7 +587,7 @@ P3-T6 rather than three, and no "absent means equal to `n_heads`" default for a
 decoder to get wrong. The group size `n_heads / n_kv_heads` is exact because
 divisibility is enforced.
 
-Two definitional points, stated only because leaving them implicit would make
+Three definitional points, stated only because leaving them implicit would make
 the metadata ambiguous and P3-T4/P3-T6 would each guess:
 
 - **`rope_theta` is the base**, in `θ_i = rope_theta^(−2i / rope_dim)` for
@@ -548,6 +595,14 @@ the metadata ambiguous and P3-T4/P3-T6 would each guess:
 - **`norm_eps` is added to the mean square before the reciprocal square root**,
   i.e. inside the root, not to the root's result and not to the normalized
   output. The two conventions differ numerically and neither crashes.
+- **`rope_dim < d_head` means the remaining dimensions pass through
+  unrotated.** Components `rope_dim .. d_head` of every head are copied to the
+  output unchanged. They are **not** zeroed and they are **not** rotated at a
+  frequency extrapolated past `rope_dim`. This is what "leading per-head
+  dimensions RoPE rotates" means, and it is stated because the alternative
+  reading — zeroing the tail — also runs, also produces plausible output, and
+  silently discards however much model capacity lives in those dimensions.
+  `rope_dim == d_head` is the ordinary case and leaves no tail.
 
 The operator semantics themselves — how RMSNorm, RoPE, softmax, SiLU, and the
 SwiGLU composition are computed — belong to P3-T4 and P3-T6 and are **not**
@@ -608,6 +663,72 @@ operational mistake in provisioning a model. The loader:
 
 This is why P3-T5 depends on P3-T1: the binding, the digest, and the length live
 here; the vocabulary's structure lives there.
+
+### 5.5 `rope_pairing` — which two components form a rotated pair
+
+*Added 2026-08-03 by owner decision, closing the ambiguity P3-T4 raised. Offset
+152, formerly `reserved_2` — see §3.1 for why that is an edit to the format
+rather than an in-band extension.*
+
+`rope_dim` says how many leading per-head dimensions are rotated and `rope_theta`
+says at what frequencies, but neither says **which two components form pair `i`**.
+Two conventions are in wide use and they are not interchangeable:
+
+| Value | Name | Pair `i` is | Used by |
+|--:|---|---|---|
+| `0` | — | **DENY.** There is no zero value and no default | — |
+| `1` | `BXW1_ROPE_PAIR_INTERLEAVED` | `(x[2i], x[2i+1])` | Meta's reference LLaMA, which applies the rotation through a complex-number view of adjacent components |
+| `2` | `BXW1_ROPE_PAIR_HALF_SPLIT` | `(x[i], x[i + rope_dim/2])` | The HuggingFace `rotate_half` formulation, which permutes Q and K at conversion time so the arithmetic comes out equivalent |
+| any other | — | **DENY** | — |
+
+In both cases the rotation itself is the same:
+
+```
+out[lo] = x[lo]·cos(a_i) − x[hi]·sin(a_i)
+out[hi] = x[lo]·sin(a_i) + x[hi]·cos(a_i)
+```
+
+with `a_i = position × rope_theta^(−2i / rope_dim)`. Only the choice of
+`(lo, hi)` differs, and `rope_pairing` is that choice.
+
+**Why this is a format field and not an engine constant.** Which convention is
+correct is a property of **the weight file** — it was fixed by whoever converted
+the checkpoint, since the two differ by a permutation of the Q and K projection
+rows — and not a property of the inference engine. A runtime that hardcodes
+either one silently produces garbage on every model converted under the other.
+Since BXW1 exists to let the transformer run with no model constant compiled
+into it (§5's opening sentence), a hardcoded pairing would be exactly the kind
+of constant the format is meant to eliminate.
+
+**Why it is worth a whole `u32` in a header whose totality is the point.** The
+failure mode is the worst class this format recognises: **it is silent, it
+produces fluent and plausible output, and no unit test can detect it.** Position
+0 is the identity rotation under both conventions; both are norm-preserving per
+pair; both agree with any reference implementation that shares their assumption.
+Every property a kernel test can check passes under either. The *only* thing
+that distinguishes them is an end-to-end logits-parity comparison against a
+known-correct implementation — which is P3-T6, arrives long after the model is
+loaded, and is exactly the sort of late, expensive, whole-system check a
+fail-closed header field is supposed to make unnecessary. Four bytes against a
+22 GiB ceiling is not a close call; the cost is entirely in the paragraph above,
+not in the blob.
+
+**No default and no zero-value fallback, and this is the load-bearing clause.**
+`rope_pairing == 0` is a DENY, not "assume interleaved". Absence of an explicit
+grant is denial (NORTH_STAR "Fail closed"), and here the argument is unusually
+concrete: a default would mean that the one case the field exists to
+disambiguate — a converter that did not know about the field — is precisely the
+case the field does not catch. An unrecognised value is a DENY for the same
+reason (§7.2 rule H23), on the same footing as an unrecognised `arch_id`. There
+is no relaxed mode, no "try both and pick the better perplexity", and no
+operator override.
+
+**The cost, stated plainly.** Every converter must now decide and record the
+pairing, and it cannot be derived from the weights: the two conventions produce
+byte-identical tensors and differ only in how the engine reads them. A converter
+that guesses is exactly the failure this field exists to prevent, moved one
+layer earlier — so the converter's obligation is to carry the value forward from
+the source framework's own convention, never to infer it.
 
 ---
 
@@ -733,12 +854,13 @@ a weight load either produces a fully verified generation or produces nothing.
 | H9 | `256 + tensor_count × 160` overflows, or exceeds `total_size` | DENY. Checked multiply and checked add; H5 makes the overflow unreachable and the check is still mandatory (§7.6) |
 | H10 | `tensor_data_off` not `BXW1_ALIGN`-aligned, or less than the table end, or ≥ `total_size`, or more than `BXW1_ALIGN − 1` bytes past the table end | DENY. Never rounded (§4.4). The last clause bounds the pad between the table and the first extent to what alignment can justify; a larger gap is unaccounted space, exactly as D17 treats the gaps between extents |
 | H11 | `tensor_data_off + tensor_data_len` overflows, or ≠ `total_size` | DENY. The tensor-data region must end exactly at the end of the blob |
-| H12 | Any of `reserved_0`, `reserved_1`, `reserved_2`, `reserved_3`, `reserved_tail` nonzero | DENY |
+| H12 | Any of `reserved_0`, `reserved_1`, `reserved_3`, `reserved_tail` nonzero | DENY |
 | H13 | `arch_id` not in the enumerated set | DENY. No default and no "unknown architecture, try anyway" |
 | H14 | Any hyperparameter zero, or above its `const` bound (§5.1) | DENY, each field independently, before any of them is multiplied by another |
 | H15 | `n_heads % n_kv_heads ≠ 0`, or `n_kv_heads > n_heads` | DENY. GQA's group size must be exact |
 | H16 | `n_heads × d_head` overflows, or ≠ `d_model` | DENY. Checked multiply |
 | H17 | `rope_dim` odd, zero, or `> d_head` | DENY. RoPE rotates dimension pairs; an odd count has no meaning |
+| H17a | `rope_pairing` not in `{1, 2}` | DENY (§5.5). **`0` is not a default and not "unspecified"** — it is the value a converter that never heard of the field writes, which is exactly the case the field exists to catch. No fallback, no operator override, and no "try both" |
 | H18 | `rope_theta_bits` or `norm_eps_bits` failing the §4.7 bit-pattern rule, or outside its stated range | DENY. The bit-pattern class check runs **first**, as integer comparisons, so no float comparison is ever performed against a possible NaN |
 | H19 | `bos_token_id` or `eos_token_id` `≥ vocab_size` | DENY |
 | H20 | `vocab_len == 0`, or `> BXW1_MAX_VOCAB_BLOB_BYTES` | DENY |
@@ -1245,9 +1367,14 @@ of BXW1 is implemented:**
   "weights-never-writable-post-seal" are P3-T2 Kani obligations that have not
   been written, and §9.3 item 5 states what BXW1's integrity claim loses if they
   are not discharged.
-- There are no tensor kernels. P3-T4 is unstarted, so the `Q8_0` dequantization
-  of §4.2 has never been executed and the split-plane layout's claimed
-  advantage over interleaving is an argument, not a measurement.
+- **The tensor kernels exist** (P3-T4, `src/tensor`, 2026-08-03): the §4.2
+  dequantization, the §5.1 hyperparameter meanings, and the §5.5 pairing are
+  implemented and host-tested. What is still unbuilt around them: they are
+  **scalar soft-float, not NEON** (P3-T0 has not landed and the context switch
+  does not preserve vector state), nothing has ever fed them a real blob
+  because there is no loader, and **the split-plane layout's claimed advantage
+  over interleaving remains an argument rather than a measurement** — no
+  BraiNIX code has run on the reference machine.
 - There is no tokenizer and no vocabulary format. P3-T5 is unstarted, so
   `vocab_digest` binds to a format that is not yet specified.
 - There is no `inferd`, no transformer forward pass, and no parity test. The

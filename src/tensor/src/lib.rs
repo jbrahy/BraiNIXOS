@@ -89,7 +89,7 @@
 //! |---|---|---|
 //! | [`softmax`] | yes — NaN, ±Inf | stability rests on the row maximum, and NaN is unordered |
 //! | [`rmsnorm`] | yes — ε, and the mean square | the reciprocal square root has a domain |
-//! | [`rope`] | yes — θ, `rope_dim`, position | θ is a base for a logarithm; position bounds an argument reduction |
+//! | [`rope`] | yes — θ, `rope_dim`, position, pairing | θ is a base for a logarithm; position bounds an argument reduction; an unrecognized [`RopePairing`] is refused at the `u32` boundary and unrepresentable past it |
 //! | [`matmul_f32`], [`matmul_q8_0`] | no | a non-finite weight propagates to its row and nowhere else; scanning would be a second full pass over the weights |
 //! | [`silu`], [`swiglu`] | no | elementwise and total for every input |
 //!
@@ -142,5 +142,5 @@ pub use crate::error::TensorError;
 pub use crate::matmul::{matmul_f32, matmul_q8_0, MatMulShape};
 pub use crate::norm::rmsnorm;
 pub use crate::q8::{Q8Weights, BXW1_ALIGN, Q8_0_BLOCK};
-pub use crate::rope::{rope, RopeParams, MAX_ROPE_POSITION};
+pub use crate::rope::{rope, RopePairing, RopeParams, MAX_ROPE_POSITION};
 pub use crate::softmax::softmax;

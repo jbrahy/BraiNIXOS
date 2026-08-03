@@ -18,7 +18,7 @@ mod common;
 
 use brainix_tensor::{
     matmul_f32, matmul_q8_0, rmsnorm, rope, silu, softmax, swiglu, MatMulShape, Q8Weights,
-    Q8_0_BLOCK,
+    RopePairing, RopeParams, Q8_0_BLOCK,
 };
 use common::{
     assert_close, dot_tolerance, quantize_q8_0, ref_dequantize_q8_0, ref_dot, ref_matmul,
@@ -329,41 +329,135 @@ fn softmax_matches_the_reference_and_sums_to_one() {
 // -------------------------------------------------------------------- RoPE
 
 #[test]
-fn rope_matches_the_reference() {
+fn rope_matches_the_reference_under_both_pairings() {
     // The kernel evaluates sine and cosine in f64 and rounds to f32 before the
     // four multiplies, exactly as the reference does, so the tolerance is a few
     // ulps of the input magnitude rather than of the output — the rotation can
     // cancel, and a relative bound on a cancelled output is meaningless.
+    //
+    // Both conventions are exercised over the same shapes and positions: each
+    // is a supported path, not a fallback, so neither gets weaker coverage.
     let mut rng = Rng::new(0x5eed_0009);
     let params_under_test = [(8_usize, 8_usize), (64, 64), (128, 64), (2, 2)];
 
-    for (d_head, rope_dim) in params_under_test {
-        for position in [0_u32, 1, 7, 4095, 131_072] {
-            let n_heads = 3;
-            let x = rng.vector(n_heads * d_head, 1.0);
-            let mut out = vec![f32::NAN; x.len()];
-            let params = brainix_tensor::RopeParams {
-                d_head,
-                rope_dim,
-                base: 1.0e4,
-                position,
-            };
-            rope(&x, &params, &mut out).unwrap();
+    for pairing in [RopePairing::Interleaved, RopePairing::HalfSplit] {
+        for (d_head, rope_dim) in params_under_test {
+            for position in [0_u32, 1, 7, 4095, 131_072] {
+                let n_heads = 3;
+                let x = rng.vector(n_heads * d_head, 1.0);
+                let mut out = vec![f32::NAN; x.len()];
+                let params = RopeParams {
+                    d_head,
+                    rope_dim,
+                    base: 1.0e4,
+                    pairing,
+                    position,
+                };
+                rope(&x, &params, &mut out).unwrap();
 
-            for head in 0..n_heads {
-                let slice = &x[head * d_head..(head + 1) * d_head];
-                let expected = ref_rope(slice, rope_dim, 1.0e4, position);
-                for i in 0..d_head {
-                    assert_close(
-                        f64::from(out[head * d_head + i]),
-                        f64::from(expected[i]),
-                        1e-5,
-                        &format!("rope d_head {d_head} pos {position} head {head} element {i}"),
-                    );
+                for head in 0..n_heads {
+                    let slice = &x[head * d_head..(head + 1) * d_head];
+                    let expected = ref_rope(slice, rope_dim, 1.0e4, position, pairing);
+                    for i in 0..d_head {
+                        assert_close(
+                            f64::from(out[head * d_head + i]),
+                            f64::from(expected[i]),
+                            1e-5,
+                            &format!(
+                                "rope {pairing:?} d_head {d_head} pos {position} \
+                                 head {head} element {i}"
+                            ),
+                        );
+                    }
                 }
             }
         }
     }
+}
+
+#[test]
+fn the_two_pairings_produce_different_results_on_the_same_input() {
+    // The assertion that proves `pairing` is load bearing rather than accepted
+    // and ignored. If this ever passes trivially — because one path silently
+    // dispatches to the other — the whole point of the BXW1 §5.5 field is gone
+    // and every model converted under the other convention becomes fluent
+    // nonsense with no test to catch it.
+    //
+    // rope_dim >= 4 is required: with a single pair the two conventions
+    // genuinely coincide (interleaved (x[0], x[1]) is half-split
+    // (x[0], x[0+1])), which is a property of the definitions, not a bug.
+    let mut rng = Rng::new(0x5eed_000d);
+
+    for (d_head, rope_dim) in [(4_usize, 4_usize), (8, 8), (64, 64), (128, 96)] {
+        let x = rng.vector(d_head * 2, 1.0);
+        let mut interleaved = vec![f32::NAN; x.len()];
+        let mut half_split = vec![f32::NAN; x.len()];
+
+        let base_params = RopeParams {
+            d_head,
+            rope_dim,
+            base: 1.0e4,
+            pairing: RopePairing::Interleaved,
+            position: 13,
+        };
+        rope(&x, &base_params, &mut interleaved).unwrap();
+        rope(
+            &x,
+            &RopeParams {
+                pairing: RopePairing::HalfSplit,
+                ..base_params
+            },
+            &mut half_split,
+        )
+        .unwrap();
+
+        assert_ne!(
+            interleaved, half_split,
+            "d_head {d_head} rope_dim {rope_dim}: the pairing parameter is being ignored"
+        );
+
+        // Stronger than "not equal": a majority of rotated components must
+        // actually differ, so the test cannot pass on a single stray element.
+        let differing = interleaved
+            .iter()
+            .zip(half_split.iter())
+            .take(rope_dim)
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(
+            differing * 2 > rope_dim,
+            "d_head {d_head}: only {differing} of {rope_dim} rotated components differ"
+        );
+    }
+}
+
+#[test]
+fn the_two_pairings_coincide_at_a_single_pair() {
+    // Documented above and asserted here so the exception is pinned rather than
+    // rediscovered as a suspicious test failure later.
+    let mut rng = Rng::new(0x5eed_000e);
+    let x = rng.vector(2, 1.0);
+    let mut interleaved = [f32::NAN; 2];
+    let mut half_split = [f32::NAN; 2];
+
+    let params = RopeParams {
+        d_head: 2,
+        rope_dim: 2,
+        base: 1.0e4,
+        pairing: RopePairing::Interleaved,
+        position: 99,
+    };
+    rope(&x, &params, &mut interleaved).unwrap();
+    rope(
+        &x,
+        &RopeParams {
+            pairing: RopePairing::HalfSplit,
+            ..params
+        },
+        &mut half_split,
+    )
+    .unwrap();
+    assert_eq!(interleaved, half_split);
 }
 
 #[test]
@@ -377,10 +471,11 @@ fn rope_takes_its_base_from_the_parameters() {
 
     rope(
         &x,
-        &brainix_tensor::RopeParams {
+        &RopeParams {
             d_head: 64,
             rope_dim: 64,
             base: 1.0e4,
+            pairing: RopePairing::Interleaved,
             position: 17,
         },
         &mut a,
@@ -388,10 +483,11 @@ fn rope_takes_its_base_from_the_parameters() {
     .unwrap();
     rope(
         &x,
-        &brainix_tensor::RopeParams {
+        &RopeParams {
             d_head: 64,
             rope_dim: 64,
             base: 1.0e6,
+            pairing: RopePairing::Interleaved,
             position: 17,
         },
         &mut b,

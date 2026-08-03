@@ -20,7 +20,7 @@ mod common;
 
 use brainix_tensor::{
     matmul_f32, matmul_q8_0, rmsnorm, rope, silu, softmax, swiglu, MatMulShape, Q8Weights,
-    RopeParams, TensorError, MAX_ROPE_POSITION, Q8_0_BLOCK,
+    RopePairing, RopeParams, TensorError, MAX_ROPE_POSITION, Q8_0_BLOCK,
 };
 use common::{quantize_q8_0, Rng};
 
@@ -222,65 +222,116 @@ fn softmax_refuses_non_finite_input() {
 // ---------------------------------------------------------- RoPE properties
 
 #[test]
-fn rope_at_position_zero_is_the_identity() {
+fn rope_at_position_zero_is_the_identity_under_both_pairings() {
     // cos(0) = 1 and sin(0) = 0 exactly, so this must be bit-for-bit equality,
     // not approximate. Anything less means the sine/cosine kernel is not exact
     // at zero and every position is slightly wrong.
+    //
+    // It holds under both conventions — which is precisely why position 0
+    // cannot be used to tell them apart, and therefore why the pairing has to
+    // be a declared field rather than something an engine could detect.
     let mut rng = Rng::new(0x1eaf_0002);
-    for (d_head, rope_dim) in [(2_usize, 2_usize), (8, 4), (64, 64), (128, 96)] {
-        let x = rng.vector(d_head * 3, 5.0);
-        let mut out = vec![f32::NAN; x.len()];
-        rope(
-            &x,
-            &RopeParams {
-                d_head,
-                rope_dim,
-                base: 1.0e4,
-                position: 0,
-            },
-            &mut out,
-        )
-        .unwrap();
-        assert_eq!(out, x, "d_head {d_head} rope_dim {rope_dim}");
+    for pairing in [RopePairing::Interleaved, RopePairing::HalfSplit] {
+        for (d_head, rope_dim) in [(2_usize, 2_usize), (8, 4), (64, 64), (128, 96)] {
+            let x = rng.vector(d_head * 3, 5.0);
+            let mut out = vec![f32::NAN; x.len()];
+            rope(
+                &x,
+                &RopeParams {
+                    d_head,
+                    rope_dim,
+                    base: 1.0e4,
+                    pairing,
+                    position: 0,
+                },
+                &mut out,
+            )
+            .unwrap();
+            assert_eq!(out, x, "{pairing:?} d_head {d_head} rope_dim {rope_dim}");
+        }
     }
 }
 
 #[test]
-fn rope_preserves_the_norm_of_every_rotated_pair() {
+fn rope_pairing_decodes_only_the_two_bxw1_values() {
+    assert_eq!(RopePairing::from_bxw1(1).unwrap(), RopePairing::Interleaved);
+    assert_eq!(RopePairing::from_bxw1(2).unwrap(), RopePairing::HalfSplit);
+    assert_eq!(RopePairing::Interleaved.to_bxw1(), 1);
+    assert_eq!(RopePairing::HalfSplit.to_bxw1(), 2);
+}
+
+#[test]
+fn rope_pairing_refuses_every_unrecognized_value_including_zero() {
+    // BXW1 §5.5 / rule H17a. Zero is the value a converter that predates the
+    // field writes, so admitting it as a default would mean the one case the
+    // field exists to catch is exactly the case it does not catch. It is
+    // refused on the same footing as any other unknown value — no fallback to
+    // either path.
+    for value in [0_u32, 3, 4, 255, 0x8000_0000, u32::MAX] {
+        assert_eq!(
+            RopePairing::from_bxw1(value).unwrap_err(),
+            TensorError::InvalidRopePairing,
+            "rope_pairing = {value}"
+        );
+    }
+}
+
+#[test]
+fn rope_preserves_the_norm_of_every_rotated_pair_under_both_pairings() {
     // A rotation is orthogonal, so each pair's magnitude is invariant. This is
     // the property that fails first if the two components of a pair are picked
-    // from the wrong places or the sign of one term is wrong.
+    // from the wrong places or the sign of one term is wrong — and it holds for
+    // both conventions, which is the second reason no unit test can tell them
+    // apart.
     let mut rng = Rng::new(0x1eaf_0003);
     let (d_head, rope_dim) = (128_usize, 96_usize);
     let x = rng.vector(d_head * 2, 3.0);
+    let half = rope_dim / 2;
 
-    for position in [1_u32, 3, 512, 65_537, MAX_ROPE_POSITION] {
-        let mut out = vec![f32::NAN; x.len()];
-        rope(
-            &x,
-            &RopeParams {
-                d_head,
-                rope_dim,
-                base: 1.0e4,
-                position,
-            },
-            &mut out,
-        )
-        .unwrap();
+    for pairing in [RopePairing::Interleaved, RopePairing::HalfSplit] {
+        for position in [1_u32, 3, 512, 65_537, MAX_ROPE_POSITION] {
+            let mut out = vec![f32::NAN; x.len()];
+            rope(
+                &x,
+                &RopeParams {
+                    d_head,
+                    rope_dim,
+                    base: 1.0e4,
+                    pairing,
+                    position,
+                },
+                &mut out,
+            )
+            .unwrap();
 
-        for head in 0..2 {
-            for pair in 0..rope_dim / 2 {
-                let base = head * d_head + 2 * pair;
-                let before = f64::from(x[base]).hypot(f64::from(x[base + 1]));
-                let after = f64::from(out[base]).hypot(f64::from(out[base + 1]));
+            for head in 0..2 {
+                for pair in 0..half {
+                    let (lo, hi) = match pairing {
+                        RopePairing::Interleaved => (2 * pair, 2 * pair + 1),
+                        RopePairing::HalfSplit => (pair, pair + half),
+                    };
+                    let (lo, hi) = (head * d_head + lo, head * d_head + hi);
+                    let before = f64::from(x[lo]).hypot(f64::from(x[hi]));
+                    let after = f64::from(out[lo]).hypot(f64::from(out[hi]));
+                    assert!(
+                        (after - before).abs() <= 1e-6 * before.max(1.0),
+                        "{pairing:?} position {position} pair {pair}: {before} -> {after}"
+                    );
+                }
+                // The unrotated tail passes through untouched — BXW1 §5.1 pins
+                // "passed through", not zeroed. Both pairings cover exactly
+                // 0..rope_dim, so the tail is the same set for both.
+                for i in rope_dim..d_head {
+                    assert_eq!(
+                        out[head * d_head + i],
+                        x[head * d_head + i],
+                        "{pairing:?} tail element {i} must pass through unrotated"
+                    );
+                }
                 assert!(
-                    (after - before).abs() <= 1e-6 * before.max(1.0),
-                    "position {position} pair {pair}: {before} -> {after}"
+                    (rope_dim..d_head).any(|i| x[head * d_head + i] != 0.0),
+                    "the tail fixture must be non-zero or the assertion above is vacuous"
                 );
-            }
-            // The unrotated tail passes through untouched.
-            for i in rope_dim..d_head {
-                assert_eq!(out[head * d_head + i], x[head * d_head + i]);
             }
         }
     }
@@ -294,6 +345,7 @@ fn rope_refuses_an_invalid_dimension_or_base() {
         d_head: 8,
         rope_dim: 8,
         base: 1.0e4,
+        pairing: RopePairing::Interleaved,
         position: 0,
     };
 

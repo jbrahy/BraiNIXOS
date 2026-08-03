@@ -22,7 +22,7 @@
     clippy::cognitive_complexity
 )]
 
-use brainix_tensor::{BXW1_ALIGN, Q8_0_BLOCK};
+use brainix_tensor::{RopePairing, BXW1_ALIGN, Q8_0_BLOCK};
 
 /// Unit roundoff for binary32: `2⁻²⁴`. Half of `f32::EPSILON`.
 pub const F32_UNIT_ROUNDOFF: f64 = 5.960_464_477_539_063e-8;
@@ -229,17 +229,32 @@ pub fn ref_softmax(x: &[f32]) -> Vec<f64> {
     terms.iter().map(|t| t / sum).collect()
 }
 
-/// Reference RoPE for one head, interleaved pairing, `f64` trigonometry.
-pub fn ref_rope(head: &[f32], rope_dim: usize, base: f32, position: u32) -> Vec<f32> {
+/// Reference RoPE for one head, `f64` trigonometry, either pairing.
+///
+/// The two conventions share every angle and differ only in the `(lo, hi)`
+/// index pair, which is exactly the structure the kernel has — written out
+/// here independently so the comparison is a check and not a restatement.
+pub fn ref_rope(
+    head: &[f32],
+    rope_dim: usize,
+    base: f32,
+    position: u32,
+    pairing: RopePairing,
+) -> Vec<f32> {
     let mut out = head.to_vec();
-    for i in 0..rope_dim / 2 {
+    let half = rope_dim / 2;
+    for i in 0..half {
         let theta = f64::from(base).powf(-2.0 * (i as f64) / (rope_dim as f64));
         let angle = f64::from(position) * theta;
         let (sin, cos) = (angle.sin() as f32, angle.cos() as f32);
-        let a = head[2 * i];
-        let b = head[2 * i + 1];
-        out[2 * i] = a * cos - b * sin;
-        out[2 * i + 1] = a * sin + b * cos;
+        let (lo, hi) = match pairing {
+            RopePairing::Interleaved => (2 * i, 2 * i + 1),
+            RopePairing::HalfSplit => (i, i + half),
+        };
+        let a = head[lo];
+        let b = head[hi];
+        out[lo] = a * cos - b * sin;
+        out[hi] = a * sin + b * cos;
     }
     out
 }
