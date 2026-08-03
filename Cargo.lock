@@ -56,6 +56,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-bxw1"
+version = "0.1.0"
+dependencies = [
+ "brainix-tensor",
+ "sha2",
+]
+
+[[package]]
 name = "brainix-capability-verify"
 version = "0.1.0"
 dependencies = [
