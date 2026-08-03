@@ -68,6 +68,9 @@ surprise.
 
 ## Status
 
-No spec files exist yet. The first ones land with the AS-4 driver chain (RTKit, ANS2 NVMe, PCIe,
-Ethernet) and AS-5 (AGX), which is where the clean-room procedure first becomes load-bearing. Until then
-this directory holds only this README.
+| Spec | Subsystem | Derived | Version-stamped against the target? |
+|---|---|---|---|
+| [`apple-device-tree-format.md`](apple-device-tree-format.md) | Apple Device Tree (ADT) binary format and the nodes AS-1 reads | 2026-08-03 | **No** — derived on a `T6030` observation host; see that file's OQ-7. |
+
+The remaining specs land with the AS-4 driver chain (RTKit, ANS2 NVMe, PCIe, Ethernet) and AS-5 (AGX),
+where the clean-room procedure carries the most weight.
