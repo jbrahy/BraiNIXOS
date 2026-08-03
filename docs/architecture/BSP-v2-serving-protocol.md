@@ -1078,7 +1078,7 @@ capability (`INV-AUTH-009`).
 |--:|---|---|---|
 | `0x11` | `EnrollKey` | `request_id[4]`, `role[1]`, `key_material[32]` | `role ∈ {0x01 client, 0x02 admin}` — any other value REJECT. Server runs §5.2 and, **before persisting anything**, compares the derived `handle` against the break-glass handle: equal ⇒ `Error{ERR_FORBIDDEN}`, unconditionally and non-configurably (`INV-BOOT-008`, §12 row A4). Otherwise persists the record, zeroizes `key_material` and `PRK_enroll`, and replies `KeyEnrolled{handle}`. Credential table full ⇒ `Error{ERR_NO_CAPACITY}`. Duplicate `handle` ⇒ `Error{ERR_DUPLICATE}` (the caller re-sent the same key material) |
 | `0x12` | `RevokeKey` | `request_id[4]`, `handle[16]` | Handle MUST exist ⇒ else `Error{ERR_NO_SUCH_KEY}`. Handle MUST NOT be the break-glass handle ⇒ else `Error{ERR_FORBIDDEN}`, unconditionally and non-configurably (`INV-BOOT-008`). On success the record's `K_id` and `CK_n` are zeroized and the slot is returned to the fixed table; live sessions authenticated by that credential are torn down (§9.4) |
-| `0x13` | `LoadWeights` | `request_id[4]`, `weights_digest[32]` | Activates the weight blob whose measured digest is exactly this value; the digest is verified before first use (`INV-MODEL-002`) and a mismatch or absent blob ⇒ `Error{ERR_NO_SUCH_WEIGHTS}`. **The blob is not carried over BSP** — this verb names a digest, never a path and never a byte stream; see §15 question 4 |
+| `0x13` | `LoadWeights` | `request_id[4]`, `weights_digest[32]` | **Reboot-class — see the note below the table.** Activates the weight blob whose measured digest is exactly this value; the digest is verified before first use (`INV-MODEL-002`) and a mismatch, an absent blob, or a blob whose own Ed25519 signature does not verify ⇒ `Error{ERR_NO_SUCH_WEIGHTS}`. **The blob is not carried over BSP** — this verb names a digest, never a path and never a byte stream; see §15 question 4 |
 | `0x14` | `ReadAuditLog` | `request_id[4]`, `cursor[8]`, `max_records[2]` | `max_records ≤ MAX_AUDIT_RECORDS` — else `Error{ERR_LIMIT}`. Read-only; returns `AuditChunk` records and a next cursor. Reading grants no authority (`INV-SERVE-005`) |
 | `0x15` | `RestartServer` | `request_id[4]`, `target[1]` | `target` is an enumerated server identity (`servd`, `inferd`, `auditd`, `gpud`), not a name and not a path; an unknown value ⇒ `Error{ERR_BAD_TARGET}`. Restart re-launches with the target's existing frozen manifest and mints nothing (`INV-FAIL-002`) |
 | `0x16` | `Reboot` | `request_id[4]` | Reboots the machine. The admin session is torn down before the reboot proceeds |
@@ -1092,6 +1092,34 @@ key ever leaked, precisely in order to re-enroll it under a different `role` or 
 displace the record. The refusal is therefore not dead code, and §12 row A4's
 `EnrollKey` clause is reachable. `RevokeKey` reaches it the obvious way, by naming
 the handle directly.
+
+**`LoadWeights` is reboot-class, not a hot swap** *(specified 2026-08-03 by owner
+decision; the dispatch that implements it is P2-T14 and does not exist — §14).*
+A weight generation is **destroyed and replaced, never edited**, because
+[`MEMORY_MODEL.md`](MEMORY_MODEL.md) §13 admits no path that makes a sealed
+weights page writable again. Invoking this verb therefore:
+
+1. **terminates every session**, client and admin alike, including the session
+   that issued the verb — the reply is best-effort and a caller must not depend
+   on receiving it;
+2. tears down the serving stack: `inferd` exits, the weights region is zeroized,
+   and the seal is released as a kernel operation belonging to the destroyed
+   generation, not as a permission change on any live mapping;
+3. re-runs the one-shot loader `modeld`, which verifies the newly named
+   generation end to end and exits
+   ([`BXW1-weight-format.md`](BXW1-weight-format.md) §10.0, §10.5);
+4. relaunches `inferd` against the new sealed generation.
+
+It is written out here, in the verb's own semantics, so that no client can read
+`LoadWeights` as an in-place swap that leaves conversations running. **It does
+not.** Two consequences follow and are stated rather than implied: in-flight
+requests are lost, not drained; and because the weights region is single and
+fixed, the previous generation is already gone when the new blob is verified, so
+a reload that DENIES leaves the machine **unable to serve** until a
+`LoadWeights` naming a verifying digest succeeds (§12 row A5).
+
+**This changes what `LoadWeights` means, not the size of the set.** No verb is
+added: there is no reload verb, no `activate`, and no `rotate`.
 
 There is deliberately **no `rotate` verb** (§7.3), no `set-config`, no
 `read-file`, no `write-file`, no `exec`, and no verb that adds, removes, or widens
@@ -1221,7 +1249,7 @@ Kani/fuzz assertion target.
 | A2 | `EnrollKey` with the credential table full | table bound | Error+keep (`ERR_NO_CAPACITY`) |
 | A3 | `RevokeKey` on an unknown handle | table lookup | Error+keep (`ERR_NO_SUCH_KEY`) |
 | A4 | `RevokeKey` or `EnrollKey` targeting the break-glass handle | `INV-BOOT-008` check | Error+keep (`ERR_FORBIDDEN`) and an audit event; the refusal is not configurable |
-| A5 | `LoadWeights` digest matches no blob, or the blob fails its digest check | `INV-MODEL-002` | Error+keep (`ERR_NO_SUCH_WEIGHTS`); the previous weights stay active |
+| A5 | `LoadWeights` digest matches no blob, or the blob fails its digest or signature check | `INV-MODEL-002` | Error (`ERR_NO_SUCH_WEIGHTS`). "Keep" applies only while the request is refused **before** the §10.4 teardown begins; once the previous generation has been torn down there is none to keep, and the machine cannot serve until a verifying digest is loaded |
 | A6 | `RestartServer` with an unknown `target` | enum guard | Error+keep (`ERR_BAD_TARGET`) |
 | A7 | `ReadAuditLog` with `max_records > MAX_AUDIT_RECORDS` | §10.4 check | Error+keep (`ERR_LIMIT`) |
 | T1 | idle past `IDLE_TIMEOUT` | timer | Drop (server `Bye` then close) |
@@ -1314,6 +1342,11 @@ a running system. As of 2026-08-02, **none of BSP v2 is implemented**:
   and Poly1305 set is specified and not yet written; the record layer's current
   home is `src/kernel/src/ssh/transport.rs`, which P2-T2 relocates.
 - No fuzz target, Kani harness, Prusti obligation, or test vector from §13 exists.
+- **The reboot-class `LoadWeights` semantics of §10.4 are unbuilt in every
+  part** *(added 2026-08-03)*: there is no admin verb dispatch (P2-T14), no
+  teardown sequence, no kernel unseal of a destroyed weight generation (P3-T2),
+  and no `modeld` to re-run (P3-T3a). The verb fails closed today because
+  nothing implements it, not because a check refuses it.
 
 Nothing in §§1–13 may be cited as an implemented control until the corresponding
 line above is struck.

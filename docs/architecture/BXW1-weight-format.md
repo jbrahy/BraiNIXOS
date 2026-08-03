@@ -83,7 +83,7 @@ right and does not inherit `inferd`'s Reduced tier — §16's first corollary.
 | `INV-PARSE-002` (fuzz target *and* Kani harness) | §12 names both, plus the Prusti and audit obligations Full tier requires. |
 | `INV-PARSE-004` (disagreeing sources fail closed) | Three sources describe overlapping facts — the header's hyperparameters, the tensor table's shapes, and the tokenizer vocabulary blob. Disagreement is a DENY with no precedence rule (§7.5), for the reason `INV-PARSE-004` gives: picking a winner means trusting one unaudited source over another. |
 | `INV-FAIL-001` (failure modes are defined) | §7.1 defines exactly one failure action for every rejection in this document. |
-| `INV-FAIL-002` (recovery mints no hidden authority) | A failed load leaves the previously sealed generation active and grants nothing. A successful load grants `inferd` a **read-only** view and no new capability (§10.2). |
+| `INV-FAIL-002` (recovery mints no hidden authority) | A failed load grants nothing, and leaves the previously sealed generation active when it is refused before §10.5's teardown. A successful load grants `inferd` a **read-only** view and no new capability (§10.2). `modeld`'s own capabilities are its three (§10.0) and it exits holding none of them. |
 | `INV-FAIL-003` (secure degradation over silent insecurity) | There is no "load anyway and warn" path, no digest-check bypass, and no relaxed mode. A blob that cannot be fully verified is not served. |
 | `INV-AUTH-009` (admin authority is a capability, not a shell) | Activation is the `LoadWeights` verb — one of exactly six — and it names a 32-byte digest, never a path and never a byte stream (BSP v2 §10.4). BXW1 defines no field that could widen that verb, and adds no seventh. |
 | `INV-AUD-001` / `INV-SERVE-005` (security-relevant events observable) | Load attempt, outcome, blob digest, tensor count, and total size are emitted to `auditd` (§10.4). Weight bytes are never emitted. Observing a load grants no authority. |
@@ -706,7 +706,10 @@ DENY is a single, uniform action:
    rejected blob is not observable by the next load.
 4. **Leave the previous generation alone.** A previously sealed, verified weight
    generation stays active and untouched — this is BSP v2 §12 row A5's "the
-   previous weights stay active."
+   previous weights stay active." **This holds for a load refused before the
+   teardown of §10.5 begins.** Once a reload has torn the previous generation
+   down there is nothing left to leave alone, and §10.5 states that cost rather
+   than implying a rollback that the single fixed region cannot provide.
 5. **Return an enumerated error** and emit exactly one audit event naming the
    rule that fired (§10.4). Never a partial success, never a warning, never a
    degraded mode (`INV-FAIL-003`).
@@ -795,6 +798,7 @@ console-bound value, and not an index (`INV-MODEL-003`).
 | C6 | Tokenizer blob length ≠ `vocab_len`, or its SHA-256 ≠ `vocab_digest` | DENY, before the tokenizer parses a byte |
 | C7 | Vocabulary entry count (as reported by P3-T5's parser) ≠ `vocab_size` | DENY, with no precedence rule (`INV-PARSE-004`, §5.4) |
 | C8 | Any §5.3 header/table shape disagreement | DENY, with no precedence rule |
+| C9 | The detached Ed25519 signature over the whole-blob digest absent, malformed, or failing verification against the weights-signing public key | DENY (§9.2). Checked at S8 alongside C5, before the seal. A blob whose bytes are intact but whose signature does not verify is not served |
 
 ### 7.6 Arithmetic discipline
 
@@ -935,7 +939,8 @@ different hat.
 |---|---|---|---|
 | Per-tensor `digest` | Exactly `data_len` bytes at `data_off` | Tensor table record (§3.2) | Failure **localization**, and the ability to re-verify one tensor later without re-reading the whole blob |
 | `tensor_table_digest` | `tensor_count × 160` table bytes | Header (§3.1) | Prevents a corrupt table from silently relabelling correct data — a record whose name, shape, or extent has changed no longer matches |
-| Whole-blob digest | Bytes `0 .. total_size`, header inclusive | **Not in the file** — named by `LoadWeights` (BSP v2 §10.4) | The actual **integrity anchor** |
+| Whole-blob digest | Bytes `0 .. total_size`, header inclusive | **Not in the file** — named by `LoadWeights` (BSP v2 §10.4) | Selects *which* generation is being loaded, and covers every byte the two digests above cover plus the header and the table |
+| Detached Ed25519 signature | The 32-byte whole-blob digest | **Not in the file** — a sidecar beside the blob on storage (§9.2) | The **integrity anchor**: it is what makes the whole-blob digest a value the project vouched for rather than a value the caller asserted |
 
 **Be precise about what the per-tensor digests add.** They add no integrity
 *strength* over the whole-blob digest, which already covers every byte they
@@ -948,20 +953,22 @@ NORTH_STAR's "every claim is falsifiable" forbids.
 
 **The header is the file's trust root and is covered by nothing inside the
 file.** A digest of the header cannot be in the header. What covers it is the
-whole-blob digest, which lives outside the file entirely — in the operator's
-`LoadWeights` invocation.
+whole-blob digest, which lives outside the file entirely — and what covers *that*
+is the signature of §9.2.
 
-### 9.2 How this composes with the release-signature chain
+### 9.2 The weights are a separately signed artifact
 
-**It does not, and the honest statement is short: the weights blob is not covered
-by the Ed25519 release signature.**
+**Specified 2026-08-03 by owner decision, closing open question 1. No part of
+this is implemented — see §11.**
 
-INV-BOOT's signature covers the *published payload* — kernel and servers —
-which is reproducibly built and verified at boot by iBoot2 against the machine's
-Secure-Enclave-held local policy (`INV-BOOT-AS-003`). The weights blob is not
-part of that payload: it arrives out of band, on local storage, and
-`LoadWeights` names its digest rather than carrying its bytes (BSP v2 §15
-question 4, still open there).
+The weights blob is to carry **its own Ed25519 signature**, over the 32-byte
+whole-blob digest, produced by the same signing process and verified by the same
+verify-only stack the release signature uses
+([`../operations/RELEASE_AND_SIGNING_POLICY.md`](../operations/RELEASE_AND_SIGNING_POLICY.md)
+§11). It is a **detached sidecar** stored beside the blob; nothing about it goes
+inside the BXW1 file, which is why the format above gains no field for it and no
+version bump. `modeld` verifies it at stage S8 (rule C9), before the seal and
+before `inferd` exists.
 
 So the chain is:
 
@@ -974,23 +981,40 @@ Ed25519 release signature ──► payload (kernel + servers)          [signed]
                                     │
                                     │  LoadWeights{weights_digest[32]}
                                     ▼
-                              BXW1 loader ──► whole-blob SHA-256   [compared]
+Ed25519 weights signature ──► modeld ──► whole-blob SHA-256        [verified, then compared]
                                     │
                                     ▼
                               per-tensor SHA-256, table SHA-256    [localization]
 ```
 
-**BXW1's integrity anchor is a 32-byte value supplied by an authenticated
-`CapAdmin` session, and nothing else.** It reduces to the security of the admin
-credential — which lives in a credential store that is **plaintext at rest,
-permanently** (`INV-BOOT-006`, BSP v2 §2.4). Anyone who obtains the disk obtains
-the admin credential and can therefore name any digest they like. That is a real
-and unmitigated exposure, and it is not BXW1's to fix.
+**The weights are deliberately *not* folded into the release signature**, which
+was the alternative open question 1 posed. Signing the kernel image over the
+model's digest would make the published image model-specific — one image per
+model, a rebuild and a re-signature to swap models — and that weakens INV-BOOT's
+**reproducible-build clause**, which is the one clause of INV-BOOT that still
+holds in full on the only platform (NORTH_STAR, *INV-BOOT is the Apple boot
+posture*). Trading the last undegraded clause of a headline invariant for
+coverage that a second signature provides directly is not a trade worth making.
 
-Open question 1 (§13) records the one structural improvement available:
-embedding the expected blob digest in the signed payload at build time, which
-would put the weights under the release signature transitively. Its cost is that
-the published image becomes model-specific.
+**The two signatures are independent.** They cover different artifacts and are
+verified at different times by different components — the release signature at
+build/verification time over the payload, the weights signature by `modeld` at
+load time over the blob digest. Compromise of one key does not imply the other:
+a forged weights signature yields a wrong model on a genuine kernel, and a
+forged release signature yields a compromised kernel that can ignore weight
+verification entirely. Neither substitutes for the other, and neither may be
+described as covering the other.
+
+**What this fixes, and what it does not.** It removes the anchor's dependence on
+the admin credential *alone*: previously the whole-blob digest was a 32-byte
+value asserted by an authenticated `CapAdmin` session and nothing else, so anyone
+holding the disk held the admin credential — the credential store is **plaintext
+at rest, permanently** (`INV-BOOT-006`, BSP v2 §2.4) — and could therefore name
+any digest they liked over any blob they liked. With a signature required, naming
+a digest selects among *signed* generations; it no longer confers the ability to
+mint one. The plaintext-at-rest exposure itself is unchanged and is not BXW1's to
+fix, and an attacker who already controls the kernel is out of reach of this or
+any other in-kernel check (§9.3 item 3).
 
 ### 9.3 What integrity checking does **not** prove
 
@@ -998,8 +1022,10 @@ Six things, stated because each of them is a claim someone will otherwise read
 into a verified digest:
 
 1. **It does not prove the weights are the intended model.** It proves they match
-   a digest someone supplied. A wrong-but-consistent digest yields a
-   fully verified wrong model.
+   a digest someone supplied, and — once §9.2 is built — that the digest was
+   signed by the weights-signing key. Neither says the operator named the
+   generation they meant to: any *signed* blob is a fully verified load, so a
+   `LoadWeights` naming last quarter's model succeeds completely.
 2. **It does not prove the model is safe.** A correctly digested model is still a
    confined tenant, still adversary-influenced by design, and still subject to
    `INV-MODEL-001`'s three-capability manifest and `INV-MODEL-004`'s adversarial
@@ -1031,6 +1057,57 @@ into a verified digest:
 
 ## 10. Load sequence (normative ordering)
 
+### 10.0 The component that runs this sequence: `modeld`
+
+**Specified 2026-08-03 by owner decision, closing open question 6. Nothing in
+this subsection is implemented — see §11.**
+
+The stages of §10.1 are to be executed by **`modeld`**, a one-shot server that
+runs to completion and **exits before `inferd` launches**. It is named here
+because a load sequence with no named executor is a sequence nobody owns, and
+because `INV-MODEL-001` forbids `inferd` from being that executor: `inferd`'s
+manifest is exactly `{Model, its serving endpoint, its own KV slice}`, and none
+of the three can read a byte from storage.
+
+`modeld`'s manifest is to be **exactly three capabilities**, and the
+authoritative statement of it is
+[`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) §14.
+Each is load-bearing for a specific stage below:
+
+| Capability | The stage that cannot run without it |
+|---|---|
+| `CapEndpoint` to the storage server (`devd-ans2`) | **S0** obtains the object's byte length and **S1** reads its bytes; **S9** reads the tokenizer vocabulary blob. This is the capability `INV-MODEL-001` denies `inferd`, so some principal must hold it and it must not be `inferd` |
+| `CapMemory` over `WEIGHTS_REGION` — writable, never executable | **S1** writes the region and **S10** requests the seal. Held **exclusively** while the region is writable (`INV-MEM-005`), which is what makes S7's single validation pass sound |
+| `CapEndpoint` to `auditd`, send-only | **S11**'s audit event (§10.4, `INV-AUD-001`, `INV-SERVE-005`) |
+
+No new `CapabilityType` discriminant is required: both are existing types
+([`CAPABILITY_MODEL.md`](CAPABILITY_MODEL.md) §2) named over different objects.
+
+**Lifetime is half of the confinement.** `modeld` exits at S11, so the storage
+capability and the writable-weights capability exist in **no running process**
+while the system is serving. It holds no `CapServe`, no `CapModel`, no
+`CapAdmin`, no network capability, and no spawn authority: it cannot accept a
+connection, is not reachable from any client session, and cannot release a seal
+— unsealing is a kernel operation (§10.5).
+
+**The rejected alternative, recorded because it is the one that will be
+proposed again.** The other way to close this gap is to grant `inferd` a fourth
+capability and let it read the blob itself. That is a degradation of
+`INV-MODEL-001` — an invariant whose entire content is the number three — and
+would need the written sign-off NORTH_STAR's exceptions ledger requires. It also
+widens the wrong component: `inferd` is long-lived, reachable through `servd`,
+and adversarially prompted by design, so a storage capability in its manifest is
+reachable for the whole life of the system by exactly the party the confinement
+exists to stop. A **separate principal, bounded in scope** (three capabilities,
+none of them serving) **and in lifetime** (exits before the first request) is
+the capability-native answer. It costs one more server image instead of one more
+capability on the tenant.
+
+`modeld` is **Full tier** — it parses a hostile blob. The tier and its reason
+are recorded in
+[`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) §16,
+which is the sole authoritative tier table; this document restates neither.
+
 ### 10.1 Stages
 
 The order is normative. Two placements are load-bearing and are noted where they
@@ -1046,10 +1123,10 @@ occur.
 | **S5** | Validate every record in index order, carrying one `u64` of extent state (§7.3, §7.4) | DENY, zeroize |
 | **S6** | Resolve the required name set for `arch_id`; check completeness, exactness, and every §5.3 shape cross-check (T6, T7, C8) | DENY, zeroize |
 | **S7** | One pass over the payload: compute the whole-blob SHA-256 and every per-tensor SHA-256, validate every `Q8_0` scale and every `F32` element bit pattern, and verify every pad byte is zero (C2, C3, C4, D19) | DENY, zeroize |
-| **S8** | Compare the whole-blob digest to the digest named by `LoadWeights` (C5) | DENY, zeroize |
+| **S8** | Compare the whole-blob digest to the digest named by `LoadWeights` (C5), **and** verify the detached Ed25519 signature over that digest against the weights-signing public key (C9, §9.2) | DENY, zeroize |
 | **S9** | Verify the tokenizer blob's length and digest, then its entry count against `vocab_size` (C6, C7) | DENY, zeroize |
 | **S10** | **Seal** the region read-only and non-executable | — |
-| **S11** | Emit the audit event (§10.4); hand the sealed read-only view to `inferd` | — |
+| **S11** | Emit the audit event (§10.4) and **exit**. The sealed read-only view is what `inferd` receives in its manifest when it launches afterwards (§10.2) | — |
 
 **Everything is parsed from region-resident bytes, exactly once.** Parsing the
 storage object first and copying afterwards would create a time-of-check/
@@ -1059,17 +1136,18 @@ the gap entirely and costs nothing, because the copy's length never depended on
 the file's own claims.
 
 **The seal at S10 is what makes S7's verification durable.** Before it, the
-region is writable and exclusively the loader's — no other component holds a
+region is writable and exclusively `modeld`'s — no other component holds a
 capability naming it (`INV-MEM-005`). After it, no path makes a weights page
 writable again. The window in which verified bytes could change is therefore
 empty by construction rather than by timing.
 
 ### 10.2 What `inferd` receives
 
-A **read-only, non-executable** view of the sealed region, plus its existing
-three capabilities (`INV-MODEL-001`). The load grants nothing new
-(`INV-FAIL-002`). `inferd` never holds a writable weights capability at any
-point in its life, and it never holds a storage capability at all.
+`inferd` launches **after `modeld` has exited**. It receives a **read-only,
+non-executable** view of the sealed region, plus its existing three capabilities
+(`INV-MODEL-001`). The load grants nothing new (`INV-FAIL-002`). `inferd` never
+holds a writable weights capability at any point in its life, and it never holds
+a storage capability at all.
 
 ### 10.3 The second parser, and why it is not redundant
 
@@ -1099,17 +1177,42 @@ carrying: the outcome, the whole-blob digest, `total_size`, `tensor_count`,
 **no weight bytes, no tensor contents, and no scale values**. Observing a load
 grants no authority (`INV-AUD-002`).
 
-### 10.5 Replacing an active generation
+### 10.5 Replacing an active generation — a reboot-class operation
 
-A second `LoadWeights` naming a different digest requires the current generation
-to be torn down first: all sessions ended, the region zeroized
-(`INV-MEM-006`, `INV-OBJ-002`), and the seal released as a **kernel** operation
-that neither `inferd` nor the loader can invoke. The sealed state is per
-generation, not per boot — which is the only reading consistent with both
-`MEMORY_MODEL.md` §13's "after sealing there is no code path that can make a
-weights page writable again" and BSP v2's expectation that `LoadWeights` can be
-issued more than once. **The mechanism is P3-T2's and P2-T14's, not this
-document's**, and the exact transition is open question 5 (§13).
+**Specified 2026-08-03 by owner decision, closing open question 5. The mechanism
+is P3-T2's and P2-T14's, not this document's, and none of it is implemented
+(§11).**
+
+A second `LoadWeights` naming a different digest is **a new generation, not a
+mutation of the current one**. No sealed page ever becomes writable again;
+instead the whole serving stack is torn down and rebuilt:
+
+1. All sessions end and `inferd` terminates. There is no live reader of the
+   region left.
+2. The region is zeroized (`INV-MEM-006`, `INV-OBJ-002`) and the seal is
+   released as a **kernel** operation that neither `inferd` nor `modeld` can
+   invoke. Releasing a seal is not a permission change on a mapping held by a
+   running process; the generation the mapping belonged to no longer exists.
+3. `modeld` runs again from S0 against the newly named digest, and exits.
+4. `inferd` launches against the new sealed generation.
+
+The sealed state is therefore per generation, not per boot, which is the only
+reading consistent with both `MEMORY_MODEL.md` §13's "after sealing there is no
+code path that can make a weights page writable again" and BSP v2's expectation
+that `LoadWeights` is issuable more than once. **A generation is destroyed and
+replaced; it is never edited.**
+
+**Two costs, stated.** First, this is *not* a hot swap: every session in flight
+is terminated, and BSP v2 §10.4 says so in the verb's own semantics so that no
+client can read it as one. Second — and this supersedes §7.1 item 4 for the
+reload case specifically — because `WEIGHTS_REGION` is single and fixed, the
+previous generation is already gone by the time the new blob is verified. A
+reload whose blob DENIES therefore leaves the machine with **no active
+generation** and unable to serve until a `LoadWeights` naming a verifying digest
+succeeds. §7.1 item 4's "the previous generation stays active" holds for a load
+that is refused *before* teardown begins; it cannot hold across a teardown, and
+claiming otherwise would require a second region the memory budget (§8.2) does
+not have.
 
 ---
 
@@ -1123,6 +1226,18 @@ of BXW1 is implemented:**
 - There is no BXW1 loader. P3-T3 is unstarted, and its dependencies P3-T1 (this
   document) and P3-T2 (the reserved regions) are respectively this document and
   unstarted.
+- **There is no `modeld`.** §10.0 is a specification of a server that does not
+  exist: no `src/servers/modeld/`, no manifest, no launch ordering, and nothing
+  that runs before `inferd` because there is no `inferd` either. P3-T3a is
+  unstarted.
+- **The weights signature of §9.2 does not exist.** Nothing signs a weight blob,
+  no sidecar format is produced by any tool, no weights-signing key exists, and
+  no verification path calls the Ed25519 stack on anything but a release
+  signature. Rule C9 and stage S8's signature clause describe required behaviour
+  of unwritten code.
+- **The reboot-class reload of §10.5 does not exist**, in either half: there is
+  no teardown sequence, no kernel unseal operation, and no `LoadWeights`
+  dispatch to invoke either (P2-T14 is unstarted).
 - **`WEIGHTS_REGION` does not exist.** `memory/virtual_address_layout.rs` and
   `physical_allocator.rs` have no weights region and no KV region; P3-T2 adds
   them. Every sizing figure in §8.2 is therefore a proposal, not a measurement.
@@ -1220,15 +1335,16 @@ same bytes rather than against each other.
 
 ## 13. Open questions for the owner
 
-1. **Does the release signature cover the weights?** Today it does not (§9.2):
-   BXW1's integrity anchor is a digest supplied by an admin session whose
-   credential is plaintext at rest. Embedding the expected blob digest in the
-   signed payload at build time would put the weights under the release
-   signature transitively. **The cost is that the published image becomes
-   model-specific** — one image per model, and swapping models means a rebuild
-   and a re-signature, which weakens the "one reproducible published image"
-   property INV-BOOT's reproducible-build clause rests on. Confirm which
-   property is worth more.
+1. ~~**Does the release signature cover the weights?**~~ — **RESOLVED
+   2026-08-03: no, and it never will.** The weights are a **separately signed
+   artifact** with their own Ed25519 signature over the whole-blob digest,
+   verified by the existing verify-only stack (§9.2, rule C9, stage S8,
+   [`../operations/RELEASE_AND_SIGNING_POLICY.md`](../operations/RELEASE_AND_SIGNING_POLICY.md)
+   §11). Folding the weights into the release signature was rejected because it
+   makes the published kernel image model-specific and weakens INV-BOOT's
+   reproducible-build clause — the one clause that still holds in full on the
+   only platform. The two signatures are independent; compromise of one does not
+   imply the other.
 2. **A third dtype for the embedding and output matrices?** `bf16` is the
    strongest candidate: it halves those two tensors relative to `F32` with no
    block structure, no scales, and an almost-free conversion on aarch64. For a
@@ -1249,20 +1365,24 @@ same bytes rather than against each other.
    format whose totality comes from having none. Confirm the split, and confirm
    that the vocabulary arrives by the same out-of-band path as the weights (BSP
    v2 §15 question 4, still open there).
-5. **The weight-generation lifecycle.** §10.5 asserts that replacing weights
-   requires a kernel-mediated unseal after all sessions are torn down, because
-   BSP expects `LoadWeights` to be issuable more than once while
-   `MEMORY_MODEL.md` §13 says no path makes a weights page writable again. Those
-   two are reconcilable only if the seal is per-generation. **Confirm, and assign
-   the transition to P3-T2 or P2-T14** — it is specified nowhere today.
-6. **Who runs the loader?** `INV-MODEL-001` gives `inferd` exactly three
-   capabilities, none of them storage, so `inferd` cannot read the blob from
-   disk; §10 therefore has the region populated and sealed **before** `inferd`
-   launches, by a component holding the storage capability and the writable
-   region capability. That component is not named anywhere in the ROADMAP.
-   Confirm the placement and name it, or accept a fourth capability for `inferd`
-   and amend `INV-MODEL-001` — which would be a degradation of a named invariant
-   and needs written sign-off.
+5. ~~**The weight-generation lifecycle.**~~ — **RESOLVED 2026-08-03:
+   `load-weights` is a reboot-class operation.** A reload is a **new generation,
+   not a mutation**: the serving stack is torn down, `modeld` re-runs, `inferd`
+   restarts, and no sealed page ever becomes writable again (§10.5, BSP v2
+   §10.4). The seal is per generation, not per boot. The transition mechanism is
+   assigned to **P3-T2** (the kernel-side unseal-and-zeroize of a destroyed
+   generation) and **P2-T14** (the server-side dispatch that orders the
+   teardown). The `CapAdmin` verb set is unchanged at six — this changes what
+   `load-weights` *means*, not the set.
+6. ~~**Who runs the loader?**~~ — **RESOLVED 2026-08-03: `modeld`**, a one-shot
+   server holding exactly `{CapEndpoint→devd-ans2, writable CapMemory over
+   `WEIGHTS_REGION`, CapEndpoint→auditd}`, which populates and seals the region
+   and **exits before `inferd` launches** (§10.0; manifest in
+   [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md)
+   §14; tier in its §16). Granting `inferd` a fourth capability was **rejected**:
+   it degrades `INV-MODEL-001` and widens the long-lived, remotely reachable,
+   adversarially prompted component. A separate principal bounded in scope and
+   lifetime is the capability-native answer.
 7. **Is `BXW1_MAX_RANK = 4` enough?** It covers every tensor in §6.2, all of
    which are rank 1 or 2, with two ranks of headroom. A mixture-of-experts
    variant would want a rank-3 expert-stacked weight, which fits; anything

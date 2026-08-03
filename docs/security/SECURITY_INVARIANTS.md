@@ -1098,12 +1098,53 @@ and central to nothing in the TCB's authority.
 
 **Evidence:** manifest audit; the diff must show zero capabilities beyond the three.
 
+### The `modeld` manifest — the principal that holds what `inferd` must not
+
+*(Specified 2026-08-03 by owner decision. **This is not a new invariant** — it introduces no identifier and
+adds no rule. It records the manifest that makes `INV-MODEL-001` and `INV-MODEL-002` satisfiable at the
+same time. **`modeld` does not exist**: it is planned as ROADMAP P3-T3a and specified in
+[`../architecture/BXW1-weight-format.md`](../architecture/BXW1-weight-format.md) §10.0.)*
+
+`INV-MODEL-001` grants `inferd` three capabilities and none of them is storage, so `inferd` structurally
+cannot read the weight blob. Some principal must, and it is to be **`modeld`**: a one-shot server that
+runs **before `inferd` launches**, verifies the blob's signature and every per-tensor digest, populates
+`WEIGHTS_REGION`, seals it read-only, and **exits**.
+
+Its manifest is to be exactly three capabilities, frozen at launch:
+
+| Capability | Why it is necessary |
+|---|---|
+| `CapEndpoint` to the storage server (`devd-ans2`) | The blob and the tokenizer vocabulary blob are read from storage. This is precisely the authority `INV-MODEL-001` withholds from `inferd`. |
+| `CapMemory` over `WEIGHTS_REGION` — **writable, never executable** | The region must be written before it can be sealed. Held **exclusively** while writable (`INV-MEM-005`); W^X applies with no exception (`INV-MEM-003`). |
+| `CapEndpoint` to `auditd`, send-only | One attributable event per load attempt (`INV-AUD-001`, `INV-SERVE-005`), carrying no weight bytes. |
+
+And **not**: `CapServe`, `CapModel`, `CapAdmin`, any network capability, any spawn authority, any session
+or KV slice. `modeld` accepts no connection, is unreachable from any client session, and cannot release a
+seal — unsealing belongs to the kernel and to a generation that has been destroyed.
+
+**Lifetime is half of the confinement.** Because `modeld` exits before the first request is served, the
+storage capability and the writable-weights capability exist in **no running process** while the system is
+serving.
+
+**The rejected alternative, recorded so it is not re-proposed as new.** Granting `inferd` a fourth
+capability so it could read the blob itself was rejected: it degrades `INV-MODEL-001` — a named invariant
+whose entire content is the number three — and would require written owner sign-off in
+[`../NORTH_STAR.md`](../NORTH_STAR.md)'s exceptions ledger. It also widens the wrong component. `inferd` is
+long-lived, reachable through `servd`, and adversarially prompted by design, so storage authority in its
+manifest would be reachable for the life of the system by exactly the party `INV-MODEL-001` exists to
+contain. A separate principal, bounded in **scope** and in **lifetime**, is the capability-native answer.
+
+**Evidence:** manifest audit, twice — `modeld`'s diff shows exactly the three capabilities above, and
+`inferd`'s diff is unchanged at three. `modeld`'s proof tier is in §16.
+
 ---
 
 ## INV-MODEL-002 — Weights are integrity-checked before first use
 The BXW1 loader verifies a per-tensor digest against a known value before any weight byte is used, and fails closed on a malformed, truncated, or oversized blob.
 
 **Anchoring, stated plainly (2026-08-03):** the digest is anchored **only** to the self-reported software measurement log. It detects corruption and accidental substitution; it does **not** detect an attacker who already controls the kernel (`INV-BOOT-AS-002`). There is no hardware quote to anchor it to and no platform on which there would be.
+
+**Planned, not built (2026-08-03 owner decision):** the weights are to become a **separately signed artifact** — their own Ed25519 signature over the whole-blob digest, verified by the existing verify-only stack before the region is sealed ([`../architecture/BXW1-weight-format.md`](../architecture/BXW1-weight-format.md) §9.2, [`../operations/RELEASE_AND_SIGNING_POLICY.md`](../operations/RELEASE_AND_SIGNING_POLICY.md) §11). They are deliberately **not** folded into the release signature: that would make the published kernel image model-specific and weaken INV-BOOT's reproducible-build clause, the one clause that still holds in full on the only platform. The two signatures are independent — compromise of one does not imply the other. **Nothing signs or verifies a weight blob today**, and the sentence above about anchoring is the current state.
 
 ---
 
@@ -1209,6 +1250,7 @@ table is not thereby Reduced tier; it is **unassessed**, and assessing it is a p
 | ADT parser | **Full** | Hostile input from firmware, parsed earlier and with more authority than anything from the network (`INV-PARSE-003`). |
 | boot-args parser | **Full** | Same firmware source, same reasoning, same treatment. |
 | BXW1 weight loader | **Full** | Hostile input from disk, and the integrity gate for the weights themselves (`INV-MODEL-002`). |
+| `modeld` | **Full** | *(Assigned 2026-08-03, before the code exists — which is the point of this table.)* The server that hosts the BXW1 loader above, so the parser's tier is its host's floor by the first corollary. It is Full tier in its own right as well: it is the only principal holding storage authority and a **writable** `WEIGHTS_REGION` capability, so a compromise between the copy and the seal substitutes the model every session then reads, and the confinement that justifies a Reduced tier elsewhere is exactly what it is outside of. Bounded lifetime shortens the window; it does not shrink the blast radius. |
 | Tokenizer vocab parser | **Full** | Hostile input from disk, consumed before any request is served. |
 | GPU completion-record parser | **Full** | Written by Apple's opaque GPU firmware, which the north star treats as hostile; TCB-AS/GPU precondition 3. |
 | RTKit mailbox | **Full** | Arguable, since it sits inside a confined driver — but it parses firmware-supplied message and endpoint structures, and the parser's tier wins over its host's. |

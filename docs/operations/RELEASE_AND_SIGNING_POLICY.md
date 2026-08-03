@@ -363,5 +363,73 @@ Development key compromise does not affect production security (keys are structu
 
 ---
 
-*Last updated: 2026-04-11*
+## 11. The weights artifact — a second signed artifact
+
+*(Added 2026-08-03 by owner decision, resolving open question 1 of
+[`../architecture/BXW1-weight-format.md`](../architecture/BXW1-weight-format.md). **Specification only.**
+No weight blob has ever been signed, no weights-signing key exists, and no code verifies such a signature.
+The BXW1 loader that would perform the check does not exist either — see that document's §11.)*
+
+BraiNIX is to ship **two independently signed artifacts**, not one:
+
+| | Release artifact | Weights artifact |
+|---|---|---|
+| What it is | The Image4 payload — kernel and servers (§0) | One BXW1 weight blob (`BXW1-weight-format.md` §3) |
+| What is signed | SHA-256 of the binary (§5 Step 3) | The 32-byte whole-blob SHA-256 |
+| Signature form | Ed25519, detached sidecar `.sig` (§5 Step 4) | Ed25519, detached sidecar beside the blob on storage |
+| Signing key | Production key in the HSM (§§2–4) | A **distinct** production Ed25519 key in the HSM, under the same multi-party authorization and audit-log requirements |
+| Verified by | The release verification of §8, and at boot by iBoot2 against the machine's device-local policy (§0) | `modeld`, at load time, before the weights region is sealed and before `inferd` exists (`BXW1-weight-format.md` §9.2, stage S8, rule C9) |
+| Reproducible | ✅ (§8) | ❌ — a model checkpoint is not a build output; what is reproducible is the conversion from a named checkpoint to a BXW1 blob |
+
+### Why the weights are not folded into the release signature
+
+The rejected alternative was to embed the expected weight digest in the signed payload at build time,
+putting the weights under the release signature transitively. **It was rejected because it makes the
+published kernel image model-specific**: one image per model, and swapping models becomes a rebuild and a
+re-signature of the kernel. That directly weakens INV-BOOT's **reproducible-build clause** — a third party
+rebuilding the published payload bit-for-bit — which is the one clause of INV-BOOT that still holds in
+full on the only supported platform ([`../NORTH_STAR.md`](../NORTH_STAR.md), *INV-BOOT is the Apple boot
+posture*; §0 above). Remote attestation, sealing, and runtime-chain measurement are already permanently
+gone. Spending the last undegraded clause to obtain coverage that a second signature provides directly is
+not a trade worth making.
+
+**The kernel image therefore stays reproducible and model-independent.** The same signed payload serves
+any model whose blob verifies. Nothing about which model is loaded appears in, or changes, the release
+artifact.
+
+### The two signatures are independent
+
+They cover different bytes, are produced under different keys, and are verified at different times by
+different components. **Compromise of one does not imply compromise of the other**, and neither may be
+described as covering the other:
+
+- A forged **weights** signature yields a wrong model running on a genuine, verified kernel. The
+  confinement of `INV-MODEL-001` still holds; what is lost is any assurance about *which* model answers.
+- A forged **release** signature yields a compromised kernel, which can then ignore weight verification
+  entirely. This is the strictly worse case, and it is why the weights key being separate does not reduce
+  the release key's importance.
+
+Key rotation (§9), retirement, and the emergency procedures of §10 apply to the weights key with one
+difference stated plainly: **§7's monotonic counter does not apply to the weights artifact**, and there
+is no platform on which it applies to anything (§0). A revoked weights key invalidates nothing already on
+disk; recovering from a compromised weights key means re-signing the blobs that should still be served and
+re-provisioning the machines that hold the others, exactly as §0's rollback discussion describes for the
+payload.
+
+### Verification path
+
+The weights signature is verified by the **same verify-only Ed25519 stack** the release signature uses —
+`ed25519-dalek`, `curve25519-dalek`, `fiat-crypto`, `subtle`, permanently vendored under the named crypto
+exception in [`../NORTH_STAR.md`](../NORTH_STAR.md). **No new dependency, no new primitive, and no signing
+capability enters the tree**: nothing in BraiNIX signs a weight blob, exactly as nothing in BraiNIX signs a
+release. Both signatures are produced outside the machine, by the HSM flow of §5.
+
+A blob whose signature is absent, malformed, or fails to verify is **denied**, with the uniform fail-closed
+action of `BXW1-weight-format.md` §7.1. There is no unsigned-weights mode, no override flag, and no
+development bypass beyond the `DEV_BUILD` key-set separation of §§3 and 6, which applies to the weights key
+set exactly as it applies to the release key set.
+
+---
+
+*Last updated: 2026-08-03*
 *This document is the authoritative specification for BraiNIX release signing.*
