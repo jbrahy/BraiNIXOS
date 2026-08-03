@@ -61,6 +61,10 @@ re-opened in Wave 2 — see its row below):
 THREAT_MODEL, SECURITY_INVARIANTS, BSP, and this file against the 2026-08-02 decisions — and **then two
 parallel tracks that share no code: P1-T2 ∥ P2-T1 (BSP v2 spec)**. Nothing else is Wave 2.
 
+Status: the **documentation gate is COMPLETE**, and **P2-T1 is COMPLETE** —
+[`architecture/BSP-v2-serving-protocol.md`](architecture/BSP-v2-serving-protocol.md) supersedes v1.
+**P1-T2 is the only Wave 2 item remaining**, and it is single-owner for `arch/`.
+
 **Wave 3 — AS-0** (Apple Device Tree parser). AS-0 slid out of Wave 2 because it is the only former
 Wave 2 item **not on the critical path to P3-T9** (decision #19), and because the P6-T1 memo sets the
 resourcing rule itself: Apple Silicon tasks "are preemptible by any x86-64 MVP task, hold no reserved
