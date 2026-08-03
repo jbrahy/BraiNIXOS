@@ -1128,7 +1128,11 @@ six takes a path, a command string, or a capability reference.
 
 Cited by name from THREAT_MODEL §"Dominant threats, re-ranked for this
 deployment". Ranks are omitted on purpose: that list is a re-ranking and its
-numbering has already moved once.
+numbering has already moved once. **Every header below is the threat's current
+name, verbatim** — a name is stable enough to cite and a rank is not, but names
+are not immune either: entry 1 was renamed on 2026-08-03 when x86-64 was dropped
+(§0 records the old wording). The discipline is that a name change is visible and
+repaired here, in one place, rather than rotting silently the way a rank does.
 
 **Hostile remote clients and the inbound protocol.** The entire
 pre-`ESTABLISHED` path (§5) and the message decoder (§10) are `#![no_std]`,
@@ -1165,12 +1169,12 @@ machine rather than the published image (`INV-BUILD-004`). Until §6 ships, the
 honest statement is the one in §5.6h: disclosure decrypts everything ever
 recorded.
 
-**No remote attestation, on the only platform there is.** Also undefended, also by
-structure. A completed handshake proves the peer holds the credential and proves
-nothing about the software behind it (§0). This spec contains no field, message,
-or claim that could be mistaken for an attestation, and adding one would be a
-false claim in wire format — with no second platform on which it could ever be a
-true one.
+**No remote attestation, anywhere.** Also undefended, also by
+structure — and the threat's name is literal: there is no second platform on which
+it would be defended. A completed handshake proves the peer holds the credential
+and proves nothing about the software behind it (§0). This spec contains no field,
+message, or claim that could be mistaken for an attestation, and adding one would
+be a false claim in wire format, on the only platform there is.
 
 ---
 
