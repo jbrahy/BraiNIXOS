@@ -1,5 +1,7 @@
 # BraiNIX Security Invariants
 
+**Status:** Mandatory · **Reconciled:** 2026-08-02 (serving pivot + Apple-primary platform decision)
+
 ## Purpose
 
 This document defines the security invariants BraiNIX must preserve at all times. These invariants are the backbone of the system's security model.
@@ -7,6 +9,32 @@ This document defines the security invariants BraiNIX must preserve at all times
 A feature is acceptable only if it preserves existing invariants or introduces a new invariant with explicit enforcement and evidence strategy.
 
 An implementation detail, performance optimization, compatibility feature, or convenience abstraction must never silently weaken an invariant.
+
+---
+
+## Relationship to NORTH_STAR.md
+
+[`../NORTH_STAR.md`](../NORTH_STAR.md) states **eight headline invariants** as a one-line contract each.
+This document is their **enforcement decomposition**: roughly sixty fine-grained, individually checkable
+rules that together discharge those eight. Both granularities are needed — the north-star's for stating
+the contract, this document's for reviewing a diff.
+
+**Authority.** `NORTH_STAR.md` wins. It is the only place a headline invariant may be introduced,
+reworded, or qualified, and the only place a named exception may be recorded. If an entry below appears to
+contradict it, the entry below is wrong.
+
+| Headline (NORTH_STAR) | Decomposed here as |
+|---|---|
+| **INV-AUTH** | §1 `INV-AUTH-001..008`, §3 `INV-OBJ-002`, §12 `INV-FAIL-002` |
+| **INV-MEM** | §2 `INV-MEM-001..009`, §5 `INV-SCHED-004` |
+| **INV-IPC** | §4 `INV-IPC-001..006` |
+| **INV-BOOT** | §7 `INV-BOOT-001..005`, **`INV-BOOT-AS-001..003`**, §11 `INV-BUILD-001..003` |
+| **INV-SERVE** | **§13 `INV-SERVE-001..005`**, **§15 `INV-PARSE-001..004`** |
+| **INV-MODEL** | **§14 `INV-MODEL-001..004`** |
+| **INV-AUDIT** | §9 `INV-AUD-001..003` |
+| **INV-GPU** | §8 `INV-DEV-001..003`, **`INV-DEV-004..006`** (DART) |
+
+Sections in **bold** were added or extended during the 2026-08-02 reconciliation.
 
 ---
 
@@ -37,6 +65,20 @@ The presence of an invariant in this file does not imply the invariant has yet b
 
 ---
 
+## Named exceptions in force
+
+Reproduced from [`../NORTH_STAR.md`](../NORTH_STAR.md), which is authoritative. Degrading a named
+invariant on any platform requires a written exception with owner sign-off recorded **there** — there is
+no other mechanism, and a document claiming an exemption not on this list is drift.
+
+| Exception | Scope | Signed | Effect |
+|---|---|---|---|
+| **INV-BOOT/AS** | Apple Silicon | 2026-08-02 | Measurement, remote attestation, and sealing are structurally unavailable. See §7. |
+| **TCB-AS** | Apple Silicon | 2026-08-02 | SecureROM, iBoot1, iBoot2, sepOS are in the TCB by force — closed, unauditable, unremovable. |
+| **TCB-EXCEPTION-001** | All platforms | 2026-06-27 | Relational SQL engine in ring 0. See [`TCB_EXCEPTION_001_IN_KERNEL_SQL.md`](TCB_EXCEPTION_001_IN_KERNEL_SQL.md). |
+
+---
+
 ## Invariant Categories
 
 The invariants are grouped into the following categories:
@@ -46,13 +88,16 @@ The invariants are grouped into the following categories:
 - object lifecycle invariants
 - IPC and liveness invariants
 - scheduler and resource invariants
-- x86 platform and execution invariants
+- platform and execution invariants (x86-64 and aarch64)
 - boot and attestation invariants
 - device isolation invariants
 - audit and observability invariants
 - unsafe code and assurance invariants
 - build and release invariants
 - failure and recovery invariants
+- **serving and client isolation invariants**
+- **model confinement invariants**
+- **hostile-input parser invariants**
 
 ---
 
@@ -261,6 +306,21 @@ The kernel may not trust raw userspace pointers without validation, ownership ch
 
 ---
 
+## INV-MEM-009 — Page size is a HAL parameter, never an assumption
+No memory code outside the HAL may assume a specific base page size. Apple Silicon uses **16 KiB** base pages; x86-64 uses **4 KiB**. Region sizing, alignment, guard-page placement, and W^X granularity must all derive from the HAL's page-size constant.
+
+**Why it matters:** A hardcoded 4 KiB that reaches the primary platform does not fail loudly — it silently misaligns reserved regions, misplaces guard pages, and can make W^X enforcement coarser than intended. That is an isolation failure wearing the costume of a portability bug.
+
+**Enforcement directions:**
+- page size exposed once, from `hal/mmu.rs`; no literal `4096` in architecture-neutral memory code
+- grep-gate against bare page-size literals outside `arch/` and `hal/`
+- `WEIGHTS_REGION` and `KV_REGION` sizing expressed in pages, not bytes
+- MMU and reserved-region code tested at both page sizes (QEMU `virt` at 4 KiB, Apple at 16 KiB)
+
+**Related:** INV-MEM-003, INV-MEM-007. Introduced 2026-08-02 with the Apple-primary decision.
+
+---
+
 # 3. Object Lifecycle Invariants
 
 ## INV-OBJ-001 — Every kernel object has a defined lifecycle
@@ -425,7 +485,23 @@ Pool exhaustion, quota exhaustion, or scheduler admission failure must return a 
 
 ---
 
-# 6. x86 Platform and Execution Invariants
+# 6. Platform and Execution Invariants
+
+Platform-specific invariants are stated per architecture. **Both supported platforms must satisfy the
+equivalent property**; only the mechanism differs. A property available on one platform and absent on the
+other is a named exception (see §7), not a silent asymmetry.
+
+| Property | x86-64 mechanism | aarch64 / Apple mechanism |
+|---|---|---|
+| Kernel cannot execute user code | SMEP | PXN |
+| Kernel cannot implicitly read/write user memory | SMAP | PAN |
+| Control-flow integrity | IBT / ENDBR64 | PAC / BTI |
+| Hardware entropy | RDRAND | RNDR |
+| No-execute mapping | NX bit | XN / UXN |
+| IOMMU | VT-d | **DART** (many instances — see §8) |
+| Interrupt controller | APIC | **AIC** (FIQ split — see `INV-ARM-005`) |
+
+## 6a. x86-64
 
 ## INV-X86-001 — Only supported x86-64 execution modes are used
 BraiNIX operates only in documented 64-bit modes and does not depend on legacy mode behavior beyond controlled bootstrap transitions.
@@ -531,6 +607,52 @@ All CPU exception handlers must terminate by disabling interrupts (`cli`) before
 
 ---
 
+## 6b. aarch64 and Apple Silicon
+
+Introduced 2026-08-02. These govern the **primary** platform and are therefore not "future work" — they
+are the ones most in need of proof artifacts.
+
+## INV-ARM-001 — Only supported aarch64 exception levels are used
+The kernel runs at EL1 with userspace at EL0. Entry from firmware may occur at EL2; the transition to EL1 is explicit and one-way. No dependence on EL3 (Apple Silicon has none) or on PSCI (likewise absent).
+
+**Why it matters:** Exception-level confusion is the aarch64 analogue of x86 legacy-mode confusion, with the added hazard that Apple's entry state is undocumented.
+
+**Enforcement directions:**
+- assume nothing about inherited MMU, cache, or translation state at firmware handoff; re-establish our own immediately
+- explicit EL2→EL1 transition with documented register state
+- secondary CPUs released via the platform's own reset-vector mechanism, never PSCI
+
+---
+
+## INV-ARM-002 — PAN and PXN are enabled and equivalent to SMAP/SMEP
+Kernel execution of user-mapped code is prevented (PXN), and implicit kernel access to user memory is prevented (PAN). Explicit, scoped accessor helpers are the only path.
+
+**Why it matters:** These discharge the same obligations as `INV-X86-002` and `INV-X86-003` on the primary platform. Missing them means the primary platform is *weaker* than the secondary one.
+
+---
+
+## INV-ARM-003 — PAC/BTI control-flow integrity is enabled where available
+Pointer authentication and branch-target identification are enabled on cores that implement them, discharging the obligation `INV-X86-004` covers via IBT/ENDBR64.
+
+---
+
+## INV-ARM-004 — Entropy comes from RNDR with an explicit failure path
+`RNDR`/`RNDRRS` may legitimately fail. A failed read is an explicit error that blocks cryptographic operation start (`INV-BOOT-005`), never a silent fallback to a weaker source.
+
+---
+
+## INV-ARM-005 — Interrupt-controller abstraction survives the AIC's shape
+The `hal/interrupts` trait must express the Apple Interrupt Controller honestly rather than forcing it into a GIC-shaped API:
+
+- a single packed **event word** read replaces the GIC ack/EOI register pair
+- per-CPU timers and some other sources arrive as **FIQ**, entirely outside the controller — the trait needs a notion of CPU-local sources the controller does not own
+- IPIs go through implementation-defined system registers, not a controller doorbell
+- the AIC revision is selected from ADT compatible strings at runtime, and an **unknown string fails closed**
+
+**Why it matters:** An interrupt abstraction that quietly assumes "all interrupts flow through the controller" will mis-handle the FIQ timer path on the primary platform — and timer handling is where scheduler and liveness invariants are enforced.
+
+---
+
 # 7. Boot and Attestation Invariants
 
 ## INV-BOOT-001 — Production security claims require a trusted production boot path
@@ -568,6 +690,40 @@ The kernel must define when cryptographic operations may begin and what minimum 
 
 ---
 
+## Apple Silicon: INV-BOOT/AS
+
+The exception is recorded in [`../NORTH_STAR.md`](../NORTH_STAR.md); these are its enforcement
+consequences. **This is the primary platform**, so these are not edge cases — they describe the assurance
+level of the shipping product.
+
+## INV-BOOT-AS-001 — Attestation claims are forbidden on Apple Silicon
+No BraiNIX component, release note, log line, protocol field, or document may assert remote attestation, sealing, or hardware-anchored measurement on Apple Silicon. There is no TPM, and the Secure Enclave exposes no PCR-style extend/quote/seal interface to third-party software.
+
+**Why it matters:** A false attestation claim is worse than no attestation, because a client will rely on it. This invariant is the guard against the strongest temptation created by the 2026-08-02 decision.
+
+**Enforcement directions:**
+- the BSP protocol must not offer an attestation field the primary platform cannot populate honestly
+- grep-gate on attestation vocabulary in Apple Silicon code paths
+- release notes for Apple Silicon builds state the degradation explicitly
+
+---
+
+## INV-BOOT-AS-002 — The software measurement log is never presented as evidence
+The kernel may hash what it loads and record a log. That log is **self-reported**: a kernel compromised early can produce any log it likes. It may be used for operational debugging and accidental-corruption detection. It may not be used as evidence against an attacker, exported as an attestation, or described as a measurement.
+
+**Why it matters:** This is the specific mechanism by which a degraded platform gets quietly re-described as an attested one.
+
+---
+
+## INV-BOOT-AS-003 — Payload integrity is Apple's root, and is labeled as such
+iBoot2 verifies the Image4-wrapped payload against a Secure-Enclave-held, **device-local** policy at every boot. This is real, hardware-rooted integrity for the payload at rest — and it proves nothing to a remote party, is keyed to one machine, and is not our trust root.
+
+**Why it matters:** Overstating this is the second-most-likely way the platform's assurance gets misrepresented. Document it as what it is: tamper-resistance at rest, not attestation.
+
+**Related:** TCB-AS — SecureROM, iBoot1, iBoot2, and sepOS are in the TCB by force and cannot be audited or removed.
+
+---
+
 # 8. Device Isolation Invariants
 
 ## INV-DEV-001 — Devices do not imply universal memory authority
@@ -593,6 +749,34 @@ A device-handling userspace process receives only the authority required for tha
 Interrupt delivery and binding must be capability-controlled and attributable.
 
 **Why it matters:** Interrupt abuse can become privilege or availability abuse.
+
+---
+
+## INV-DEV-004 — Every IOMMU instance defaults to deny-all
+On a platform with multiple IOMMU instances, **every** discovered instance is configured deny-all before any device is permitted to issue a transaction. There is no "not yet configured" state in which a device can DMA.
+
+**Why it matters:** Apple's DART is not one translation unit like VT-d — it is dozens of small per-device-cluster instances scattered across the SoC and discovered from the Apple Device Tree. A single instance left unconfigured is a complete DMA escape, and the failure is silent. Deny-all-by-default converts "we forgot one" from a breach into a device that does not work.
+
+**Enforcement directions:**
+- enumerate every DART instance from the ADT and program deny-all before device bring-up
+- no code path that maps a window before the instance has been explicitly initialized
+- a device whose IOMMU instance is unknown does not get to run
+
+---
+
+## INV-DEV-005 — An unrecognized IOMMU variant fails closed
+DART PTE formats and register layouts differ across SoC generations. An unrecognized ADT compatible string, or a variant whose PTE layout we have not implemented, halts bring-up for that device. It never falls back to a permissive or "best guess" configuration.
+
+**Why it matters:** A guessed PTE layout that happens not to fault is indistinguishable from a working one until a device DMAs somewhere it should not. Guessing at IOMMU configuration is guessing at isolation.
+
+---
+
+## INV-DEV-006 — A driver cannot widen its own DMA window
+The IOMMU trait exposes no operation by which a driver can enlarge, relocate, or add to its own translation window. Window changes are made by the capability-bounded authority that granted the window, never by its holder.
+
+**Why it matters:** This is the structural control behind INV-GPU, and it applies now — every DMA-capable device driver on the primary platform (NVMe, PCIe, Ethernet) depends on it long before any GPU work begins.
+
+**Evidence:** Kani proof that no trait method widens a window; DMA fault injection.
 
 ---
 
@@ -700,15 +884,131 @@ If a required security property cannot be maintained, the system must fail close
 
 ---
 
+# 13. Serving and Client Isolation Invariants
+
+Introduced 2026-08-02. Decomposes the headline **INV-SERVE**. The inbound serving path is the largest
+attack surface BraiNIX controls, and these invariants are what make multi-client serving defensible.
+
+## INV-SERVE-001 — A client cannot name another client's objects
+No session capability may reference another session's state, KV partition, or weights view. Cross-naming is not merely rejected at use time — it is unrepresentable, because the capability was never granted.
+
+**Why it matters:** Cross-tenant breach is the primary failure this design exists to prevent. Rejecting at use time leaves the reference existing; not granting it leaves nothing to reject.
+
+**Enforcement directions:**
+- per-client capability set frozen at session grant
+- KV partitions disjoint by construction, not by bookkeeping
+- two-concurrent-session integration test asserting denial
+
+---
+
+## INV-SERVE-002 — No allocation is ever driven by client-supplied sizes
+A length, count, or offset arriving from a client may be used to *validate* against a fixed bound. It may never be used to size an allocation, extend a pool, or select a growth factor.
+
+**Why it matters:** This is the mechanism that converts a remote memory-exhaustion attack into a bounded capacity limit. It is also the single easiest invariant to violate accidentally in parser code.
+
+---
+
+## INV-SERVE-003 — Admission is bounded per client
+`servd` enforces per-client admission limits on concurrent sessions and in-flight requests.
+
+**Why it matters:** Fixed pools convert client-driven memory DoS into *capacity* exhaustion. That is the correct security trade, but it is a genuine availability loss: without per-client limits, one client can consume the whole fixed pool and deny every other client. Admission limits are load-bearing, not a nicety.
+
+---
+
+## INV-SERVE-004 — Session teardown is complete
+Ending a session releases its capabilities, zeroizes its KV partition, and removes its session-table row. No residue may be observable by the next occupant of that partition.
+
+**Why it matters:** Cross-tenant leakage through reused KV memory would defeat INV-SERVE-001 without ever violating it directly. **Related:** INV-MEM-006, INV-OBJ-002.
+
+---
+
+## INV-SERVE-005 — Serving state is observable to the auditor and to no one else
+Connection, authentication, capability-grant, and request/response boundary events are visible to `auditd`. Visibility grants no authority — see §9.
+
+---
+
+# 14. Model Confinement Invariants
+
+Introduced 2026-08-02. Decomposes the headline **INV-MODEL**. The served model is central to the product
+and central to nothing in the TCB's authority.
+
+## INV-MODEL-001 — The model's capability set is exactly three things
+`inferd` holds `{Model, its serving endpoint, its own KV slice}`. Not spawn. Not kernel mutation. Not network. Not another session. The manifest is frozen at launch.
+
+**Why it matters:** Confinement must be **structural, not behavioral**. The model physically cannot name a capability it was not granted, so no prompt — however sophisticated — can cause it to use one. Confinement that depended on the model's judgment would be no confinement at all.
+
+**Evidence:** manifest audit; the diff must show zero capabilities beyond the three.
+
+---
+
+## INV-MODEL-002 — Weights are integrity-checked before first use
+The BXW1 loader verifies a per-tensor digest against a known value before any weight byte is used, and fails closed on a malformed, truncated, or oversized blob.
+
+**Platform note:** on x86-64 the digest is anchored to a hardware quote. On Apple Silicon it is anchored only to the software measurement log, so it detects corruption and accidental substitution but **not** an attacker who already controls the kernel (`INV-BOOT-AS-002`).
+
+---
+
+## INV-MODEL-003 — Model output is untrusted input everywhere it lands
+Tokens the model emits are hostile bytes. Any consumer — operator console, log, audit record, or serving response framing — treats them as such. In particular, no consumer interprets in-band control sequences from model output.
+
+**Why it matters:** The model is the one component that is simultaneously inside the system and adversary-influenced by design.
+
+---
+
+## INV-MODEL-004 — Confinement is tested adversarially, not asserted
+A prompt-injection corpus is run as a CI regression bar. The passing condition is **zero escalations under any input**, not a rate.
+
+**Why it matters:** "Every claim is falsifiable." An asserted confinement with no adversarial test is not enforced.
+
+---
+
+# 15. Hostile-Input Parser Invariants
+
+Introduced 2026-08-02. Not a headline invariant — a discipline that INV-SERVE, INV-MODEL, and INV-MEM
+jointly impose. Listed separately because it is the most frequently violated rule in the tree and the
+easiest to check in review.
+
+## INV-PARSE-001 — Every parser of foreign data is `no_std`, zero-allocation, and fail-closed
+"Foreign data" means anything the project did not produce: network bytes, disk bytes, device responses, **and firmware-supplied structures**. Every offset, length, and count is bounds-checked against its containing region. Malformed input denies the operation; it never proceeds best-effort.
+
+## INV-PARSE-002 — Every such parser ships a fuzz target *and* a Kani harness
+Both. A fuzz target finds what the harness did not model; a harness proves what fuzzing cannot exhaust. One without the other does not satisfy the per-component gate in [`../ROADMAP.md`](../ROADMAP.md).
+
+The set, current and planned:
+
+| Parser | Input source | Task |
+|---|---|---|
+| BSP request decoder | Remote clients | P2-T3 |
+| Transport handshake FSM | Remote clients | P2-T2 |
+| BXW1 weight loader | Disk | P3-T3 |
+| Tokenizer vocab blob | Disk | P3-T5 |
+| **Apple Device Tree** | **Firmware** | **AS-0** |
+| **boot-args structure** | **Firmware** | **AS-0-T4** |
+| GPU completion parser | Device | Phase 5 (deferred) |
+
+## INV-PARSE-003 — Firmware-supplied data is hostile input
+The Apple Device Tree and boot-args come from software we did not write, cannot audit, and cannot replace, and they are parsed **earlier and with more authority** than anything from the network. They receive exactly the treatment network bytes receive.
+
+**Why it matters:** Intuition resists this — firmware feels like part of the machine. On the primary platform it is unaudited third-party code inside our TCB by force (TCB-AS), and its output reaches our most privileged parsing context. An ADT claiming an absurd child count must deny, not allocate.
+
+## INV-PARSE-004 — Disagreeing sources fail the boot closed
+Where two firmware sources describe the same fact — boot-args and the ADT both reporting memory ranges — disagreement halts the boot. There is no precedence rule, because picking a winner means trusting one unaudited source over another.
+
+---
+
 # Traceability Guidance
 
 Each subsystem specification should include an “invariant impact” section naming the invariants it must preserve.
 
 Example:
 
-- Memory allocator changes → INV-MEM-005, INV-MEM-006, INV-SCHED-004
+- Memory allocator changes → INV-MEM-005, INV-MEM-006, INV-MEM-009, INV-SCHED-004
 - Capability subsystem changes → INV-AUTH-002, 003, 004, 005 and INV-OBJ-002
-- New device support → INV-DEV-001, 002, 003 and INV-X86-006 where DMA or interrupt mapping is involved
+- New device support → INV-DEV-001..006 and INV-X86-006 / INV-ARM-005 where DMA or interrupt mapping is involved
+- Serving path changes → INV-SERVE-001..005, INV-PARSE-001, 002
+- Inference engine changes → INV-MODEL-001..004, INV-MEM-009
+- Apple Silicon platform work → INV-ARM-001..005, INV-PARSE-003, 004, INV-DEV-004, 005
+- Anything touching boot or release → INV-BOOT-001..005, INV-BOOT-AS-001..003, INV-BUILD-001..003
 
 ---
 
@@ -744,6 +1044,12 @@ Tests, fuzzing, model checking, or manual review performed.
 
 # Final Rule
 
-BraiNIX security is not defined by “Rust,” “microkernel,” “formal methods,” or “x86 hardening” in isolation. It is defined by whether these invariants remain true under attack, under failure, and under future feature growth.
+BraiNIX security is not defined by “Rust,” “microkernel,” “formal methods,” or “platform hardening” in isolation. It is defined by whether these invariants remain true under attack, under failure, and under future feature growth.
 
 If an invariant is weakened, security is weakened, even if the code still compiles and the system still boots.
+
+Two corollaries, added 2026-08-02:
+
+**A weakened invariant is written down or it is a lie.** The Apple-primary decision cost real assurance — remote attestation and sealing are gone on the platform the product ships on. That is recorded as INV-BOOT/AS with owner sign-off, restated in §7, and guarded by INV-BOOT-AS-001..003. The failure mode this discipline prevents is not the loss itself; it is the loss being quietly forgotten and the platform later described as though it were attested.
+
+**Serving inverted the threat picture, and the invariants moved with it.** BraiNIX now accepts connections from hostile remote clients and runs a model that adversaries prompt directly. §13, §14, and §15 exist because the old invariant set — written for an internal-only microkernel — did not cover any of that. An invariant set that lags the system's actual attack surface provides confidence, not security.

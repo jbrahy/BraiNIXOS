@@ -8,6 +8,58 @@ This is an authoritative specification. If code or configuration diverges from t
 
 ---
 
+## 0. Platform scope — read this first
+
+**Everything in this document applies to x86-64 only.**
+
+As of the owner decision of 2026-08-02, the **primary** platform is Apple Silicon (Mac mini M2, `T8112`),
+and on that platform **there is no attestation model at all**. This is not an unimplemented feature. It is
+structural: Apple Silicon has no TPM, none can be added (no LPC/SPI header, and a USB TPM is not a root of
+trust), and the Secure Enclave exposes no PCR-style extend/quote/seal interface to third-party software.
+
+| Capability | x86-64 (secondary) | Apple Silicon (**primary**) |
+|---|---|---|
+| PCR measurement (§1, §2) | ✅ | ❌ structurally unavailable |
+| TPM quote (§3) | ✅ | ❌ structurally unavailable |
+| Attestation gate (§4) | ✅ | ❌ nothing to gate on |
+| Rollback protection via monotonic counter (§7) | ✅ | ❌ no TPM counter |
+| Sealing secrets to boot state | ✅ | ❌ structurally unavailable |
+| Reproducible build | ✅ | ✅ unchanged |
+| Ed25519 release signature | ✅ | ✅ unchanged |
+| Payload integrity at rest | ✅ UEFI Secure Boot | ✅ iBoot2 vs. device-local SEP policy — *Apple's* root, not ours |
+
+### What Apple Silicon has instead
+
+**iBoot2 verifies the Image4-wrapped payload against a Secure-Enclave-held, device-local policy at every
+boot.** A tampered on-disk payload does not boot. This is real, hardware-rooted tamper-resistance **for
+the payload at rest** — and it must not be described as attestation. The root is Apple's, the key is
+device-local, and it proves nothing to any remote party.
+
+**A software-only measurement log.** The kernel may hash what it loads and record the log. It is
+**self-reported**: a kernel compromised early can produce any log it likes. Permitted uses are operational
+debugging and accidental-corruption detection. It may **not** be exported as an attestation, presented as
+evidence against an attacker, or called a measurement (`INV-BOOT-AS-002`).
+
+### What is permanently lost
+
+- **Remote attestation.** A client cannot distinguish a genuine BraiNIX boot from a compromised one.
+- **Sealing.** No secrets bound to boot state; data at rest is protected only by runtime behavior.
+- **Runtime-chain measurement.** Detection of a divergent boot chain — the exact property this document's
+  §7 and §8 exist to provide — is gone.
+
+### The rule this creates
+
+**No BraiNIX component, protocol field, log line, release note, or document may assert attestation,
+sealing, or hardware-anchored measurement on Apple Silicon** (`INV-BOOT-AS-001`, `PROJECT_RULES.md` Rule
+13.0). In particular, the BSP serving protocol must not define an attestation field the primary platform
+cannot populate honestly — an unfillable field invites a dishonest filling.
+
+**Deployments requiring attestation must run x86-64.** Recorded as the signed exception INV-BOOT/AS in
+[`../NORTH_STAR.md`](../NORTH_STAR.md); consequences in
+[`../THREAT_MODEL.md`](../THREAT_MODEL.md) and [`PLATFORM_SUPPORT_MATRIX.md`](PLATFORM_SUPPORT_MATRIX.md).
+
+---
+
 ## 1. PCR Layout
 
 BraiNIX uses four TPM 2.0 Platform Configuration Registers (PCRs) to record the measurement chain from firmware to userspace servers. Each PCR is a SHA-256 digest (32 bytes) that is extended (not overwritten) with each new measurement.

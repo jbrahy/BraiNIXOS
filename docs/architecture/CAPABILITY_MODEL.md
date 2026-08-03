@@ -34,6 +34,29 @@ Every capability has exactly one type. The type determines which kernel object t
 | **CapSpawn** | Authority to create new processes from a compile-time whitelist | Spawn a process of a permitted type with an explicit initial capability set. The whitelist is compiled into the holder. |
 | **CapAuditRead** | Authority to read (but not write) the kernel audit log | Read audit entries from the kernel ring buffer. No write authority. No authority to modify or delete entries. |
 
+#### Serving-era types *(planned — P2-T5)*
+
+*(Added 2026-08-02 with the serving pivot. The `CapabilityType` enum currently ends at `Frame = 10`;
+these extend it. They are **specified but not yet implemented** — the change that adds them must extend
+the proofs in `src/capability-verify/` in the same commit, not afterward.)*
+
+| Type | Discriminant | Purpose | Authorized Operations |
+|---|---|---|---|
+| **CapServe** | `11` | Authority over **one client session** on the serving path | Read and write that session's request/response stream; reference that session's KV partition. **Cannot name any other session** — this is the structural basis of `INV-SERVE-001`. Granted per-connection by `servd`, frozen at grant, revoked at teardown. |
+| **CapModel** | `12` | Authority to invoke the served model within a session | Submit a confined inference request against the read-only weights view and the caller's own KV slice. Confers **no** authority to spawn, mutate the kernel, reach the network, or read another session (`INV-MODEL-001`). |
+| **CapGpu** | `13` | Authority over an accelerator's bounded MMIO and DMA windows | *(Deferred with Phase 5; x86-64 only — Apple's AGX is out of scope.)* Access device registers within the granted window. **Cannot widen its own DMA window** (`INV-DEV-006`). |
+
+Three properties of these types are load-bearing and must survive implementation:
+
+1. **CapServe is per-session, not per-client-class.** One capability, one session. A capability that
+   covered "all sessions of this client" would reintroduce exactly the cross-naming path INV-SERVE exists
+   to eliminate.
+2. **CapModel confers compute, not authority.** The served model is a confined tenant. It receives all
+   available compute and reserved memory and **zero** authority — that asymmetry is the entire INV-MODEL
+   design, and it is what makes prompt injection a bounded problem rather than an escalation path.
+3. **Neither is derivable into something broader.** Rights monotonicity (§5) applies with no exception:
+   there is no derivation from CapServe or CapModel that yields authority over another session.
+
 ### Type Safety
 
 Capability types are represented as a Rust enum. The type tag is checked on every capability invocation. Attempting to invoke a CapMemory as if it were a CapEndpoint returns `CapabilityError::TypeMismatch`. There is no raw integer type field that could be confused or reinterpreted.

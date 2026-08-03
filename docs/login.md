@@ -1,5 +1,13 @@
 # BraiNIX Development Access
 
+> **Scope note (2026-08-02):** this page covers **development** access to a BraiNIX instance running under
+> QEMU on x86-64. It is not a production access design — production clients reach the system only through
+> the authenticated, capability-gated BSP serving path
+> ([`architecture/BSP-v1-serving-protocol.md`](architecture/BSP-v1-serving-protocol.md)).
+>
+> Apple Silicon bring-up uses a debug UART cable rather than anything described here; see
+> [`operations/PLATFORM_SUPPORT_MATRIX.md`](operations/PLATFORM_SUPPORT_MATRIX.md) §2.5.
+
 ## Local Test Suite
 
 Run the same checks that CI runs:

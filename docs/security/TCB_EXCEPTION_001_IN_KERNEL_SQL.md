@@ -8,6 +8,25 @@ kernel address space, as part of the Trusted Computing Base.
 and declining the userspace alternative.
 **Authored by:** engineering, under the `/goal` (north-star) governance process.
 
+> **Reconciled 2026-08-02.** This exception remains **in force and unchanged**. It is now one of three
+> named exceptions; the other two were signed 2026-08-02 and are recorded in
+> [`../NORTH_STAR.md`](../NORTH_STAR.md):
+>
+> | Exception | Scope | Effect |
+> |---|---|---|
+> | **TCB-EXCEPTION-001** *(this document)* | All platforms | Relational SQL engine in ring 0. |
+> | **INV-BOOT/AS** | Apple Silicon | No measurement, remote attestation, or sealing. |
+> | **TCB-AS** | Apple Silicon | SecureROM, iBoot1, iBoot2, sepOS in the TCB by force. |
+>
+> **These compound.** On the primary platform the TCB now contains both a full SQL engine in ring 0 *and*
+> four closed-source Apple components we cannot audit — and there is no attestation to detect if any of it
+> is subverted. Each exception was justified on its own; the combination was never separately assessed.
+> The `db/` reframing at P2-T7 (session table + serving log) is the next change to this engine and is the
+> natural point to re-examine whether the ring-0 residency still earns its cost.
+>
+> Re-derivation of the serving path onto this engine must not silently widen this exception's scope. Its
+> scope is what is written below and nothing more.
+
 ---
 
 ## Why this document exists

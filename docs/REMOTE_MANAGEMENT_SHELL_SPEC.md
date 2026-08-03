@@ -1,4 +1,18 @@
-# REMOTE_MANAGEMENT_SHELL_SPEC.md -- BraiNIX
+> # 📋 UNSCHEDULED — accurate design, not on the roadmap
+>
+> **Reviewed 2026-08-02.** This spec describes a real design that **nothing is currently being built
+> against**. It is not scheduled in [`ROADMAP.md`](ROADMAP.md) and should not be treated as committed work.
+>
+> It also overlaps the inbound serving path, which *is* being built: see
+> [`architecture/BSP-v1-serving-protocol.md`](architecture/BSP-v1-serving-protocol.md). Where the two
+> disagree about how remote clients reach the system, **BSP v1 is authoritative** — it is the protocol the
+> product ships.
+>
+> Note also that the SSH server this spec assumes is **scheduled for deletion** at P2-T6.
+
+---
+
+# REMOTE_MANAGEMENT_SHELL_SPEC.md -- BraiNIX *(unscheduled)*
 
 ## Purpose
 

@@ -9,8 +9,13 @@ The memory model is designed around three core principles:
 1. **Every page has exactly one type at any time.** There is no ambiguous ownership, no shared-state page, and no page that exists in two categories simultaneously.
 2. **The kernel is not mapped in user page tables.** Kernel Page Table Isolation (KPTI) ensures that userspace cannot address kernel memory, even speculatively.
 3. **No page is simultaneously writable and executable.** W^X is enforced globally with no exceptions.
+4. **Page size is a platform parameter, never a constant.** *(Added 2026-08-02.)* Apple Silicon — the primary platform — uses **16 KiB** base pages; x86-64 uses 4 KiB. Every size, alignment, and bound in this document is expressed in **pages**, and any byte-valued constant derives from the HAL's page size. See §12.
 
-These three properties -- typed ownership, KPTI, and W^X -- form the foundation of BraiNIX's memory security. They are structural guarantees, not optional hardening flags.
+These four properties -- typed ownership, KPTI, W^X, and page-size parametricity -- form the foundation of BraiNIX's memory security. They are structural guarantees, not optional hardening flags.
+
+> **Reconciled 2026-08-02.** Sections 12 and 13 were added for the Apple-primary platform decision and the
+> serving pivot. Byte-valued constants elsewhere in this document (`4096`, "one page") are **x86-64
+> illustrations**, not portable values — read them as "one page" and see §12.
 
 ---
 
@@ -409,7 +414,88 @@ The total kernel memory footprint is fixed at boot. The kernel cannot allocate m
 
 ---
 
-## 12. Security Invariants
+## 12. Page Size Parametricity
+
+*(Added 2026-08-02 with the Apple-primary platform decision. Enforces `INV-MEM-009`.)*
+
+### The two page sizes
+
+| Platform | Base page | Role |
+|---|---|---|
+| Apple Silicon (`T8112`) | **16 KiB** | **Primary** — the serving deployment |
+| x86-64 | 4 KiB | Secondary — development, CI, attested deployments |
+| QEMU `virt` aarch64 | 4 KiB | Bring-up harness only — note this differs from the real primary target |
+
+The last row is the trap. The aarch64 bring-up harness runs at 4 KiB, so aarch64 code can pass every test
+in QEMU and still be wrong on the machine it is written for. **Both page sizes must be exercised.**
+
+### Rules
+
+1. **No bare page-size literal outside `arch/` and `hal/`.** Page size is exposed once, from `hal/mmu.rs`.
+   A `4096` in architecture-neutral memory code is a defect, enforced by grep-gate.
+2. **Sizes and bounds are expressed in pages.** Pool capacities, region sizes, and stack sizes are page
+   counts multiplied by the HAL constant — never byte constants that happen to be page multiples on one
+   platform.
+3. **Alignment derives from the HAL constant.** Region base addresses, guard-page placement, and
+   direct-map offsets align to the platform page size, not to a hardcoded boundary.
+4. **W^X granularity follows page size.** A 16 KiB granule makes permission boundaries coarser. Code and
+   data that must differ in permissions must be separated at page granularity *on the largest supported
+   page size*, or the separation silently fails on the primary platform.
+
+### Why this is a security rule, not a portability rule
+
+A hardcoded 4 KiB does not produce a clean failure on a 16 KiB platform. It produces **misaligned reserved
+regions** (weights and KV partitions overlapping their intended bounds), **misplaced guard pages** (a
+guard that no longer sits between the stack and its neighbor), and **coarser-than-intended W^X boundaries**
+(a page carrying both code and writable data because the split was computed at the wrong granularity).
+Each of those is an isolation failure wearing the costume of an arithmetic bug.
+
+---
+
+## 13. Reserved Regions: Weights and KV Cache
+
+*(Added 2026-08-02 with the serving pivot. Enforces `INV-MEM` and `INV-SERVE-001`, `INV-SERVE-004`.)*
+
+The served model needs a large amount of memory. The north-star's answer is explicit: **"give all
+resources to the LLM" is satisfied by large fixed reserved regions, never by adding an allocator.** The no
+-dynamic-kernel-heap rule (§11) is not relaxed for the inference engine — it is the reason the inference
+engine gets regions instead of a heap.
+
+### WEIGHTS_REGION
+
+- Sized at **build time**, in pages, from the model the image is built to serve.
+- Populated once by the BXW1 loader, which streams and digests as it writes.
+- **Sealed read-only after load.** After sealing there is no code path that can make a weights page
+  writable again. This is the "weights-never-writable-post-seal" Kani obligation.
+- Never executable. Weights are data; W^X applies with no exception.
+
+### KV_REGION
+
+- Partitioned into **per-session slices**, disjoint by construction rather than by bookkeeping.
+- A session's slice is reachable only through that session's capability. No client can name another
+  client's slice — the isolation is structural, not checked at access time (`INV-SERVE-001`).
+- **Zeroized on session teardown**, before the partition can be reused (`INV-SERVE-004`, §6). Residue
+  visible to the next occupant would be a cross-tenant leak that never technically violated the naming
+  rule.
+- Fixed partition count. Session admission fails closed when partitions are exhausted; it never grows the
+  region.
+
+### The availability trade, stated
+
+Fixed regions convert a client-driven **memory-exhaustion** attack into **capacity exhaustion**. That is
+the correct security trade — a denied connection is better than a corrupted allocator — but it is a real
+availability cost, and it is why per-client admission limits in `servd` are a security control rather than
+tuning (`INV-SERVE-003`).
+
+### Non-overlap
+
+`WEIGHTS_REGION`, each `KV_REGION` partition, kernel pools, and the direct map must be provably
+non-overlapping. This is a Kani obligation (P3-T2), and it is the obligation most sensitive to §12: the
+proof must hold at both page sizes.
+
+---
+
+## 14. Security Invariants
 
 The memory model must uphold the following invariants from `docs/security/SECURITY_INVARIANTS.md`:
 

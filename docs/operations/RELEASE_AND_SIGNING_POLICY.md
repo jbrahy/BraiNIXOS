@@ -8,6 +8,55 @@ This is an authoritative specification. If code or configuration diverges from t
 
 ---
 
+## 0. Per-platform delivery and what survives
+
+*(Added 2026-08-02 with the Apple-primary platform decision.)*
+
+**Our signing policy is unchanged on both platforms.** Reproducible build and Ed25519 release signing are
+properties of the **artifact**, not the platform, and they hold identically on Apple Silicon. What differs
+is how the artifact is delivered to the machine and what the machine's own boot chain does with it.
+
+| | x86-64 (secondary) | Apple Silicon (**primary**) |
+|---|---|---|
+| Artifact | GRUB2 ISO / kernel image | **Image4 (IMG4) payload** |
+| Delivery | Standard boot media | `kmutil configure-boot -c <payload> -v <volume>` |
+| Our signature | Ed25519, HSM-held key (§§1–4) | Ed25519, HSM-held key — **unchanged** |
+| Reproducible build | ✅ (§8) | ✅ **unchanged** |
+| Platform boot verification | UEFI Secure Boot | **iBoot2 vs. Secure-Enclave-held device-local policy** |
+| Predicted PCRs published | ✅ before ship | ❌ **nothing to predict** |
+| Monotonic-counter rollback protection (§7) | ✅ TPM NV counter | ❌ **no TPM counter available** |
+
+### Apple Silicon delivery flow
+
+1. The target volume is downgraded to **Permissive Security** with `bputil` from One True Recovery.
+   Requires local admin credentials and **physical presence**, once per machine.
+2. `kmutil configure-boot` installs the payload, wrapping it as an Image4 object under the machine's
+   **device-local** policy. The Secure Enclave holds the signing key for that policy.
+3. iBoot2 verifies the payload's digest against that local policy at **every** boot.
+
+**Two things this is not.** It is not our trust root — it is Apple's, and the key is per-machine, not our
+release key. And it is not attestation — it protects the payload at rest and proves nothing to any remote
+party. Release notes must describe it precisely and must not let it stand in for measured boot.
+
+### Rollback protection without a monotonic counter
+
+§7's TPM NV monotonic counter has no Apple Silicon equivalent. Rollback to a previously valid, signed
+BraiNIX payload therefore **cannot be prevented on the primary platform** by the mechanism this document
+specifies. Apple's local policy will happily boot any payload we validly installed.
+
+What remains: revoking a compromised release's signature and re-provisioning affected machines — an
+operational control requiring physical or administrative access to each unit, not a structural one. Treat
+this as a known limitation of the primary platform and state it in release notes rather than implying §7
+coverage. Tracked with the INV-BOOT/AS consequences in [`ATTESTATION_MODEL.md`](ATTESTATION_MODEL.md) §0.
+
+### Release-note requirement
+
+Every Apple Silicon release note must state plainly that the build provides **no remote attestation and no
+sealing**, and that deployments requiring either must use the x86-64 target (`INV-BOOT-AS-001`,
+`PROJECT_RULES.md` Rule 13.0 and Rule 4.5 — no marketing claims beyond proof scope).
+
+---
+
 ## 1. Signing Algorithm
 
 BraiNIX uses **Ed25519** exclusively for all binary signing operations.

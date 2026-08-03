@@ -1,4 +1,20 @@
-# BraiNIX — High-Assurance Microkernel for x86-64
+> # ⛔ SUPERSEDED — do not use as guidance
+>
+> **Superseded by [`../NORTH_STAR.md`](../NORTH_STAR.md) and [`../../README.md`](../../README.md) on
+> 2026-08-02.**
+>
+> This file was written 2026-04-14. Its title alone is now wrong twice over: BraiNIX is no longer
+> "for x86-64" (the primary platform is Apple Silicon as of 2026-08-02), and its purpose is no longer a
+> general high-assurance microkernel — it is to **serve LLM inference securely to remote network
+> clients** (pivot, 2026-07-07). It predates the INV-SERVE, INV-MODEL, INV-AUDIT, and INV-GPU
+> invariants entirely.
+>
+> Retained unedited as the historical record of the project's original framing.
+> See [`../DOCUMENTATION_MAP.md`](../DOCUMENTATION_MAP.md).
+
+---
+
+# BraiNIX — High-Assurance Microkernel for x86-64 *(historical — superseded)*
 
 ## Executive Summary
 

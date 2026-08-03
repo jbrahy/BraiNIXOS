@@ -1,6 +1,17 @@
-# PROJECT_RULES.md
+> # ⛔ SUPERSEDED — do not use as guidance
+>
+> **Superseded by [`../PROJECT_RULES.md`](../PROJECT_RULES.md) on 2026-08-02.**
+>
+> This is a near-duplicate copy of the project rules — note that its own first heading says
+> `PROJECT_RULES.md`. Two copies of the mandatory rules is precisely the drift this reconciliation
+> exists to remove. The root [`PROJECT_RULES.md`](../PROJECT_RULES.md) is authoritative and current;
+> this copy is from 2026-04-14 and predates both the serving pivot and the Apple-primary decision.
+>
+> Retained unedited as a historical record. See [`DOCUMENTATION_MAP.md`](DOCUMENTATION_MAP.md).
 
-# BraiNIX Project Rules
+---
+
+# BraiNIX Project Rules *(historical — superseded)*
 ## Non-Negotiable Rules for an Ultra-Secure x86-64 Microkernel System
 
 Version: 1.0  

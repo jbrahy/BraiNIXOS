@@ -1,6 +1,20 @@
-# GOOGLE_AUTH_OTP_AND_CONSOLE_USB_LOGIN.md
+> # 📋 UNSCHEDULED — prototype design, not on the roadmap
+>
+> **Reviewed 2026-08-02.** A prototype reference configuration. Nothing is being built against it and it is
+> not scheduled in [`../ROADMAP.md`](../ROADMAP.md).
+>
+> Two points of tension with the current design, noted so this file is not mistaken for a plan:
+>
+> - It describes an **operator login** path. The serving product authenticates *remote clients* to
+>   *sessions*, not humans to a root account — see
+>   [`../architecture/BSP-v1-serving-protocol.md`](../architecture/BSP-v1-serving-protocol.md).
+> - On the **primary platform** the early console is an unauthenticated debug UART that grants whoever
+>   holds the cable physical-access authority, and it must be **absent in production**
+>   ([`../operations/PLATFORM_SUPPORT_MATRIX.md`](../operations/PLATFORM_SUPPORT_MATRIX.md) §2.5).
 
-# BraiNIX Root OTP and Console USB Login Configuration
+---
+
+# BraiNIX Root OTP and Console USB Login Configuration *(unscheduled prototype)*
 ## Prototype Reference Configuration and Production Rewrite Requirements
 
 Version: 1.0  

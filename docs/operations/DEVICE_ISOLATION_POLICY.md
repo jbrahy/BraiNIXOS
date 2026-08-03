@@ -8,6 +8,55 @@ This is an authoritative specification. If code or configuration diverges from t
 
 ---
 
+## 0. Two IOMMUs, two shapes
+
+*(Added 2026-08-02 with the Apple-primary platform decision.)*
+
+The principles in this document are platform-neutral. The **IOMMU requirement** in §4 is not: the primary
+platform's IOMMU differs from VT-d in a way that changes what "configure the IOMMU" means operationally.
+
+| | x86-64 | Apple Silicon (**primary**) |
+|---|---|---|
+| IOMMU | VT-d / AMD-Vi | **DART** |
+| Topology | A small number of translation units covering the PCIe hierarchy | **Dozens of per-device-cluster instances** scattered across the SoC |
+| Discovery | ACPI DMAR table | **Apple Device Tree** (hostile input — `INV-PARSE-003`) |
+| Variants | Stable, documented | **Incompatible PTE formats and register layouts across SoC generations**; reverse-engineered only |
+| Failure mode of an unconfigured unit | Narrow, usually visible | **Silent full DMA escape for that device** |
+
+### The three rules this forces
+
+**1. Every discovered instance defaults to deny-all** (`INV-DEV-004`). There is no window between
+discovery and configuration in which a device may issue a transaction. With one big IOMMU, "configure the
+IOMMU" is a single step that is obviously either done or not. With dozens of instances, forgetting one is
+easy and silent — deny-all-by-default converts "we missed one" from a breach into a device that does not
+work.
+
+**2. An unrecognized variant fails closed** (`INV-DEV-005`). An unknown ADT compatible string, or a PTE
+layout we have not implemented, halts bring-up for that device. There is no permissive fallback and no
+best-guess layout. A guessed PTE layout that happens not to fault is indistinguishable from a correct one
+until a device DMAs somewhere it should not — guessing at IOMMU configuration is guessing at isolation.
+
+**3. A driver cannot widen its own window** (`INV-DEV-006`). The `hal/iommu.rs` trait exposes no operation
+by which a window's holder can enlarge, relocate, or add to it. Window changes are made by the
+capability-bounded authority that granted the window. This is a Kani obligation, and it applies **now** —
+every DMA-capable driver on the primary platform (NVMe via ANS2, PCIe, Ethernet) depends on it long before
+any GPU work begins.
+
+### Trait shape
+
+The HAL IOMMU trait must be **instance-oriented**: *for each protection domain, map/unmap/flush on a
+specific IOMMU instance*. A global address-space registry — the natural shape for VT-d — cannot express
+DART honestly. Where the trait fits VT-d comfortably but forces DART into an awkward shape, the trait is
+wrong. Locked-DART semantics (instances firmware has already configured and locked) must be represented
+explicitly rather than papered over.
+
+### Note on INV-GPU
+
+Apple's AGX GPU is out of scope, so INV-GPU remains deferred and applies to x86-64 only. **DMA confinement
+itself is not deferred** — it is load-bearing on the primary platform from AS-3 onward.
+
+---
+
 ## 1. Principle
 
 **One server process per hardware device.** No device server manages multiple unrelated devices. Each device server runs in its own address space with its own page tables, its own CSpace, and its own scheduling budget.

@@ -1,11 +1,15 @@
-# PROJECT_RULES.md
-
 # BraiNIX Project Rules
-## Non-Negotiable Rules for an Ultra-Secure x86-64 Microkernel System
+## Non-Negotiable Rules for a Secure Multi-Architecture LLM Inference Serving System
 
-Version: 1.0  
-Status: Mandatory  
-Applies To: Architecture, kernel code, userspace services, build pipeline, CI, deployment, documentation, verification, and operational governance
+Version: 2.0
+Status: Mandatory
+Reconciled: 2026-08-02 (serving pivot + Apple-primary platform decision)
+Applies To: Architecture, kernel code, userspace services, platform backends, build pipeline, CI, deployment, documentation, verification, and operational governance
+
+**Authority.** These rules are subordinate to [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md), which is the
+project contract, and to [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md). Where a rule here conflicts with
+either, they win. Invariants and named exceptions are stated in the north-star and nowhere else. See
+[`docs/DOCUMENTATION_MAP.md`](docs/DOCUMENTATION_MAP.md).
 
 ---
 
@@ -13,9 +17,19 @@ Applies To: Architecture, kernel code, userspace services, build pipeline, CI, d
 
 This document defines the mandatory rules that govern the BraiNIX project.
 
-These rules exist to maximize practical security for a high-assurance x86-64 microkernel operating system written in Rust. They are not suggestions, preferences, or aspirational guidelines. They are project-level constraints that must be followed unless a rule is explicitly replaced by a stricter one.
+These rules exist to maximize practical security for a high-assurance microkernel written in Rust whose
+purpose is to **serve LLM inference to remote network clients**. They are not suggestions, preferences, or
+aspirational guidelines. They are project-level constraints that must be followed unless a rule is
+explicitly replaced by a stricter one.
 
-No engineering convenience, compatibility target, schedule pressure, or short-term implementation shortcut may override these rules without an explicit documented security exception approved at the project-governance level.
+No engineering convenience, compatibility target, schedule pressure, throughput goal, or short-term
+implementation shortcut may override these rules without an explicit documented security exception
+approved at the project-governance level.
+
+**Two decisions of 2026-08-02 shape everything below.** The primary platform is **Apple Silicon** (Mac
+mini M2, `Mac14,3`, SoC `T8112`), with x86-64 retained as the secondary and **attested** platform; and
+**INV-BOOT/AS** is signed off, meaning remote attestation and sealing are permanently unavailable on the
+platform the product ships on. Rules 6.1, 12.0, 13.0, and §24–§26 exist because of these.
 
 ---
 
@@ -29,8 +43,9 @@ The following words have strict meaning in this document:
 - **May** means allowed if it does not violate a stronger rule.
 - **Trusted Computing Base (TCB)** means all components that must behave correctly for a stated security guarantee to hold.
 - **Development mode** means QEMU, containerized, emulated, CI, or otherwise non-production execution.
-- **Production mode** means supported bare-metal x86-64 execution with the required hardware and verified boot assumptions.
+- **Production mode** means supported bare-metal execution on a supported platform with the required hardware and verified boot assumptions. Two production platforms exist, at **different assurance levels**: Apple Silicon (primary, **not attested** — INV-BOOT/AS) and x86-64 (secondary, **attested**). "Production" alone is therefore no longer sufficient to describe a deployment's assurance; the platform must be named.
 - **Security domain** means a unit of isolation whose compromise must not automatically compromise another domain.
+- **Confined tenant** means a component granted compute and memory but no authority — specifically the served model, which is central to the product and central to nothing in the TCB's authority.
 
 If any implementation, milestone, or subsystem conflicts with these rules, the rules win.
 
@@ -116,10 +131,41 @@ Unstated scope boundaries are prohibited.
 
 ## 6. Architecture Rules
 
-### Rule 6.1 — x86-64 Only
-The secure baseline targets x86-64 only.
+### Rule 6.1 — Two Supported Architectures, One HAL
+*(Replaced 2026-08-02. Formerly "x86-64 Only".)*
 
-No 32-bit support, no legacy compatibility burden, and no architecture expansion may be added until the x86-64 secure baseline is complete and stable.
+BraiNIX supports exactly two architectures:
+
+| Platform | Role |
+|---|---|
+| **aarch64 / Apple Silicon** — Mac mini M2 (`Mac14,3`, `T8112`) | **Primary.** The serving deployment. CPU-only inference. **Not attested** (INV-BOOT/AS). |
+| **x86-64** | Secondary. Development, CI, and the **attested** deployment target — the only platform where INV-BOOT holds in full. |
+
+No 32-bit support and no legacy compatibility burden. A third architecture may not be added without owner
+sign-off.
+
+Both are **compile-time backends behind one hardware abstraction layer** (`hal/`), never runtime dispatch.
+Architecture-neutral code — the serving protocol, the request parser, the tokenizer, the tensor kernels,
+the transformer — must contain no platform assumption. In particular, **page size is a HAL parameter**:
+Apple Silicon uses 16 KiB base pages and x86-64 uses 4 KiB, and a hardcoded page size in neutral code is a
+security defect (INV-MEM-009), not a portability nit.
+
+`arch/` is **single-owner** during HAL extraction. Two concurrent refactors there are a guaranteed merge
+disaster and are prohibited.
+
+### Rule 6.1a — Reference-Only External Work
+Reverse-engineering documentation produced by third parties — principally the Asahi Linux project, which
+is the only public source for Apple Device Tree, AIC, DART, RTKit, and ANS2 details — may be **read and
+reimplemented from understanding**. No code may be copied, adapted, or vendored from those projects,
+**regardless of their license** (m1n1 is MIT; the Asahi kernel is GPL-2.0; the no-vendoring rule forbids
+both).
+
+Where only source documents a behavior, one person writes a **specification** — register map, sequence
+description — and a different implementation session codes from that specification. Running m1n1 as a lab
+instrument on a development machine is permitted: that is using a tool, not incorporating code.
+
+This is a real, accepted cost. It means re-deriving results that specialists spent years producing, and it
+re-imposes that cost on every future SoC generation.
 
 ### Rule 6.2 — Microkernel Discipline
 The kernel must only include:
@@ -321,7 +367,34 @@ Where simultaneous multithreading creates cross-domain leakage risk, sibling hyp
 
 ---
 
-## 12. x86-64 Hardware Security Rules
+## 12. Hardware Security Rules
+
+### Rule 12.0 — Both Platforms Must Satisfy the Equivalent Property
+*(Added 2026-08-02.)*
+
+The hardware-security rules below were written for x86-64. **Each states an obligation, not a mechanism.**
+The primary platform must discharge every one of them; only the mechanism differs. A property present on
+the secondary platform and absent on the primary is a **named exception requiring owner sign-off**, never
+a silent asymmetry — the primary platform must not be the weaker one by accident.
+
+| Obligation | x86-64 | aarch64 / Apple |
+|---|---|---|
+| Kernel cannot execute user code (12.3) | SMEP | PXN |
+| Kernel cannot implicitly touch user memory (12.4) | SMAP | PAN |
+| Control-flow integrity (12.5) | CET / IBT / ENDBR64 | PAC / BTI |
+| No-execute mappings (12.2) | NX | XN / UXN |
+| Hardware entropy (13.5) | RDRAND | RNDR — **with an explicit failure path**; `RNDR` may legitimately fail and must never fall back silently |
+| IOMMU required in production (12.7) | VT-d | **DART** — dozens of per-device instances, **each deny-all by default**; unknown variant fails closed |
+| Interrupt controller | APIC | **AIC** — packed event word, FIQ timer path outside the controller, implementation-defined IPIs |
+
+Two Apple-specific obligations with no x86-64 analogue:
+
+- **Assume nothing at firmware handoff.** MMU, cache, and translation state at the iBoot handoff are
+  undocumented and have changed across releases. Re-establish our own page tables, vectors, and stack
+  immediately; inherit nothing.
+- **Firmware-supplied structures are hostile input.** The Apple Device Tree and boot-args are parsed
+  earlier and with more authority than any network byte, and receive the same fail-closed, bounds-checked,
+  zero-allocation, fuzzed, Kani-checked treatment (Rule 9.5, INV-PARSE-003).
 
 ### Rule 12.1 — Long Mode Only
 The secure baseline assumes 64-bit long mode only.
@@ -358,6 +431,28 @@ If the system claims mitigation for specific speculative-execution or side-chann
 ---
 
 ## 13. Boot, Attestation, and Update Rules
+
+### Rule 13.0 — No Attestation Claims on Apple Silicon
+*(Added 2026-08-02. Enforces INV-BOOT/AS.)*
+
+Apple Silicon has no TPM and none can be added; the Secure Enclave exposes no PCR-style
+extend/quote/seal interface to third-party software. On the **primary** platform, therefore:
+
+**Permitted claims.** Reproducible build. Ed25519 release signature. Payload-at-rest integrity, described
+accurately as *"iBoot2 verifies the Image4 payload against a Secure-Enclave-held, device-local policy"* —
+which is Apple's trust root, keyed to one machine, attesting nothing to anyone.
+
+**Prohibited claims — in code, protocol fields, logs, release notes, marketing, and documentation.**
+Remote attestation. Sealing. Hardware-anchored measurement. Any phrasing implying a remote party can
+verify the running boot state.
+
+The software measurement log is for operational debugging and accidental-corruption detection **only**. It
+is self-reported: a kernel compromised early can produce any log it likes. It must never be exported as an
+attestation or described as a measurement.
+
+The BSP serving protocol must not define an attestation field the primary platform cannot populate
+honestly. Deployments requiring attestation run x86-64. This interacts directly with Rule 4.5 — no
+marketing claims beyond proof scope — and is the single most likely place for that rule to be violated.
 
 ### Rule 13.1 — Measured Boot Claims Are Production-Only
 Virtual TPM or emulated attestation in development mode is for testing flows, not for establishing production trust.
@@ -554,6 +649,8 @@ If the whole project must be summarized in the fewest possible rules, use these:
 8. Fail closed on ambiguity.
 9. Verify every important invariant.
 10. Never let convenience outrank security.
+11. Treat the model as a tenant, never an authority — and every byte from a client, a disk, or firmware as hostile.
+12. Never claim more assurance than the platform can deliver.
 
 ---
 
@@ -603,3 +700,96 @@ Every function that directly enforces a security invariant must carry a doc comm
 2. Names the test that verifies correct behavior
 
 This makes the connection between code, invariants, and tests traceable by inspection.
+
+---
+
+## 24. Serving Rules
+
+*(Added 2026-08-02. BraiNIX accepts connections from hostile remote clients — a posture reversal these
+rules exist to govern. Enforces INV-SERVE.)*
+
+### Rule 24.1 — One Inbound Path
+There is exactly one authenticated, capability-gated inbound serving path. Additional listening sockets,
+debug ports, or management channels may not be added to a production configuration. The early-boot serial
+console on Apple Silicon is a development interface: it is unauthenticated, it grants whoever holds the
+cable physical-access authority, and it must not be present in production.
+
+### Rule 24.2 — Client Sessions Are Mutually Unnameable
+A client's capability set is frozen at session grant and cannot name another session's state, KV
+partition, or weights view. Cross-naming is unrepresentable, not merely rejected — an unrepresentable
+reference cannot be leaked by a bug in the rejection path.
+
+### Rule 24.3 — No Allocation From Client-Supplied Sizes
+A client-supplied length, count, or offset may be used to *validate* against a fixed bound. It may never
+size an allocation, extend a pool, or select a growth factor. This rule is what converts remote memory
+exhaustion into bounded capacity exhaustion.
+
+### Rule 24.4 — Admission Limits Are Load-Bearing
+`servd` must enforce per-client limits on concurrent sessions and in-flight requests. Fixed pools make
+fail-closed correct for security but impose a real availability cost: without per-client limits, one
+client consumes the pool and denies every other. Treat admission limits as a security control, not tuning.
+
+### Rule 24.5 — Session Teardown Is Complete
+Ending a session releases its capabilities, zeroizes its KV partition, and removes its session-table row.
+No residue may be observable by the next occupant.
+
+### Rule 24.6 — The Legacy SSH Server Is Scheduled for Deletion
+`boot/ssh_bridge.rs` holds `static mut` session state on a single-core cooperative path. It is exactly
+what this threat model forbids at scale and is the weakest point in the tree. It is replaced at P2-T6 and
+must not be extended, hardened in place, or built upon in the meantime.
+
+---
+
+## 25. Model Confinement Rules
+
+*(Added 2026-08-02. Enforces INV-MODEL.)*
+
+### Rule 25.1 — The Model Holds Exactly Three Capabilities
+`inferd` holds `{Model, its serving endpoint, its own KV slice}`. Not spawn, not kernel mutation, not
+network, not another session. The manifest is frozen at launch, and any diff adding a capability is a
+security review, not a routine change.
+
+### Rule 25.2 — Confinement Is Structural, Never Behavioral
+The model must be **unable to name** the capabilities it lacks. No confinement may rest on the model's
+judgment, alignment, training, or resistance to injection. Confinement that depends on the model behaving
+well is not confinement.
+
+### Rule 25.3 — Model Output Is Hostile Input Everywhere It Lands
+Emitted tokens are untrusted bytes for every consumer — operator console, log, audit record, response
+framing. No consumer may interpret in-band control sequences from model output.
+
+### Rule 25.4 — Weights Are Verified Before Use, and the Anchor Is Stated
+The loader checks a per-tensor digest before any weight byte is used and fails closed on malformed,
+truncated, or oversized input. On x86-64 the digest is anchored to a hardware quote; **on Apple Silicon it
+is anchored only to the software measurement log**, so it detects corruption but not an attacker who
+already controls the kernel. Documentation must not blur the two.
+
+### Rule 25.5 — Confinement Is Tested Adversarially
+A prompt-injection corpus runs as a CI regression bar. The passing condition is **zero escalations under
+any input** — not a rate, not a percentage.
+
+---
+
+## 26. Rule Precedence and Reconciliation
+
+*(Added 2026-08-02.)*
+
+### Rule 26.1 — One Statement Per Invariant
+Invariants and named exceptions are stated in [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md) and nowhere else.
+This document, `docs/security/SECURITY_INVARIANTS.md`, and every architecture spec may decompose or
+restate them — never introduce, reword, or qualify one. A qualification existing only in a subordinate
+document is a bug to be reported.
+
+### Rule 26.2 — Three Exceptions Are In Force
+**INV-BOOT/AS** and **TCB-AS** (2026-08-02) and **TCB-EXCEPTION-001** (in-kernel SQL, 2026-06-27). There
+are no others. Any document, comment, or commit message claiming an exemption not on this list is drift.
+
+### Rule 26.3 — Roadmap and Status Live In-Tree
+Phasing and status are maintained in [`docs/ROADMAP.md`](docs/ROADMAP.md). Planning files outside the
+repository are not authoritative and must not be relied on for scope decisions.
+
+### Rule 26.4 — Archived Documents Are Not Edited for Consistency
+Historical records — `.planning/planning-keep/**`, `docs/superpowers/**`, and documents marked SUPERSEDED
+— describe what was true when written. They carry a status banner and are otherwise left as-written.
+Rewriting them to match current reality destroys the record. See
+[`docs/DOCUMENTATION_MAP.md`](docs/DOCUMENTATION_MAP.md).
