@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "src/adt",
+    "src/tensor",
     "src/kernel",
     "src/bootloader",
     "src/bootloader-verify",
