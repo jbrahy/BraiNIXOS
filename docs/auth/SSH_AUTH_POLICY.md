@@ -8,7 +8,7 @@
 > [`../../PROJECT_RULES.md`](../../PROJECT_RULES.md) Rule 24.6 it **must not be extended, hardened in
 > place, or built upon**.
 >
-> Current inbound design: [`../architecture/BSP-v1-serving-protocol.md`](../architecture/BSP-v1-serving-protocol.md).
+> Current inbound design: [`../architecture/BSP-v2-serving-protocol.md`](../architecture/BSP-v2-serving-protocol.md).
 > Status: [`../ROADMAP.md`](../ROADMAP.md).
 
 ---

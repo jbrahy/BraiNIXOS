@@ -120,7 +120,7 @@ A remote attester reading PCR[5]:
 - **All-zero:** no userspace-ELF-load failure occurred during this boot.
 - **Non-zero:** the system attempted boot and a load failure occurred. The exact tuple cannot be recovered from the PCR alone; the attester correlates the value against a precomputed table of `(ProcessType, ElfLoadError, module_hash)` failure records to identify the specific cause.
 
-Claimed by the spec at `docs/superpowers/specs/2026-05-31-userspace-elf-loading-design.md` (Phase 16-A) and implemented in `src/kernel/src/process/elf_load_failure.rs`.
+Claimed by the spec at `docs/superpowers/specs/2026-05-31-userspace-elf-loading-design.md` (Phase 16-A) — **local only**, that path is git-excluded and is not in a fresh clone — and implemented in `src/kernel/src/process/elf_load_failure.rs`.
 
 ---
 

@@ -110,7 +110,7 @@ platform and is recorded as the named exception TCB-AS.
 
 Required before any hardware bring-up (AS-1):
 
-- The Mac mini M2 in **Permissive Security**.
+- The Mac mini M2 Pro in **Permissive Security**.
 - A **debug UART cable** for the s5l console — the earliest and simplest console on the SoC.
 - **m1n1** installed as a lab instrument (register exploration, payload loading, hypervisor tracing).
   Running m1n1 as a tool is permitted; incorporating its code is not, regardless of license
@@ -259,7 +259,7 @@ When KVM is unavailable (CI), QEMU runs in full emulation (TCG) with no special 
 
 | Property | Development | Production (x86-64) | Production (Apple Silicon) |
 |----------|------------|---------------------|----------------------------|
-| **Execution environment** | QEMU (q35 / `virt`, TCG or KVM) | Bare-metal x86-64 with UEFI Secure Boot | Mac mini M2 in Permissive Security, Image4 payload via `kmutil` |
+| **Execution environment** | QEMU (q35 / `virt`, TCG or KVM) | Bare-metal x86-64 with UEFI Secure Boot | Mac mini M2 Pro in Permissive Security, Image4 payload via `kmutil` |
 | **Root of trust** | None (emulated) | UEFI Secure Boot + hardware TPM 2.0 | **Apple's** SecureROM/iBoot + device-local SEP policy |
 | **Measurement** | swtpm (software emulation) | Hardware TPM 2.0 PCRs | **None** — software-only log, self-reported |
 | **Remote attestation** | Flow rehearsal only | Trust-anchor-backed quote | **None** (INV-BOOT/AS) |

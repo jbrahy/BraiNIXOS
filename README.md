@@ -52,7 +52,7 @@ Each invariant is named, documented, and individually checkable. *Asserted is no
 | **INV-SERVE** | Inbound clients are mutually isolated — no client can name another's session, weights view, or KV state. The network request decoder is a fail-closed, zero-allocation hostile-input parser. |
 | **INV-MODEL** | The served model is a confined tenant, never a trusted authority. Its weights are integrity-checked before use; it cannot escalate, read another client's session, or reach the network outside the serving channel. The confinement holds under adversarial prompting. |
 | **INV-AUDIT**| The observe-only auditor watches the serving stack and reports — nothing else. It holds no spawn, kernel-mutation, or network capability, so its compromise costs visibility, never privilege. |
-| **INV-GPU** *(deferred)* | Accelerator DMA is confined by the IOMMU; the GPU driver is an ordinary capability-bounded server with no ambient device authority. Inference is CPU-first; GPU is a later hardware milestone. |
+| **INV-GPU** *(active on the primary platform)* | Accelerator DMA is confined by the IOMMU; the GPU driver is an ordinary capability-bounded server with no ambient device authority, and cannot widen its own DMA window. It is the control that makes running Apple's opaque GPU firmware survivable, and must be proven **before** that firmware is ever loaded. Inference is still CPU-first by ordering. ⚠️ **On x86-64 it remains a stated target.** |
 
 See [`docs/security/`](docs/security/) and [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the full
 contract, attacker model, and verification posture.
@@ -62,7 +62,7 @@ contract, attacker model, and verification posture.
 - **Microkernel core** — the smallest possible ring-0 surface; drivers, filesystem, network stack, the serving front end, and the inference engine live in userspace.
 - **Capability-mediated everything** — no ambient authority; every resource is an unforgeable, typed, bounded, revocable token.
 - **KPTI & W^X, structurally** — the kernel is not mapped in user page tables; no page is ever writable *and* executable.
-- **Secure serving path** — an authenticated, capability-gated inbound protocol (in-tree Ed25519 / X25519 / ChaCha20-Poly1305) with mutually isolated per-client sessions.
+- **Secure serving path** — an authenticated, capability-gated inbound protocol (pre-shared client keys, HKDF-SHA256 key schedule, ChaCha20-Poly1305 records) with mutually isolated per-client sessions.
 - **In-tree inference engine** — a `no_std` transformer runtime; the served model runs as a confined tenant with weights in fixed reserved regions.
 - **Decomposed network stack** — link, IP, and transport run as isolated servers chained only by synchronous IPC.
 - **Multi-arch by design** — a hardware abstraction layer with **Apple Silicon (aarch64)** and **x86-64** as compile-time backends.
@@ -108,7 +108,7 @@ Early, actively developed. BraiNIX pivoted from an internal-only hardened microk
 
 **Designed, not yet implemented:**
 - 📐 Multi-arch HAL — trait design landed ([`HAL.md`](docs/architecture/HAL.md)); **no backend extracted yet**. This gates all Apple Silicon work.
-- 📐 BSP v1 serving protocol — [spec landed](docs/architecture/BSP-v1-serving-protocol.md); server not built.
+- 📐 BSP v2 serving protocol — [spec landed](docs/architecture/BSP-v2-serving-protocol.md); server not built.
 
 **Not started:**
 - ⬜ Apple Silicon platform (ADT parser, boot stub, AIC, DART, RTKit/ANS2, PCIe, Ethernet).
@@ -122,7 +122,7 @@ Early, actively developed. BraiNIX pivoted from an internal-only hardened microk
   `rust-src`, `rustfmt`, `clippy`, and `llvm-tools-preview` components.
 - Bare-metal target `x86_64-unknown-none` today. `aarch64-unknown-none` is added by the HAL extraction; the
   Apple Silicon boot stub needs a custom in-tree target spec beyond that.
-- For Apple Silicon bring-up (not yet started): a Mac mini M2 in Permissive Security, a debug UART cable,
+- For Apple Silicon bring-up (not yet started): a Mac mini M2 Pro in Permissive Security, a debug UART cable,
   and a macOS stub install that must remain on disk. Provisioning requires physical presence.
 - For the live boot: Docker (the dev container ships QEMU, GRUB, `xorriso`, and `swtpm`).
 

@@ -27,9 +27,9 @@ implementation shortcut may override these rules without an explicit documented 
 approved at the project-governance level.
 
 **Two decisions of 2026-08-02 shape everything below.** The primary platform is **Apple Silicon** (Mac
-mini M2, `Mac14,12`, SoC `T6020`), with x86-64 retained as the secondary and **attested** platform; and
+mini M2 Pro, `Mac14,12`, SoC `T6020`), with x86-64 retained as the secondary and **attested** platform; and
 **INV-BOOT/AS** is signed off, meaning remote attestation and sealing are permanently unavailable on the
-platform the product ships on. Rules 6.1, 12.0, 13.0, and §24–§26 exist because of these.
+primary platform. Rules 6.1, 12.0, 13.0, and §24–§26 exist because of these.
 
 ---
 
@@ -780,14 +780,19 @@ This document, `docs/security/SECURITY_INVARIANTS.md`, and every architecture sp
 restate them — never introduce, reword, or qualify one. A qualification existing only in a subordinate
 document is a bug to be reported.
 
-### Rule 26.2 — Three Exceptions In Force, One Pending
-**In force:** **INV-BOOT/AS** and **TCB-AS** (2026-08-02) and **TCB-EXCEPTION-001** (in-kernel SQL,
-2026-06-27).
+### Rule 26.2 — Five Exceptions In Force
+**In force:** **INV-BOOT/AS** and **TCB-AS** (2026-08-02); the **Ed25519 release-signature verification**
+crypto exception (2026-08-02 — that stack stays vendored, verify-only, permanently); **TCB-AS/GPU**
+(2026-08-02, **conditionally signed** — see below); and **TCB-EXCEPTION-001** (in-kernel SQL, 2026-06-27).
 
-**Pending, not signed: TCB-AS/GPU** — running Apple's AGX requires loading opaque, DMA-capable GPU
-firmware that runs concurrently with the kernel for the life of the system. **No build ships with the GPU
-enabled until this is signed**, and INV-GPU (DART confinement, no self-widening windows) must be enforced
-and proven *before* that firmware is first loaded.
+**Conditionally signed: TCB-AS/GPU** — running Apple's AGX requires loading opaque, DMA-capable GPU
+firmware that runs concurrently with the kernel for the life of the system. The exception is in force now,
+so AGX design and implementation work may proceed. It is conditional: **five preconditions must all be
+green before that firmware is ever loaded** — they are enumerated in
+[`docs/NORTH_STAR.md`](docs/NORTH_STAR.md) and are the acceptance criteria for AS-5-T0. **No build ships
+with the GPU enabled until all five are green**, INV-GPU (DART confinement, no self-widening windows) must
+be enforced and proven *before* that firmware is first loaded, and if any precondition proves
+unsatisfiable the exception **self-voids** and AS-5 stops.
 
 There are no others. Any document, comment, or commit message claiming an exemption not on this list is
 drift.

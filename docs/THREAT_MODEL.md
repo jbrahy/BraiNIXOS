@@ -21,9 +21,12 @@ Assumed capabilities of the adversary:
   escalation, to exfiltrate another client's session or the weights, or to make the model reach outside
   its serving channel.
 - Supplies arbitrary disk and filesystem content, including malformed model-weight blobs and session/log
-  data.
+  data — and, given physical possession of the machine, its storage, or a backup of it, **reads** arbitrary
+  disk content, including the credential store's backing blocks.
 - Fully controls any userspace process it compromises, including device-driver servers and the serving
   front end.
+- Records the full ciphertext of every session it can observe and retains it indefinitely, against the
+  possibility of obtaining a key later.
 - Observes timing and any published artifact (payload image, PCR predictions where published, source).
 - **On Apple Silicon:** may present a modified or hostile Apple Device Tree, boot-args structure, or any
   other firmware-supplied blob to the kernel, to the extent it can influence the boot environment.
@@ -31,7 +34,7 @@ Assumed capabilities of the adversary:
 Assumed not available to the adversary:
 
 - Defeating the CPU, IOMMU (VT-d or DART), or — on x86-64 — the TPM as hardware, or breaking Ed25519,
-  SHA-256, ChaCha20, X25519, or AES-256-GCM as primitives.
+  SHA-256, HKDF-SHA256, ChaCha20, or Poly1305 as primitives.
 - Possession of the release-signing private key.
 - Defeating Apple's SecureROM/iBoot signature chain, or extracting the device-local policy key from the
   Secure Enclave.
@@ -49,12 +52,35 @@ means each break is re-derived in-tree rather than pulled from upstream.
 
 In the TCB, where a single defect can break security:
 
-- The kernel and the boot stub.
+- The kernel and the boot stub, including the kernel's **credential store**, which holds every client and
+  admin pre-shared key.
 - The CPU and the IOMMU (VT-d on x86-64; the DART instances on Apple Silicon).
-- The Ed25519 release-signing key.
+- The Ed25519 release-signing key, and the **Ed25519 verification stack** that decides whether a signature
+  over a release is accepted: `ed25519-dalek`, `curve25519-dalek`, `fiat-crypto`, `subtle`, vendored
+  permanently and verify-only under the named crypto exception in NORTH_STAR.md.
+- The serving transport's cryptographic primitives — **SHA-256, HKDF, ChaCha20, Poly1305** — which are
+  specified to be in-tree; `sha2` and `chacha20` are still vendored until that reimplementation lands.
 - The in-tree model weights of the served model and the auditor.
 - **x86-64 only:** the TPM 2.0, and the UEFI Secure Boot and measured-boot chain.
 - **Apple Silicon only (TCB-AS, unavoidable):** **SecureROM**, **iBoot1**, **iBoot2**, and **sepOS**.
+
+Two of those entries are vendored code, and they are there for opposite reasons. The **Ed25519
+verification stack** is permanent and deliberate: it decides whether a signature over a release is
+accepted, so a defect in its point decompression or verification equation means **accepting a forged
+release**, and every guarantee INV-BOOT makes rests on a check that silently returned true. No secret
+passes through it — there is no key to leak and no side-channel argument for owning it — so the entire
+cost of the exception is correctness. That is also the reason it stays: `fiat-crypto`'s field arithmetic
+is machine-verified against a formal specification, and a hand-written replacement would trade a
+machine-checked property for an unchecked one. Owning the code would satisfy the dependency-closure rule
+and *lower* the assurance that rule exists to protect. The residual gap is stated rather than closed —
+Kani and Prusti cannot be produced for code we do not own, so its Full-tier row in
+`docs/security/SECURITY_INVARIANTS.md` §16 names those two artifacts as missing. `sha2` and `chacha20` are
+the opposite case: vendored today, specified to be reimplemented in-tree, and tracked debt until they are.
+
+The credential store is not a new member of the trusted set — it is in-kernel, so it was always inside
+"the kernel and the boot stub." It is named separately because that label is too coarse for the one
+component whose disclosure is retroactive: it holds the secret that authenticates every client, and its
+at-rest exposure is modelled below.
 
 ### TCB-AS: the components we cannot remove
 
@@ -81,12 +107,17 @@ channel. The model is central to the product and central to nothing in the TCB's
 Outside the TCB, assumed hostile:
 
 - Every remote client, every inbound byte, every prompt, and every token the served model emits.
-- Every userspace process, including the serving front end and any operator console.
+- Every userspace process, including the serving front end and any operator console. `servd` is outside
+  the TCB and stays there: it terminates the transport, holds session keys, and mints every per-session
+  capability, so a defect in it crosses all tenants at once — which is why
+  `docs/security/SECURITY_INVARIANTS.md` §16 puts it at **Full** proof tier. That is the alternative to
+  trusting it, not evidence that we do. Proof tier tracks blast radius, not TCB residency; §16 assigns
+  Full to parsers living inside Reduced-tier drivers for the same reason.
 - Every disk byte, including model-weight blobs and the session/log store.
 - **Every byte of firmware-supplied data on Apple Silicon** — the ADT, boot-args, and any structure iBoot
   hands us. Firmware we do not control gets exactly the treatment network bytes get.
-- Every device driver, including the GPU driver on the deferred hardware milestone. Drivers run as
-  ordinary servers with bounded device capabilities and no special standing.
+- Every device driver, including the GPU driver. Drivers run as ordinary servers with bounded device
+  capabilities and no special standing.
 
 ## Per-invariant verification and blast radius
 
@@ -111,12 +142,16 @@ confused-deputy patterns the synchronous model forecloses.
 - *x86-64 (attested):* published PCR predictions matched against attested values, plus a reproducible
   build any third party can reproduce bit for bit. If violated: an attacker can ship or boot an image
   that does not match its attestation; measured boot is what makes that detectable rather than silent.
+  Sealing is available here, and the credential store is specified to use it — not yet implemented; see
+  *The serving transport* below.
 - *Apple Silicon (primary, degraded):* reproducible build and Ed25519 release signature hold unchanged;
   payload-at-rest integrity is enforced by iBoot2 against the device-local policy. Measurement,
   attestation, and sealing are **structurally unavailable**. If violated: **there is no detection
   mechanism.** A remote client cannot distinguish a genuine BraiNIX boot from a compromised one, and a
   kernel compromised early can report an arbitrary software measurement log. This is the accepted cost of
-  the primary-platform decision and is the largest residual risk in the system.
+  the primary-platform decision and is the largest residual risk in the system. The absence of sealing has
+  a second consequence recorded as a clause of the same exception: the credential store is **plaintext at
+  rest** on this platform — see *The serving transport* below.
 
 **INV-SERVE.** How we know: the inbound request decoder is a `#![no_std]` hostile-input parser with a
 fuzz target and a Kani harness, fail-closed on any malformed length/offset/type tag; per-client session
@@ -146,8 +181,8 @@ cross-domain memory — which is why the IOMMU confinement, not driver correctne
 
 **Apple's AGX GPU is in scope** (owner ruling: "GPU and CPU at maximum"). This changes INV-GPU from a
 stated target into a load-bearing control, because using AGX means **loading and running an Apple-signed,
-closed, unauditable firmware blob on a coprocessor with DMA access to system memory** — the pending
-**TCB-AS/GPU** exception.
+closed, unauditable firmware blob on a coprocessor with DMA access to system memory** — the **TCB-AS/GPU**
+exception, conditionally signed by the owner on 2026-08-02.
 
 That firmware differs from the rest of TCB-AS in a way that matters for this threat model: SecureROM and
 iBoot run once, at boot, and then stop. **GPU firmware runs concurrently with our kernel, for the entire
@@ -161,6 +196,33 @@ can influence GPU workloads. The defenses are, in order:
    network.
 3. **GPU output is hostile input.** Completion records and any data the GPU writes back are parsed
    fail-closed, fuzzed, and Kani-checked like network bytes (`INV-PARSE-001`).
+4. **Single-tenant residency.** Model weights are mapped into the GPU's DART window read-only and
+   permanently — they are not client data and there is nothing to unmap between sessions. KV cache is
+   mapped strictly per session: mapped on session entry, unmapped and flushed on exit, and **never two
+   tenants resident simultaneously**. The GPU time-slices between clients and **cross-tenant batching is
+   forbidden** (`INV-SERVE-006`). This is what keeps INV-SERVE intact with an accelerator in the path, so
+   **no INV-SERVE exception is needed** — isolation on the GPU is the same isolation as everywhere else.
+   It is paid for in throughput rather than in invariants: the GPU's payoff is prefill acceleration plus
+   time-sliced multi-client serving, not the concurrency win batching would have bought.
+
+**The exception is conditional, and the conditions are its whole content.** TCB-AS/GPU is in force now, so
+AGX design and implementation may proceed, but five preconditions must all be green **before GPU firmware
+is ever loaded**; they are AS-5-T0's acceptance criteria.
+
+1. Every GPU-fronting DART instance defaults to deny-all (`INV-DEV-004`).
+2. A Kani proof on the **DART backend / HAL IOMMU trait** that its API surface admits no widening
+   operation, proving no consumer — `gpud` included — can widen its own DMA window (`INV-DEV-006`). The
+   proof is an obligation of the confinement, not of the driver.
+3. GPU completion records are fuzzed and Kani-checked as hostile input (`INV-PARSE-001`).
+4. The tenant mapping policy above is enforced: weights read-only and permanent, KV cache per session,
+   never two tenants resident (`INV-SERVE-006`).
+5. No iBoot-locked DART on the GPU path — or, if one exists, its locked semantics honestly represented in
+   the HAL trait rather than papered over.
+
+**If any precondition proves unsatisfiable on real hardware, the exception self-voids and AS-5 stops.**
+Until all five are green, no build ships with the GPU enabled. That is the correct failure mode: the
+alternative is loading opaque firmware into a DMA-capable coprocessor on the strength of a confinement we
+could not prove.
 
 Standing bars, enforced in CI and never allowed to regress:
 
@@ -168,6 +230,97 @@ Standing bars, enforced in CI and never allowed to regress:
 - Machine-checked coverage of kernel invariants driven toward 80%.
 - Zero external dependencies in cargo metadata is the target; the current crate list is tracked debt that
   only decreases. The inference engine, the platform backends, and the GPU driver add none.
+
+## The serving transport: pre-shared keys, enrollment, and the admin channel
+
+Owner decision, 2026-08-02. The BSP transport uses **pre-shared per-client keys** with HKDF-SHA256
+session-key derivation and ChaCha20-Poly1305 records. There is **no asymmetric cryptography in the serving
+transport at all**: mutual authentication is proof of possession of the pre-shared key in both directions,
+not a signature and not a key agreement. The Ed25519 verification stack named in the TCB above exists for
+INV-BOOT's release signature and is reachable from no network path.
+
+**What a stolen PSK yields.** A client PSK is the whole of that client's identity. An attacker holding one
+opens sessions as that client and decrypts and forges that client's records. It does **not** yield another
+client's sessions — every client has its own key, and INV-SERVE's confinement is enforced after
+authentication regardless of which key authenticated, so a stolen key buys the thief exactly the authority
+of the client it was stolen from. A stolen *admin* PSK yields the `CapAdmin` verb set and nothing outside
+it; that blast radius is bounded below.
+
+**What the ratchet denies.** Session key *n* is derived from chain key *n*; the chain then advances and
+chain key *n* is deleted (`INV-BOOT-007`). Once the chain has advanced past a session, that session's
+traffic is no longer derivable from anything the system still holds, so a later disclosure of the PSK does
+not decrypt it. Forward secrecy from symmetric primitives alone is why dropping asymmetric crypto from the
+transport costs nothing here — *once the ratchet ships*.
+
+**Stated plainly: until the ratchet ships there is no forward secrecy.** A disclosed PSK retroactively
+decrypts every recorded session for the entire lifetime of that key. An attacker who records ciphertext
+today and obtains the key at any later date reads all of it. This is the current state of the system, not
+a hypothetical future risk, and it compounds with the at-rest exposure below.
+
+**Key distribution and enrollment.** Keys are enrolled at runtime and never compiled in (`INV-BOOT-006`,
+`INV-BUILD-004`). There are exactly two enrollment paths, and each is its own attacker surface:
+
+- **Over the admin channel**, which makes an enrollment exactly as trustworthy as the `CapAdmin` session
+  that requested it. An attacker holding an admin PSK can enroll a client key of its own choosing and
+  thereafter authenticate as a legitimate client. Enrollment and revocation are attributable events
+  (`INV-AUTH-008`), so this is visible in the audit record — but visibility is detection after the fact,
+  not prevention.
+- **Over the serial console**, which grants whoever holds the cable physical-access authority. The
+  break-glass admin PSK is provisioned this way and only this way (`INV-BOOT-008`). It is long-lived by
+  construction and cannot be replaced over the network, so its disclosure is repairable only by physical
+  presence.
+
+**Ratchet desynchronization is an availability failure, not a confidentiality one.** If the two ends
+disagree about chain position — a lost record, a crash between advance and use, a credential store
+restored from an older state — records do not decrypt and the session fails closed (`INV-FAIL-003`).
+Nothing is disclosed; the client is locked out. Recovery is re-enrollment, and if the key that would
+authorize that re-enrollment is itself desynchronized, recovery is over the serial console and nowhere
+else. That is the intended failure mode, and it is why the serial path is compiled in unconditionally: a
+ratchet with no out-of-band repair path is a remote self-destruct.
+
+**The credential store at rest, split by platform.** Owner ruling, 2026-08-02: at-rest protection tracks
+the platform's attestation capability, rather than inventing a second degradation pattern.
+
+- *x86-64 (attested):* the credential store is **specified to be TPM-sealed**. INV-BOOT holds in full
+  there, so there is a boot state worth sealing against, and once sealing ships a stolen disk does not
+  yield the keys. **It has not shipped.** `src/kernel/src/boot/credential_store.rs` persists to virtio-blk
+  and seals nothing, and `INV-BOOT-006` does not yet require sealing, so x86-64 today has the same
+  plaintext-at-rest exposure as the primary platform — with a route out that the primary platform does not
+  have. Stating it as done would be asserting a control that does not exist.
+- *Apple Silicon (primary):* the credential store is **plaintext at rest**, recorded as a clause of the
+  existing INV-BOOT/AS exception. Sealing means binding a secret to a measured boot state, and the primary
+  platform has neither the measurement nor the hardware to bind against. iBoot2's device-local policy
+  protects the *payload* at rest and seals nothing of ours.
+
+The consequence on the primary platform, unsoftened: **anyone who obtains the disk obtains every client
+and admin pre-shared key.** Combined with the forward-secrecy gap above, physical possession of the
+machine — or of a decommissioned drive, or of a backup of its storage — retroactively decrypts every
+session ever recorded from it. This ranks with the absence of remote attestation as an unmitigable cost of
+the primary-platform decision, and it is the same cost in a second place: the platform cannot bind a
+secret to a state it cannot measure. Deployments that cannot accept it run x86-64 — and must wait for
+sealing to ship there, because until it does, x86-64 differs only in having a fix available.
+
+**The admin channel's blast radius.** Administration is a second session *type* on the same authenticated
+transport, gated by `CapAdmin` and exposing a fixed, enumerated verb set — enroll-key, revoke-key,
+load-weights, read-audit-log, restart-server, reboot (`INV-AUTH-009`). Six verbs, frozen at accept. A
+compromised admin session can therefore enroll a key it controls, revoke any client's key, replace the
+served weights, read the audit log, and restart or reboot the machine. That is a serious compromise:
+weight replacement substitutes the model every client is talking to, and mass revocation denies service to
+every legitimate client at once.
+
+What it *cannot* do is what bounds it. No verb executes a command, reads or writes an arbitrary file,
+opens a network connection, or grants a capability outside the six. There is no `rotate` verb — rotation
+is `enroll-key` followed by `revoke-key`, so it names no authority the set does not already contain. And
+neither `enroll-key` nor `revoke-key` will touch the break-glass identity (`INV-BOOT-008`), so a
+compromised admin session **cannot lock the owner out**: physical presence at the serial console wins.
+
+**"Not a shell" is a security property, not an ergonomic one.** A general-purpose remote shell can do
+whatever the process hosting it can do. Its blast radius is not enumerable, which means it cannot be
+reviewed and cannot be bounded — ambient authority wearing an admin badge, which is the exact thing the
+capability model exists to forbid. The enumerated set is what makes the paragraph above possible to write
+at all: the compromise is bad, and it is *finite*, and the finiteness is checkable by reading a
+compile-time table. A verb needing authority the six do not cover requires a new named capability, never a
+widened `CapAdmin`.
 
 ## Firmware-supplied input on Apple Silicon
 
@@ -223,12 +376,13 @@ spent where the residual risk concentrates. The general model remains authoritat
 
 **Deployment, stated.** The reference deployment is a **Mac mini M2 Pro (`Mac14,12`, T6020, 32 GB unified
 memory)** running BraiNIX as the sole OS, delivered as an Image4 payload via `kmutil` under Permissive
-Security. **Performance is a product requirement** (owner decision): CPU and AGX GPU at maximum. The MVP
-is CPU-first by ordering, with the GPU landing at AS-5. Single-stream decode is bounded by unified-memory
-bandwidth on both engines; the GPU's win is in prefill and multi-client concurrency. x86-64 under QEMU
-remains the development, CI, and attested-deployment target. The runtime profile is **network-facing with
-a single authenticated, capability-gated inbound serving socket**, serving one or more remote clients
-whose sessions are mutually isolated.
+Security. **Performance is a craft standard, not a leftover** (owner decision): CPU and AGX GPU at
+maximum. The serving path is CPU-first by ordering, with the GPU landing at AS-5. Single-stream decode is
+bounded by unified-memory bandwidth on both engines; the GPU's payoff is prefill acceleration plus
+time-sliced multi-client serving, because cross-tenant batching is forbidden and clients take turns rather
+than share a batch. x86-64 under QEMU remains the development, CI, and attested-deployment target. The
+runtime profile is **network-facing with a single authenticated, capability-gated inbound serving
+socket**, serving one or more remote clients whose sessions are mutually isolated.
 
 **Dominant threats, re-ranked for this deployment (highest first):**
 
@@ -237,32 +391,41 @@ whose sessions are mutually isolated.
    to, and an early kernel compromise is undetectable from outside. Every downstream guarantee is
    conditional on a boot state that cannot be proven. Deployments that cannot accept this must run
    x86-64. See INV-BOOT/AS.
-2. **Hostile remote clients and the inbound protocol.** The connection/auth/request path parses
+2. **Credential-store disclosure, retroactively.** Ranked second because it shares the first entry's
+   structural cause and its unmitigability: the platform cannot bind a secret to a state it cannot
+   measure. On Apple Silicon the credential store is plaintext at rest, so obtaining the disk obtains
+   every client and admin pre-shared key; until the HKDF ratchet ships there is no forward secrecy, so
+   those keys also decrypt every session an attacker recorded earlier. Physical possession of the machine,
+   a decommissioned drive, or a backup is therefore a total, retroactive loss of serving confidentiality.
+   On x86-64 sealing is specified but **not yet implemented**, so the entry applies there too today; the
+   difference is that x86-64 can close it and the primary platform cannot. See *The serving transport*
+   above.
+3. **Hostile remote clients and the inbound protocol.** The connection/auth/request path parses
    attacker-controlled bytes reachable from the network. It must be `#![no_std]`, fuzzed, and
    Kani-checked, fail-closed on any malformed length/offset/type tag, and never grow a pool from
-   client-supplied sizes. The authenticated transport reuses only already-vendored crypto primitives; no
-   new crate.
-3. **Hostile prompts against the served model.** Prompt injection targets the trusted-but-uncomfortable
+   client-supplied sizes. The transport is pre-shared-key only — HKDF-SHA256 derivation,
+   ChaCha20-Poly1305 records, no asymmetric crypto and no new crate.
+4. **Hostile prompts against the served model.** Prompt injection targets the trusted-but-uncomfortable
    weights to escape the session. INV-MODEL + INV-SERVE cap the blast radius to the attacker's own
    session; the confinement is manifest-enforced and must hold under the injection suite with no
    escalation under any input.
-4. **Firmware-supplied structures (ADT, boot-args).** Parsed before anything else exists to defend the
+5. **Firmware-supplied structures (ADT, boot-args).** Parsed before anything else exists to defend the
    system, on the primary platform, in the most privileged context. Covered above.
-5. **Model-weight provenance.** The served weights are trusted-but-huge; a poisoned or swapped blob is a
+6. **Model-weight provenance.** The served weights are trusted-but-huge; a poisoned or swapped blob is a
    supply-chain and integrity concern. Weights are measured against a known digest before use — anchored
    to a hardware quote on x86-64, to a self-reported log on Apple Silicon — and the loader fails closed on
    any malformed or oversized blob.
-6. **DMA confinement across many small IOMMUs.** DART is not one translation unit but dozens of
+7. **DMA confinement across many small IOMMUs.** DART is not one translation unit but dozens of
    per-device instances discovered from the ADT, with incompatible PTE formats across SoC generations. A
    single instance left in a permissive state is a full DMA escape. Every discovered instance defaults to
    deny-all from the first commit, and an unrecognized DART variant fails closed rather than falling back.
-7. **Hostile data at rest / on disk.** Model-weight blobs and the session/log store are
+8. **Hostile data at rest / on disk.** Model-weight blobs and the session/log store are
    attacker-influenceable byte streams parsed in ring 0 or adjacent; the same `#![no_std]`, fuzzed,
    Kani-checked, fail-closed discipline applies.
-8. **Platform contract revocation.** An Apple firmware update silently changing a reverse-engineered
+9. **Platform contract revocation.** An Apple firmware update silently changing a reverse-engineered
    structure is an availability threat with no upstream remedy. Mitigation is pinning a known-good macOS
    stub version on the deployment machine and treating any firmware update as a re-qualification event.
-9. **Storage and network bring-up surface.** Reaching a serving deployment on Apple Silicon requires
-   in-tree RTKit mailbox, ANS2 NVMe, PCIe, and Ethernet drivers, all clean-room. Each is a large new
-   attack surface written from reverse-engineered documentation, and each lands in a driver server with
-   bounded device capabilities — never in the kernel.
+10. **Storage and network bring-up surface.** Reaching a serving deployment on Apple Silicon requires
+    in-tree RTKit mailbox, ANS2 NVMe, PCIe, and Ethernet drivers, all clean-room. Each is a large new
+    attack surface written from reverse-engineered documentation, and each lands in a driver server with
+    bounded device capabilities — never in the kernel.

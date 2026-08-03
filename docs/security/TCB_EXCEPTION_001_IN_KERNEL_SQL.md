@@ -8,8 +8,8 @@ kernel address space, as part of the Trusted Computing Base.
 and declining the userspace alternative.
 **Authored by:** engineering, under the `/goal` (north-star) governance process.
 
-> **Reconciled 2026-08-02.** This exception remains **in force and unchanged**. It is now one of three
-> named exceptions; the other two were signed 2026-08-02 and are recorded in
+> **Reconciled 2026-08-02.** This exception remains **in force and unchanged**. It is now one of five
+> named exceptions; the other four were signed 2026-08-02 and are recorded in
 > [`../NORTH_STAR.md`](../NORTH_STAR.md):
 >
 > | Exception | Scope | Effect |
@@ -17,6 +17,8 @@ and declining the userspace alternative.
 > | **TCB-EXCEPTION-001** *(this document)* | All platforms | Relational SQL engine in ring 0. |
 > | **INV-BOOT/AS** | Apple Silicon | No measurement, remote attestation, or sealing. |
 > | **TCB-AS** | Apple Silicon | SecureROM, iBoot1, iBoot2, sepOS in the TCB by force. |
+> | **TCB-AS/GPU** *(conditionally signed)* | Apple Silicon | Apple's opaque, DMA-capable AGX firmware in the TCB. Five preconditions must be green before firmware is ever loaded; if any proves unsatisfiable the exception self-voids and AS-5 stops. |
+> | **Ed25519 verification stack** | All platforms | `ed25519-dalek`, `curve25519-dalek`, `fiat-crypto`, `subtle` stay vendored, verify-only, permanently — a named hole in "every byte that runs is in-tree." |
 >
 > **These compound.** On the primary platform the TCB now contains both a full SQL engine in ring 0 *and*
 > four closed-source Apple components we cannot audit — and there is no attestation to detect if any of it
@@ -33,7 +35,7 @@ and declining the userspace alternative.
 
 `NORTH_STAR.md` records seven hard lines that "do not cross without explicit
 sign-off." This feature crosses **three** of them. The north-star principle
-*"minimize and **name** the trust"* (NORTH_STAR.md:16) requires that any TCB
+*"minimize and **name** the trust"* (NORTH_STAR.md §*First principles*) requires that any TCB
 expansion be "written down and justified." This record is that justification.
 It does not make the violation safe. It makes it **named, bounded, and
 non-silent**, which is the minimum the north-star demands of a crossing it
@@ -48,21 +50,23 @@ file wins. It may only be amended or revoked by the project owner.
 
 | # | Hard line (NORTH_STAR.md) | Invariant endangered | How this feature crosses it |
 |---|---|---|---|
-| 1 | "No dynamic kernel heap. Fixed-size pool allocators only." (line 42) | **INV-MEM** | A relational engine with joins, transactions, query plans, and result sets is a dynamic-allocation workload by nature. |
-| 2 | "No new external crate dependencies." (line 43) + "dependency closure is itself: zero external code" (line 7) | INV-BOOT posture / "zero external dependencies" standing bar (THREAT_MODEL.md:56) | No SQL engine may be vendored (SQLite, gluesql, redb, sled, sqlparser, …). The engine is hand-written in-tree. |
-| 3 | "The trusted set only ever shrinks." (line 35) | **INV-AUTH** (worst case) | A SQL engine is among the largest attack surfaces in computing; placing it in ring 0 is the single largest TCB expansion in the project's history. |
+| 1 | "No dynamic kernel heap. Fixed-size pool allocators only." (§*Hard lines*) | **INV-MEM** | A relational engine with joins, transactions, query plans, and result sets is a dynamic-allocation workload by nature. |
+| 2 | "No new external crate dependencies." (§*Hard lines*) + "dependency closure is itself: zero external code" (§*The destination*) | INV-BOOT posture / the "zero external dependencies" standing bar (THREAT_MODEL.md §*Per-invariant verification and blast radius*, "Standing bars, enforced in CI") | No SQL engine may be vendored (SQLite, gluesql, redb, sled, sqlparser, …). The engine is hand-written in-tree. |
+| 3 | "The trusted set only ever shrinks." (§*What advancing the goal means*) | **INV-AUTH** (worst case) | A SQL engine is among the largest attack surfaces in computing; placing it in ring 0 is the single largest TCB expansion in the project's history. |
 
 ## Blast radius accepted
 
-Per THREAT_MODEL.md, **every disk byte is attacker-controlled** (line 9). An
+Per THREAT_MODEL.md §*Trust boundary*, **every disk byte is attacker-controlled**. An
 in-kernel engine parses hostile on-disk B-tree and WAL pages **inside the TCB**.
 The accepted consequence, drawn from the threat model:
 
 - A single defect anywhere in the parser, planner, executor, B-tree, or WAL is
   a **ring-0 memory-safety defect** → "W^X loss enables code injection… in the
-  affected domain" (THREAT_MODEL.md:42), and the affected domain is the kernel.
+  affected domain" (THREAT_MODEL.md §*Per-invariant verification and blast
+  radius*, INV-MEM), and the affected domain is the kernel.
 - That is **full privilege escalation (INV-AUTH worst case)** — "the worst case
-  the design exists to prevent" (THREAT_MODEL.md:40).
+  the design exists to prevent" (THREAT_MODEL.md §*Per-invariant verification and
+  blast radius*, INV-AUTH).
 
 The owner has accepted this blast radius explicitly. The userspace `dbd`
 alternative — which delivers the same features (real SQL, joins, transactions,
@@ -88,7 +92,8 @@ them:
    to the tracked-debt crate list; it must not.
 3. **Hostile-input discipline.** The SQL text parser and the on-disk
    page/WAL decoders are treated as **in-tree parsers over attacker input**:
-   each is **fuzzed and Kani-checked** (THREAT_MODEL.md:68 bar) before it is
+   each is **fuzzed and Kani-checked** (the bar in THREAT_MODEL.md §*Deployment
+   threat profile*) before it is
    trusted. No decoder trusts a length, offset, or type tag from disk without
    bounds-checking it.
 4. **No new ambient authority (INV-AUTH holds).** Access is **capability-gated,
@@ -98,7 +103,7 @@ them:
 5. **Structurally local-only.** The engine holds **no network capability** and
    exposes **no network endpoint**. "Not accessible to the outside" is a
    property of the capability graph, not of configuration — satisfying
-   "structure over secrecy" (NORTH_STAR.md:15) for the one property the owner
+   "structure over secrecy" (NORTH_STAR.md §*First principles*) for the one property the owner
    most cares about.
 6. **W^X unbroken (INV-MEM, the other half).** No engine page is ever writable
    and executable. Code and data pools are distinct and correctly attributed.
