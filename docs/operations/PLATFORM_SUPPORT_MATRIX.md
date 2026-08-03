@@ -22,7 +22,7 @@ therefore part of describing a deployment; "production BraiNIX" alone is not a m
 
 | | Platform | Role | Assurance |
 |---|---|---|---|
-| **Primary** | **aarch64 / Apple Silicon** — Mac mini M2 (`Mac14,3`, SoC `T8112`, 32 GB unified memory) | The serving deployment | **Degraded** — INV-BOOT/AS: no measurement, no remote attestation, no sealing |
+| **Primary** | **aarch64 / Apple Silicon** — Mac mini M2 Pro (`Mac14,12`, SoC `T6020`, 32 GB unified memory) | The serving deployment | **Degraded** — INV-BOOT/AS: no measurement, no remote attestation, no sealing |
 | **Secondary** | **x86-64 long mode** | Development, CI, and **attested** deployments | **Full** — INV-BOOT holds in all clauses |
 
 Not supported: 32-bit (i386/IA-32), AArch32, RISC-V, generic aarch64 servers (Graviton/Ampere — descoped
@@ -60,7 +60,7 @@ machine it targets. Page size is a HAL parameter (`INV-MEM-009`); see
 
 | Model | Identifier | SoC | Status |
 |---|---|---|---|
-| Mac mini M2 (2023) | `Mac14,3` | `T8112` | **Reference deployment** |
+| Mac mini M2 Pro (2023) | `Mac14,12` | `T6020` | **Reference deployment** |
 
 No other Apple model is supported. Each SoC generation has its own AIC revision and DART variants, and
 under the no-vendoring rule each must be re-derived; adding a model is a scoped work item, not a

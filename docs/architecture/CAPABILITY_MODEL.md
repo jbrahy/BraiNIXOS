@@ -44,7 +44,7 @@ the proofs in `src/capability-verify/` in the same commit, not afterward.)*
 |---|---|---|---|
 | **CapServe** | `11` | Authority over **one client session** on the serving path | Read and write that session's request/response stream; reference that session's KV partition. **Cannot name any other session** — this is the structural basis of `INV-SERVE-001`. Granted per-connection by `servd`, frozen at grant, revoked at teardown. |
 | **CapModel** | `12` | Authority to invoke the served model within a session | Submit a confined inference request against the read-only weights view and the caller's own KV slice. Confers **no** authority to spawn, mutate the kernel, reach the network, or read another session (`INV-MODEL-001`). |
-| **CapGpu** | `13` | Authority over an accelerator's bounded MMIO and DMA windows | *(Deferred with Phase 5; x86-64 only — Apple's AGX is out of scope.)* Access device registers within the granted window. **Cannot widen its own DMA window** (`INV-DEV-006`). |
+| **CapGpu** | `13` | Authority over an accelerator's bounded MMIO and DMA windows | **In scope on the primary platform (AS-5).** Access device registers within the granted window; submit command buffers. **Cannot widen its own DMA window** (`INV-DEV-006`) — this is the control that makes running Apple's opaque, DMA-capable GPU firmware survivable, and it must be proven before that firmware is ever loaded. |
 
 Three properties of these types are load-bearing and must survive implementation:
 

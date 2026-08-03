@@ -76,6 +76,7 @@ no other mechanism, and a document claiming an exemption not on this list is dri
 | **INV-BOOT/AS** | Apple Silicon | 2026-08-02 | Measurement, remote attestation, and sealing are structurally unavailable. See §7. |
 | **TCB-AS** | Apple Silicon | 2026-08-02 | SecureROM, iBoot1, iBoot2, sepOS are in the TCB by force — closed, unauditable, unremovable. |
 | **TCB-EXCEPTION-001** | All platforms | 2026-06-27 | Relational SQL engine in ring 0. See [`TCB_EXCEPTION_001_IN_KERNEL_SQL.md`](TCB_EXCEPTION_001_IN_KERNEL_SQL.md). |
+| **TCB-AS/GPU** | Apple Silicon | ⚠️ **PENDING — not signed** | Running AGX requires loading Apple's opaque, DMA-capable GPU firmware, which executes **concurrently with our kernel for the life of the system**. Until signed, no build ships with the GPU enabled. INV-GPU must be enforced and proven *before* the firmware is loaded, not after. |
 
 ---
 

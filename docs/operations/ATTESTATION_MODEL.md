@@ -12,7 +12,7 @@ This is an authoritative specification. If code or configuration diverges from t
 
 **Everything in this document applies to x86-64 only.**
 
-As of the owner decision of 2026-08-02, the **primary** platform is Apple Silicon (Mac mini M2, `T8112`),
+As of the owner decision of 2026-08-02, the **primary** platform is Apple Silicon (Mac mini M2 Pro, `T6020`),
 and on that platform **there is no attestation model at all**. This is not an unimplemented feature. It is
 structural: Apple Silicon has no TPM, none can be added (no LPC/SPI header, and a USB TPM is not a root of
 trust), and the Secure Enclave exposes no PCR-style extend/quote/seal interface to third-party software.

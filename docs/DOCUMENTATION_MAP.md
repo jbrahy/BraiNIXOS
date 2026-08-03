@@ -68,9 +68,10 @@ than through this index still sees the warning.
 | [`security/UNSAFE_CODE_POLICY.md`](security/UNSAFE_CODE_POLICY.md) | CURRENT | Unsafe Rust is prohibited by default; the allowlist and its justification discipline. |
 | [`security/TCB_EXCEPTION_001_IN_KERNEL_SQL.md`](security/TCB_EXCEPTION_001_IN_KERNEL_SQL.md) | CURRENT | Approved exception: the in-kernel SQL engine in ring 0. Owner sign-off 2026-06-27. |
 
-**Exceptions in force.** Three, all requiring owner sign-off: **INV-BOOT/AS** and **TCB-AS** (in
-NORTH_STAR.md, signed 2026-08-02) and **TCB-EXCEPTION-001** (in-kernel SQL, signed 2026-06-27). There are
-no others. Any document claiming an exemption not on this list is drift.
+**Exceptions.** Three in force, all requiring owner sign-off: **INV-BOOT/AS** and **TCB-AS** (in
+NORTH_STAR.md, signed 2026-08-02) and **TCB-EXCEPTION-001** (in-kernel SQL, signed 2026-06-27). One
+**pending and unsigned**: **TCB-AS/GPU** (Apple GPU firmware — no build ships with the GPU enabled until
+it is signed). There are no others. Any document claiming an exemption not on this list is drift.
 
 ## Architecture
 

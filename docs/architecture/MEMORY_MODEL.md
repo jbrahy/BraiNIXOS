@@ -422,7 +422,7 @@ The total kernel memory footprint is fixed at boot. The kernel cannot allocate m
 
 | Platform | Base page | Role |
 |---|---|---|
-| Apple Silicon (`T8112`) | **16 KiB** | **Primary** — the serving deployment |
+| Apple Silicon (`T6020`) | **16 KiB** | **Primary** — the serving deployment |
 | x86-64 | 4 KiB | Secondary — development, CI, attested deployments |
 | QEMU `virt` aarch64 | 4 KiB | Bring-up harness only — note this differs from the real primary target |
 

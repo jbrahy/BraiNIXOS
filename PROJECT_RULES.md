@@ -27,7 +27,7 @@ implementation shortcut may override these rules without an explicit documented 
 approved at the project-governance level.
 
 **Two decisions of 2026-08-02 shape everything below.** The primary platform is **Apple Silicon** (Mac
-mini M2, `Mac14,3`, SoC `T8112`), with x86-64 retained as the secondary and **attested** platform; and
+mini M2, `Mac14,12`, SoC `T6020`), with x86-64 retained as the secondary and **attested** platform; and
 **INV-BOOT/AS** is signed off, meaning remote attestation and sealing are permanently unavailable on the
 platform the product ships on. Rules 6.1, 12.0, 13.0, and §24–§26 exist because of these.
 
@@ -138,7 +138,7 @@ BraiNIX supports exactly two architectures:
 
 | Platform | Role |
 |---|---|
-| **aarch64 / Apple Silicon** — Mac mini M2 (`Mac14,3`, `T8112`) | **Primary.** The serving deployment. CPU-only inference. **Not attested** (INV-BOOT/AS). |
+| **aarch64 / Apple Silicon** — Mac mini M2 Pro (`Mac14,12`, `T6020`) | **Primary.** The serving deployment. CPU + AGX GPU at maximum. **Not attested** (INV-BOOT/AS). |
 | **x86-64** | Secondary. Development, CI, and the **attested** deployment target — the only platform where INV-BOOT holds in full. |
 
 No 32-bit support and no legacy compatibility burden. A third architecture may not be added without owner
@@ -780,9 +780,17 @@ This document, `docs/security/SECURITY_INVARIANTS.md`, and every architecture sp
 restate them — never introduce, reword, or qualify one. A qualification existing only in a subordinate
 document is a bug to be reported.
 
-### Rule 26.2 — Three Exceptions Are In Force
-**INV-BOOT/AS** and **TCB-AS** (2026-08-02) and **TCB-EXCEPTION-001** (in-kernel SQL, 2026-06-27). There
-are no others. Any document, comment, or commit message claiming an exemption not on this list is drift.
+### Rule 26.2 — Three Exceptions In Force, One Pending
+**In force:** **INV-BOOT/AS** and **TCB-AS** (2026-08-02) and **TCB-EXCEPTION-001** (in-kernel SQL,
+2026-06-27).
+
+**Pending, not signed: TCB-AS/GPU** — running Apple's AGX requires loading opaque, DMA-capable GPU
+firmware that runs concurrently with the kernel for the life of the system. **No build ships with the GPU
+enabled until this is signed**, and INV-GPU (DART confinement, no self-widening windows) must be enforced
+and proven *before* that firmware is first loaded.
+
+There are no others. Any document, comment, or commit message claiming an exemption not on this list is
+drift.
 
 ### Rule 26.3 — Roadmap and Status Live In-Tree
 Phasing and status are maintained in [`docs/ROADMAP.md`](docs/ROADMAP.md). Planning files outside the

@@ -75,7 +75,7 @@ a deployment.
 
 | | Platform | Role | Assurance |
 |---|---|---|---|
-| **Primary** | **Apple Silicon** — Mac mini M2 (`Mac14,3`, `T8112`, 32 GB) | The serving deployment. CPU-only inference. | ⚠️ **No remote attestation, no sealing** |
+| **Primary** | **Apple Silicon** — Mac mini M2 Pro (`Mac14,12`, `T6020`, 32 GB) | The serving deployment. CPU + AGX GPU at maximum. |  ⚠️ **No remote attestation, no sealing** |
 | **Secondary** | **x86-64** | Development, CI, and attested deployments | ✅ Full — INV-BOOT holds in every clause |
 
 **Why the asymmetry.** Apple Silicon has no TPM and none can be added; the Secure Enclave exposes no

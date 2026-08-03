@@ -26,8 +26,8 @@ security auditor** that continuously checks the running serving stack against it
 
 ## Target platforms
 
-**Primary: Apple Silicon (aarch64).** The reference deployment is a Mac mini M2 (`Mac14,3`, SoC
-`T8112`, 32 GB unified memory). Unified-memory bandwidth makes M-series CPUs a credible CPU-inference
+**Primary: Apple Silicon (aarch64).** The reference deployment is a Mac mini M2 Pro (`Mac14,12`, SoC
+`T6020`, 32 GB unified memory). Unified-memory bandwidth makes M-series CPUs a credible CPU-inference
 platform, and 32 GB is real serving capacity. Owner decision, 2026-08-02.
 
 **Secondary: x86-64.** Retained as the **attested** platform — the only target where INV-BOOT holds in
@@ -39,10 +39,91 @@ Both are backends behind one hardware abstraction layer (`docs/architecture/HAL.
 neutral subsystems — the serving protocol, the request parser, the tokenizer, the tensor kernels, the
 transformer — are written once and are not permitted to acquire platform assumptions.
 
+## Performance is a goal, not a leftover
+
+**On the primary platform, BraiNIX serves as fast as the hardware allows.** Owner decision, 2026-08-02.
+The reference machine is bought and sized for inference, and a secure inference server nobody can afford
+to use has not delivered its security to anyone. Throughput is a product requirement, ranked below the
+invariants and above everything else.
+
+This is a deliberate strengthening of the tradeoff rule below, which previously named throughput as a
+thing principles beat. Principles still beat it — but "we did not optimize because security" is no longer
+a sufficient answer. Every layer is expected to be fast *within* the invariants, and slowness must be
+justified by a named invariant, not by vague caution.
+
+**Inference on this machine is memory-bandwidth-bound, not compute-bound.** Single-stream decode reads
+essentially the whole weight set per token, so the ceiling is (model bytes) ÷ (memory bandwidth), and
+every design decision should be judged against that arithmetic first. This has a sharp consequence:
+**the biggest wins are in bytes moved, not instructions executed.** Quantization, weight layout, cache
+blocking, and avoiding copies dominate; micro-optimizing arithmetic does not.
+
+### In-bounds performance work — expected, not merely permitted
+
+- **All cores.** SMP scheduling across performance and efficiency cores, with the inference engine sized
+  to the performance cores. Any remaining single-core cooperative path is a performance defect as well as
+  a scaling one.
+- **SIMD.** NEON in the tensor kernels, via the userspace FP/SIMD enablement (P3-T0). The kernel stays
+  soft-float; the inference engine must not.
+- **Quantization.** Q8 first, lower precision where quality permits. This is the highest-leverage lever
+  available, because it directly divides the bandwidth-bound ceiling.
+- **Zero-copy within the capability model.** Copies avoided by *not making them* — passing a capability
+  to an already-placed buffer — never by introducing shared mutable memory.
+- **Large reserved regions.** 32 GB of unified memory is the reason this machine was chosen. Weights and
+  KV-cache regions should be sized generously; that is exactly what fixed regions are for.
+- **Cache-aware kernel design.** Blocking, tiling, and layout chosen for the actual cache hierarchy.
+
+### Out of bounds without written sign-off
+
+Performance work that requires any of these crosses a hard line and needs an owner exception:
+
+- A dynamic kernel heap or a growable arena (INV-MEM).
+- Shared-memory IPC or async queues, however much faster the datapath would be (INV-IPC).
+- Any W^X exception, including JIT-compiled kernels for tensor operations (INV-MEM).
+- Weakening client isolation or session confinement to share caches or batch across tenants (INV-SERVE).
+- Ambient authority granted to the inference engine to avoid capability checks (INV-AUTH, INV-MODEL).
+
+### The GPU is in scope
+
+**Owner ruling, 2026-08-02: performance means GPU and CPU at maximum.** Apple's AGX GPU moves from
+non-goal to goal. The machine's full compute — performance cores, efficiency cores, NEON, and the
+integrated GPU — is devoted to serving the model.
+
+The honest technical picture, so expectations match physics:
+
+- For **single-stream decode**, the GPU shares the same unified memory bus as the CPU. It does not raise
+  the bandwidth-bound ceiling; the gain is real but bounded, and quantization matters more.
+- For **prefill** (compute-bound) and for **serving multiple clients concurrently**, the GPU is a large
+  win — and concurrency is precisely what a serving product needs. This is where the investment pays.
+- The cost is the **single largest reverse-engineering effort on the platform**, larger than the entire
+  storage-and-network driver chain, and it must be written clean-room from published documentation.
+
+### TCB-AS/GPU — pending exception, requires sign-off
+
+Running AGX has a security consequence that the CPU-only design did not have, and it is recorded here
+because it touches a hard line rather than merely a schedule.
+
+**The AGX GPU is firmware-driven.** Using it requires loading and running an Apple-signed, closed,
+unauditable firmware blob on a coprocessor that has **DMA access to system memory**. That is a third
+forced addition to the trusted set on the primary platform, alongside TCB-AS — and unlike SecureROM and
+iBoot, this one runs *concurrently with our kernel*, for the entire life of the system, driven by data
+derived from client requests.
+
+The control is **DART**, not firmware correctness: the GPU's DMA is confined by IOMMU mappings the GPU
+driver cannot widen (INV-GPU, `INV-DEV-006`), every DART instance fronting the GPU defaults to deny-all
+(`INV-DEV-004`), and `gpud` is an ordinary capability-bounded server holding only `CapGpu`. The GPU
+firmware is treated as hostile: its completion records and any data it writes back are parsed with the
+same fail-closed discipline as network bytes (`INV-PARSE-001`).
+
+**This exception is not yet signed.** Until it is, AGX work may proceed on design and on the DART
+confinement that must precede it, but no build ships with the GPU enabled. INV-GPU is no longer deferred
+on the primary platform; it is the invariant that makes this exception survivable, and it must be
+enforced and proven *before* firmware is loaded, not after.
+
 ## First principles
 
-These decide every tradeoff. When they conflict with convenience — or with throughput — the principle
-wins unless the owner signs off otherwise in writing.
+These decide every tradeoff. When they conflict with convenience, the principle wins unless the owner
+signs off otherwise in writing. Throughput is not convenience: see *Performance is a goal* above — it is
+a product requirement that ranks below the invariants and above everything else.
 
 - Least authority. Nothing holds a capability it does not need, and no capability is ambient. Authority
   is named, granted, and revocable. A remote client is granted only its own session.
@@ -79,10 +160,11 @@ consequences-of-compromise are in THREAT_MODEL.md.
   capability-mediated serving channel. The confinement holds under adversarial prompting.
 - **INV-AUDIT**: the auditor observes the serving stack and reports and does nothing else; it holds no
   spawn, kernel-mutation, or network capability, so its compromise costs visibility, never privilege.
-- **INV-GPU** *(deferred milestone)*: accelerator DMA is confined by the IOMMU; the GPU driver is an
-  ordinary capability-bounded server with no ambient device authority. Until the GPU milestone lands,
-  inference is CPU-only and this invariant is a stated target, not a shipped guarantee. Apple's AGX GPU
-  is explicitly out of scope (see Non-goals).
+- **INV-GPU** *(active on the primary platform as of 2026-08-02)*: accelerator DMA is confined by the
+  IOMMU; the GPU driver is an ordinary capability-bounded server with no ambient device authority; the
+  driver cannot widen its own DMA window. With AGX in scope, this is no longer a deferred target — it is
+  the control that makes running Apple's opaque GPU firmware survivable, and it must be enforced and
+  proven **before** that firmware is ever loaded. On x86-64 it remains a stated target.
 
 ### INV-BOOT/AS — named exception, Apple Silicon
 
@@ -139,7 +221,12 @@ for the paired recoveryOS and firmware volumes; "bare metal" here means "our ker
   invariants above is not ready.
 - The served model earns its resources by staying confined. Give it all available compute and reserved
   memory; give it no authority. Capability first, capability always; the model is a tenant, never a
-  trusted authority, no matter how central it is to the product.
+  trusted authority, no matter how central it is to the product. **"All available compute" is meant
+  literally** — every core, the full SIMD width, and the whole reserved region. A confined tenant is not
+  a throttled one.
+- Bytes moved is the metric that matters. Because serving on this hardware is bandwidth-bound, a change
+  that reduces data movement advances the goal more than a change that reduces instruction count. Measure
+  against the (model bytes ÷ memory bandwidth) ceiling before optimizing anything else.
 - The trusted set only ever shrinks — with TCB-AS as the one direction we cannot push. The inbound
   serving surface is the largest attack surface we control; every byte of it that can be moved out of
   the TCB or proven correct is progress. Any change that enlarges the TCB pays for itself explicitly or
@@ -174,9 +261,13 @@ for the paired recoveryOS and firmware volumes; "bare metal" here means "our ker
 POSIX compatibility, dynamic loading, ambient authority, telemetry or phone-home of any kind, treating
 the served model or any remote client as trusted, and any security argument that rests on obscurity.
 
-Platform-specific non-goals: Apple's **AGX GPU** (firmware-driven, the single largest reverse-engineering
-effort on the platform; INV-GPU is deferred even on x86-64), the **Secure Enclave** as a security
-component, and any attempt to present Apple Silicon as an attested platform.
+Platform-specific non-goals: the **Secure Enclave** as a security component, and any attempt to present
+Apple Silicon as an attested platform.
+
+Apple's **AGX GPU is no longer a non-goal** (owner ruling, 2026-08-02) — see *The GPU is in scope* above.
+It remains the largest single body of work on the platform and carries the pending TCB-AS/GPU exception.
+
+Performance is explicitly **not** a non-goal. Slowness requires a named invariant as its justification.
 
 Inbound serving is a goal; it is delivered through a single authenticated, capability-gated path, not by
 relaxing the confinement rules above.

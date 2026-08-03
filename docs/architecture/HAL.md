@@ -12,8 +12,8 @@ disagree, the governing document wins and this document is the bug.
 
 > **Reconciled 2026-08-02 — platform priority inverted.** This document was written when
 > Apple Silicon was deferred and aarch64 *servers* (Graviton/Ampere) were the second
-> target. The owner has since made **Apple Silicon the primary platform** (Mac mini M2,
-> `Mac14,3`, `T8112`). The trait design below is unchanged and remains correct — it was
+> target. The owner has since made **Apple Silicon the primary platform** (Mac mini M2 Pro,
+> `Mac14,12`, `T6020`). The trait design below is unchanged and remains correct — it was
 > written to be Apple-capable — but three framing points now read differently:
 >
 > 1. **"Later" no longer means "optional."** Every place below that describes Apple

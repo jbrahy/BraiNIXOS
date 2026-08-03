@@ -52,7 +52,12 @@ explicitly rather than papered over.
 
 ### Note on INV-GPU
 
-Apple's AGX GPU is out of scope, so INV-GPU remains deferred and applies to x86-64 only. **DMA confinement
+**Apple's AGX GPU is in scope as of 2026-08-02 (owner ruling: "GPU and CPU at maximum"), so INV-GPU is
+active on the primary platform** — not a deferred target. It is the control that makes running Apple's
+opaque, DMA-capable GPU firmware survivable, and the DART confinement below must be enforced and proven
+**before** that firmware is ever loaded (AS-5-T0 gates AS-5-T2). On x86-64, INV-GPU remains deferred.
+
+Superseded text, retained for context: *"Apple's AGX GPU is out of scope, so INV-GPU remains deferred and applies to x86-64 only."* **DMA confinement
 itself is not deferred** — it is load-bearing on the primary platform from AS-3 onward.
 
 ---

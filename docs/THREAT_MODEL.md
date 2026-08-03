@@ -6,7 +6,7 @@ violation costs. Phasing and status live in ROADMAP.md.
 
 BraiNIX **serves LLM inference to remote network clients**, which makes the inbound serving path the
 largest attack surface in the system. As of the owner decision of 2026-08-02 the **primary platform is
-Apple Silicon** (Mac mini M2, `Mac14,3`, SoC `T8112`), with x86-64 retained as the secondary and
+Apple Silicon** (Mac mini M2 Pro, `Mac14,12`, SoC `T6020`), with x86-64 retained as the secondary and
 **attested** platform. That decision materially changes the trust boundary and the boot-integrity story;
 this document is written around both realities and marks every claim that is platform-specific.
 
@@ -139,12 +139,28 @@ what its model decides. It observes the serving stack — connections, capabilit
 boundaries — and reports. If violated (only possible via a manifest error): audit visibility is lost;
 privilege is not, by construction.
 
-**INV-GPU** *(deferred milestone)*. How we know: the accelerator's DMA windows are confined by IOMMU
-mappings the driver cannot widen, and the driver holds only bounded device capabilities. Until the GPU
-milestone lands, inference is CPU-only and this is a stated target, not a shipped guarantee. If violated:
-a driver or device DMA escapes its window into kernel or cross-domain memory — which is why the IOMMU
-confinement, not driver correctness, is the control. Apple's AGX GPU is out of scope entirely, so on the
-primary platform inference is CPU-only for the foreseeable future.
+**INV-GPU** *(active on the primary platform as of 2026-08-02; deferred on x86-64)*. How we know: the
+accelerator's DMA windows are confined by IOMMU mappings the driver cannot widen, and the driver holds
+only bounded device capabilities. If violated: a driver or device DMA escapes its window into kernel or
+cross-domain memory — which is why the IOMMU confinement, not driver correctness, is the control.
+
+**Apple's AGX GPU is in scope** (owner ruling: "GPU and CPU at maximum"). This changes INV-GPU from a
+stated target into a load-bearing control, because using AGX means **loading and running an Apple-signed,
+closed, unauditable firmware blob on a coprocessor with DMA access to system memory** — the pending
+**TCB-AS/GPU** exception.
+
+That firmware differs from the rest of TCB-AS in a way that matters for this threat model: SecureROM and
+iBoot run once, at boot, and then stop. **GPU firmware runs concurrently with our kernel, for the entire
+life of the system, driven by data derived from client requests.** An attacker who can influence prompts
+can influence GPU workloads. The defenses are, in order:
+
+1. **DART confinement** — every instance fronting the GPU deny-all by default; the window is programmed by
+   the granting authority and `gpud` cannot widen it (`INV-DEV-004`, `INV-DEV-006`). Proven before any
+   firmware is loaded (AS-5-T0 gates AS-5-T2). This is the whole defense; everything else is depth.
+2. **`gpud` is an ordinary server** holding only `CapGpu` — no ambient device authority, no spawn, no
+   network.
+3. **GPU output is hostile input.** Completion records and any data the GPU writes back are parsed
+   fail-closed, fuzzed, and Kani-checked like network bytes (`INV-PARSE-001`).
 
 Standing bars, enforced in CI and never allowed to regress:
 
@@ -205,10 +221,11 @@ or forge), so any such consent rests on the kernel, not on console correctness.
 This section re-ranks the general model above for the deployment BraiNIX ships in, so design effort is
 spent where the residual risk concentrates. The general model remains authoritative.
 
-**Deployment, stated.** The reference deployment is a **Mac mini M2 (`Mac14,3`, T8112, 32 GB unified
+**Deployment, stated.** The reference deployment is a **Mac mini M2 Pro (`Mac14,12`, T6020, 32 GB unified
 memory)** running BraiNIX as the sole OS, delivered as an Image4 payload via `kmutil` under Permissive
-Security. Inference is **CPU-only** — AGX is out of scope — so throughput is bounded by CPU and memory
-bandwidth, and the MVP proves the secure datapath rather than competitive performance. x86-64 under QEMU
+Security. **Performance is a product requirement** (owner decision): CPU and AGX GPU at maximum. The MVP
+is CPU-first by ordering, with the GPU landing at AS-5. Single-stream decode is bounded by unified-memory
+bandwidth on both engines; the GPU's win is in prefill and multi-client concurrency. x86-64 under QEMU
 remains the development, CI, and attested-deployment target. The runtime profile is **network-facing with
 a single authenticated, capability-gated inbound serving socket**, serving one or more remote clients
 whose sessions are mutually isolated.

@@ -14,13 +14,15 @@ planning file it was derived from; do not maintain a roadmap outside the reposit
 | # | Decision | Date |
 |---|---|---|
 | 1 | **Inbound serving** — remote clients reach the model (reverses the former outbound-only posture). | 2026-07-07 |
-| 2 | **CPU-inference MVP first**; GPU/VRAM deferred. | 2026-07-07 |
+| 2 | **CPU-inference MVP first**; ~~GPU/VRAM deferred~~ — **scope clause superseded by #10**; the CPU-first *ordering* still stands. | 2026-07-07 |
 | 3 | **All security invariants kept as the moat** — capabilities, W^X, no kernel heap (weights/KV in fixed reserved regions), synchronous IPC, minimal TCB, **zero external crates** (inference engine and every driver written in-tree, `no_std`). | 2026-07-07 |
 | 4 | **Formal-proof-maximal** posture — every hostile-input parser fuzzed *and* Kani-checked; proofs on all security-relevant paths; security audit on every component. Honest caveat: maximal assurance under a stated attacker model, **not** a proof of absolute security. | 2026-07-07 |
 | 5 | ~~Apple Silicon deferred / out of scope.~~ **SUPERSEDED by #6.** | 2026-07-08 |
-| 6 | **Apple Silicon is the PRIMARY platform.** Reference deployment: Mac mini M2 (`Mac14,3`, SoC `T8112`, 32 GB unified memory). x86-64 becomes the secondary and **attested** platform, plus the development/CI target. | **2026-08-02** |
+| 6 | **Apple Silicon is the PRIMARY platform.** Reference deployment: Mac mini M2 Pro (`Mac14,12`, SoC `T6020`, 32 GB unified memory). x86-64 becomes the secondary and **attested** platform, plus the development/CI target. | **2026-08-02** |
 | 7 | **INV-BOOT/AS signed off** — remote attestation and sealing are permanently unavailable on the primary platform. Recorded in NORTH_STAR.md. | **2026-08-02** |
 | 8 | **Asahi Linux is reference-only.** Published documentation in, clean-room implementation out. No code copied, regardless of license (m1n1 is MIT, the Asahi kernel is GPL-2.0; the no-vendoring rule forbids both). Running m1n1 as a lab instrument on a development machine is permitted — that is using a tool, not incorporating code. | **2026-08-02** |
+| 9 | **Performance is a product requirement**, ranked below the invariants and above everything else. "We did not optimize because security" is no longer a sufficient answer; slowness needs a named invariant as its justification. Recorded in NORTH_STAR.md. | **2026-08-02** |
+| 10 | **GPU and CPU at maximum.** Apple's **AGX GPU is in scope** — it moves from non-goal to goal. Supersedes decision #2's "GPU deferred" as a *scope* statement; the MVP is still CPU-first as an *ordering* statement. Carries the **pending TCB-AS/GPU exception** (unsigned): AGX requires running Apple's opaque, DMA-capable GPU firmware. | **2026-08-02** |
 
 ### What decision #6 costs, stated plainly
 
@@ -62,7 +64,7 @@ client (host-tested only, Stage A).
 | **AS — Apple Silicon platform** | ADT parser, boot stub, AIC, DART, RTKit, ANS2 NVMe, PCIe, Ethernet | `src/kernel/src/arch/aarch64/apple/`, `src/servers/devd-*/` |
 | **N — Secure serving path** | Inbound listener, authenticated transport, fail-closed request parser, per-client sessions | `src/servers/servd/` + `src/brainix-transport-crypto/`; **replaces** `boot/ssh_bridge.rs` |
 | **I — In-tree inference engine** | `no_std` transformer: tensor kernels, BPE tokenizer, KV cache in fixed regions; confined tenant | `src/servers/inferd/` + `memory/` reserved-region extensions |
-| **G — GPU** | Deferred. AGX is out of scope entirely, so this applies to x86-64 only. | `src/servers/gpud/`, `hal/iommu.rs` |
+| **G — GPU** | **In scope (decision #10).** Capability-bounded `gpud` holding only `CapGpu`; AGX DMA confined by DART; GPU firmware and its completion records treated as hostile input. | `src/servers/gpud/`, `hal/iommu.rs` |
 | **A — store** | Fixed-pool store → session table + serving/audit log | `src/kernel/src/db/` (stages 1–4 done) |
 | **B — auditor** | Observes the serving stack; manifest unchanged (observe-only) | `src/servers/auditd/` |
 | **Caps** | Extend `CapabilityType` (ends at `Frame=10`) with `Serve=11, Model=12, Gpu=13` | `capability/capability_type.rs`; proofs in `src/capability-verify/` |
@@ -98,7 +100,8 @@ with `auditd` observing connect / auth / grant / request / response boundaries.
 | **4** | aarch64 core + QEMU `virt` bring-up harness | P1 | gates AS-1 |
 | **AS-1..3** | Apple boot stub → AIC → DART on real hardware | P4, AS-0 | **primary platform** |
 | **AS-4** | RTKit + ANS2 NVMe + PCIe + Ethernet → serving on the mini | AS-3, P3 | **long pole** |
-| **5** | GPU (INV-GPU) — x86-64 only; AGX out of scope | P3, P1-iommu | deferred |
+| **AS-5** | **AGX GPU** — RTKit GPU endpoint, firmware load, command submission, GPU tensor kernels | AS-4, AS-3 DART proven | **largest single effort** |
+| **5** | GPU on x86-64 (INV-GPU) — discrete accelerator | P3, P1-iommu | deferred |
 | **X** | Proof program, CI, crate burn-down | woven throughout | continuous |
 
 ### Critical path to "the Mac mini serves inference"
@@ -193,7 +196,7 @@ chain and the descoping above.)*
 
 ### Phase AS — Apple Silicon platform *(PRIMARY)*
 
-Target: Mac mini M2, `Mac14,3`, SoC `T8112`. Verdicts carried forward from the P6-T1 memo, re-rated under
+Target: Mac mini M2 Pro, `Mac14,12`, SoC `T6020`. Verdicts carried forward from the P6-T1 memo, re-rated under
 decision #6.
 
 **Development rig required before AS-1:** the mini in Permissive Security (`bputil` from One True
@@ -202,7 +205,7 @@ m1n1 running as a lab instrument on the machine for register exploration and pay
 delivery is `kmutil configure-boot -c <payload> -v <volume>`, which wraps the payload as an Image4 object
 under the machine's Secure-Enclave-held local policy — an Apple-supported, documented flow.
 
-- **AS-1** Boot stub: Image4/kmutil delivery, entry state, own MMU and exception vectors established immediately (inherit nothing), boot-args + ADT consumption, s5l UART console, watchdog reset. **S** impl / **O** review. Deps: AS-0, P4-T2/T4. **Exit criterion: BraiNIX prints its invariant banner over serial on the M2 mini.**
+- **AS-1** Boot stub: Image4/kmutil delivery, entry state, own MMU and exception vectors established immediately (inherit nothing), boot-args + ADT consumption, s5l UART console, watchdog reset. **S** impl / **O** review. Deps: AS-0, P4-T2/T4. **Exit criterion: BraiNIX prints its invariant banner over serial on the M2 Pro mini.**
 - **AS-2** AIC backend + FIQ timer path, feeding `hal/interrupts`. **S** impl / **O** review. Deps: AS-1, P1-T2 stable. Notes: AIC is not a GIC — a single packed event word replaces the GIC ack/EOI pair, per-CPU timers arrive as **FIQ** outside the controller entirely, and IPIs go through implementation-defined system registers. Select the AIC revision from ADT compatible strings at runtime; **fail closed on an unknown string.** Verify: timer IRQ + IPI on hardware.
 - **AS-3** DART (IOMMU) backend feeding `hal/iommu`. **S** impl / **O** proof. Deps: AS-2. Notes: dozens of per-device instances discovered from the ADT, not one translation unit; PTE formats differ across SoC generations. **Every discovered instance defaults to deny-all from the first commit**; unknown variants fail closed; locked-DART semantics represented honestly in the trait rather than papered over. Verify: Kani (driver cannot widen its own window); DMA fault injection.
 - **AS-4a** Storage: RTKit co-processor mailbox protocol + ANS2 NVMe (non-standard, tag-based NVMMU quirks). **S** impl / **O** audit. Deps: AS-3. Verify: weights read from disk on hardware. *Interim unblock: payload-embedded weights let AS-4b and the serving path proceed before this lands.*
@@ -214,10 +217,30 @@ under the machine's Secure-Enclave-held local policy — an Apple-supported, doc
 consume the project." Decision #6 overrides that rating; the underlying cost estimate is unchanged. AS-4a
 and AS-4b are each plausibly larger than AS-0 through AS-3 combined.
 
-### Phase 5 — GPU *(deferred)*
+### Phase AS-5 — AGX GPU *(in scope — decision #10)*
 
-Applies to x86-64 only. Apple's AGX is out of scope per NORTH_STAR.md non-goals, so on the primary platform
-inference is CPU-only indefinitely. P5-T1..T4 unchanged from the original plan; not scheduled.
+**Goal: GPU and CPU at maximum.** The largest single body of work in this plan — larger than the AS-4
+driver chain — and the one whose cost is least well understood, because AGX is the biggest
+reverse-engineering effort on the platform and none of it may be vendored.
+
+**Hard prerequisite: DART confinement must be proven before any firmware is loaded.** INV-GPU is the
+control that makes running Apple's opaque firmware survivable; enforcing it afterward is not an option.
+
+- **AS-5-T0** DART/GPU confinement proof: every DART instance fronting the GPU deny-all by default; Kani proof that `gpud` cannot widen its own window (`INV-DEV-006`). **O**. Deps: AS-3. **Gate for everything below.**
+- **AS-5-T1** RTKit GPU endpoint over the mailbox layer built in AS-4a. **S**. Deps: AS-4a.
+- **AS-5-T2** GPU firmware load and lifecycle. The blob is Apple-signed, closed, and unauditable — the **pending TCB-AS/GPU exception**. Load only behind a proven DART window. **S** impl / **O** audit. Deps: T0, T1. **Blocked until the exception is signed.**
+- **AS-5-T3** Command submission and completion handling. Completion records are **hostile input** — fuzzed and Kani-checked like any network parser (`INV-PARSE-001`). **S**. Deps: T2.
+- **AS-5-T4** GPU tensor kernels: matmul and attention, targeting **prefill** and **multi-client concurrency**, which is where the GPU actually wins. Single-stream decode stays bandwidth-bound and gains less. **S**. Deps: T3, P3-T4.
+- **AS-5-T5** Scheduling policy across CPU and GPU: which work goes where, and how a hung or misbehaving GPU fails closed without stalling the serving path. **S** impl / **O** review. Deps: T4.
+- **AS-5-A** Security audit, including the TCB-AS/GPU exception write-up and a DMA fault-injection campaign. **O**. Gate.
+
+**Honest note.** Apple's GPU firmware runs concurrently with our kernel, for the life of the system, with
+DMA capability, driven by data derived from client requests. That is a materially different trust posture
+from SecureROM and iBoot, which run once at boot and then stop. DART is the entire defense.
+
+### Phase 5 — discrete GPU on x86-64 *(deferred)*
+
+P5-T1..T4 unchanged from the original plan; not scheduled. Superseded in priority by AS-5.
 
 ### Phase X — Continuous
 
@@ -254,7 +277,7 @@ absolute security.
 - **P2:** handshake vectors; parser fuzz soak; 2-client isolation test; cross-session Kani; swtpm predicted == attested (x86-64); P2-A.
 - **P3:** logits parity vs host reference; confinement suite (zero escalations under injection); e2e `bsp-client` → QEMU x86-64 → streamed tokens, 2 isolated clients; P3-A.
 - **P4:** QEMU `virt` aarch64 boot banner; context-switch and syscall tests; per-arch Kani; P4-A.
-- **AS-1..3:** serial-verified boot banner on the M2 mini; timer IRQ and IPI on hardware; DART deny-all default proven and DMA faults injected; AS-A.
+- **AS-1..3:** serial-verified boot banner on the M2 Pro mini; timer IRQ and IPI on hardware; DART deny-all default proven and DMA faults injected; AS-A.
 - **AS-4:** weights loaded from NVMe; NIC TX/RX; e2e remote client → mini → streamed tokens.
 
 ---
@@ -266,7 +289,7 @@ absolute security.
 3. **No contract below boot-args.** Boot-args layout, ADT format, AIC/DART registers, and CPU release sequences are reverse-engineered with zero compatibility promise. Every macOS firmware update is a potential breakage, forever, and we re-derive each fix ourselves. Mitigation: pin a known-good macOS stub on the deployment machine; treat firmware updates as re-qualification events.
 4. **16 KiB pages.** Apple's base page size differs from x86-64's. Any 4 KiB assumption leaking into supposedly architecture-neutral memory code is an INV-MEM defect. Write page-size-parametric from P3-T2 and P4-T2 onward, and test both.
 5. **Inbound is a real posture reversal.** `boot/ssh_bridge.rs` (`static mut` session on 2222, single-core cooperative) is exactly what the threat model forbids at scale — the weakest point in the tree until P2-T6. Fixed pools convert client-driven memory DoS into capacity exhaustion: fail-closed is correct for security but an *availability* loss, so per-client admission limits in servd are load-bearing.
-6. **"No new crates" against building an inference engine plus two platform stacks.** Tokenizer, quantized matmul, RoPE, sampling, weight format, AIC, DART, RTKit, ANS2, PCIe, NIC — all hand-rolled. The soft-float kernel target (P3-T0) touches the TCB. CPU-only on an M2 means the MVP proves the secure datapath, not throughput.
+6. **"No new crates" against building an inference engine plus two platform stacks.** Tokenizer, quantized matmul, RoPE, sampling, weight format, AIC, DART, RTKit, ANS2, PCIe, NIC — all hand-rolled. The soft-float kernel target (P3-T0) touches the TCB. The AGX GPU (AS-5) is the largest of these and the least well understood.
 7. **Audit capacity is the pipeline bottleneck.** Expect audit queues and multi-round fix loops on the hardest proofs (non-interference, DMA non-widening). Mitigation: draft Kani harnesses alongside code; batch audits per wave.
 8. **Clippy is pre-existing red and non-gating** (200+ `arithmetic_side_effects` across the kernel), which hides new lint signal. Scheduled burn-down so it can eventually gate.
 
