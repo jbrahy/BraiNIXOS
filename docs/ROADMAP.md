@@ -31,6 +31,7 @@ planning file it was derived from; do not maintain a roadmap outside the reposit
 | 16 | **PSK transport; no asymmetric crypto in the serving transport.** BSP uses pre-shared per-client keys, HKDF-SHA256 session-key derivation, and ChaCha20-Poly1305 records. In-tree primitive set: **SHA-256, HKDF, ChaCha20, Poly1305**, which deletes `sha2` and `chacha20` — *specified, not shipped: both are still vendored and the in-tree reimplementation has not landed (X-T4).* **Permanent named exception:** the Ed25519 *verification* stack (`ed25519-dalek`, `curve25519-dalek`, `fiat-crypto`, `subtle`) stays vendored, **verify-only**, because INV-BOOT's release signature needs curve25519 field arithmetic and hand-rolling it would *lower* assurance. Cost: **wire compatibility with stock OpenSSH clients is forfeited.** | **2026-08-02** |
 | 17 | **Administration is a BSP admin channel, not a shell.** A second session *type* on the same authenticated PSK transport, gated by a distinct `CapAdmin` (`Admin=14`), exposing a frozen, enumerated set of **exactly six verbs**: enroll-key, revoke-key, load-weights, read-audit-log, restart-server, reboot. There is no `rotate` verb — rotation is enroll-then-revoke. A general-purpose shell is ambient authority under another name and is forbidden. The **serial console is the break-glass path**, and the break-glass admin PSK authenticates over serial and **nowhere else — never over the network**. | **2026-08-02** |
 | 18 | **Keys are runtime-enrolled and ratcheted; no secret ever enters a build artifact.** Enrollment through `boot/credential_store.rs` — virtio-blk on x86-64, ANS2 NVMe on Apple Silicon from AS-4a. Forward secrecy comes from a symmetric HKDF ratchet that deletes the chain key it advanced past; **until the ratchet lands there is no forward secrecy.** **At rest, protection tracks the platform's attestation capability:** the credential store is **specified to be TPM-sealed on x86-64**, where INV-BOOT holds in full, and is **plaintext at rest on Apple Silicon**, recorded as a clause of the existing INV-BOOT/AS exception. Sealing is **specified and unimplemented** — see P2-T13. | **2026-08-02** |
+| 19 | **Wave 2 is this documentation gate, then P1-T2 ∥ BSP v2 spec.** Nothing else is Wave 2. **AS-0 slides to Wave 3** — it is the only former Wave 2 item not on the critical path to P3-T9, and the P6-T1 memo sets the resourcing rule itself: Apple Silicon tasks "are preemptible by any x86-64 MVP task, hold no reserved capacity, and their slippage is never a release consideration." AS-0 is therefore **unreserved, not blocked**: it may run whenever Wave 2 does not need the capacity, and Wave 2 slippage takes that capacity first. Distinct from #13, which gates AS-4/AS-5 and explicitly *permits* AS-0 through AS-3. | **2026-08-02** |
 
 ### What decision #6 costs, stated plainly
 
@@ -60,7 +61,7 @@ THREAT_MODEL, SECURITY_INVARIANTS, BSP, and this file against the 2026-08-02 dec
 parallel tracks that share no code: P1-T2 ∥ P2-T1 (BSP v2 spec)**. Nothing else is Wave 2.
 
 **Wave 3 — AS-0** (Apple Device Tree parser). AS-0 slid out of Wave 2 because it is the only former
-Wave 2 item **not on the critical path to P3-T9** (decision #13), and because the P6-T1 memo sets the
+Wave 2 item **not on the critical path to P3-T9** (decision #19), and because the P6-T1 memo sets the
 resourcing rule itself: Apple Silicon tasks "are preemptible by any x86-64 MVP task, hold no reserved
 capacity, and their slippage is never a release consideration."
 
@@ -112,7 +113,7 @@ with `auditd` observing connect / auth / grant / request / response boundaries.
 |---|---|---|---|
 | **0** | NORTH_STAR / THREAT_MODEL rewrite | — | **DONE** |
 | **1** | HAL extraction — multi-arch becomes possible; x86-64 behavior byte-identical | none | **NEXT** (Wave 2) |
-| **AS-0** | Apple Device Tree parser (host-side, fuzz + Kani) | none | **Wave 3** (decision #13) |
+| **AS-0** | Apple Device Tree parser (host-side, fuzz + Kani) | none | **Wave 3** (decision #19) |
 | **2** | Secure inbound serving path + capability extensions | P1 | arch-neutral; P2-T1 is Wave 2 |
 | **3** | In-tree CPU inference — architecture-neutral serving engine | P2, P1-fpu | arch-neutral |
 | **4** | aarch64 core + QEMU `virt` bring-up harness | P1 | gates AS-1 |
@@ -165,7 +166,7 @@ Gates the primary platform. Nothing Apple-specific can begin until the seam exis
 ### Phase AS-0 — Apple Device Tree parser *(Wave 3)*
 
 No hardware, no HAL dependency. Rated **GO** by the research memo and "useful even if the stream stops
-here." **Moved from Wave 2 to Wave 3 by decision #13**: it is the only former Wave 2 item not on the
+here." **Moved from Wave 2 to Wave 3 by decision #19**: it is the only former Wave 2 item not on the
 critical path to P3-T9, and the memo's resourcing rule is that Apple Silicon tasks "are preemptible by any
 x86-64 MVP task, hold no reserved capacity." It is not blocked — it is unreserved, and any Wave 2 slippage
 takes its capacity first.
@@ -179,17 +180,18 @@ takes its capacity first.
 
 - **P2-T1** **BSP v2 protocol spec — RE-OPENED, and it is Wave 2.** ~~BSP v1 protocol spec — DONE (`670e072`)~~ — v1's signature-over-ephemeral-key-agreement handshake is superseded by decision #16's pre-shared-key transport. Deliverable: [`architecture/BSP-v2-serving-protocol.md`](architecture/BSP-v2-serving-protocol.md), covering the PSK handshake, the HKDF-SHA256 key schedule, the retained record layer, the ratchet, and **both session types** (client and admin). **O**. Verify: spec precise enough to drive Kani harnesses and fuzz targets against every parser and every state transition.
 - **P2-T2** Factor `ssh/` primitives into `src/brainix-transport-crypto/` (`no_std`) + server-side handshake. **Shrunk by decision #16**: no curve arithmetic, no key agreement, no signature verification on this path — the deliverable is the **PSK handshake FSM, HKDF-SHA256 derivation, and the ChaCha20-Poly1305 record layer**, over the in-tree primitive set (SHA-256, HKDF, ChaCha20, Poly1305). **O**. Deps: T1. Verify: Kani (no-panic, length-checked), fuzz handshake FSM, test vectors.
-- **P2-T3** Fail-closed BSP request parser (`servd/src/parser.rs`, `no_std`, zero-alloc, bounded). **S**. Verify: `fuzz_servd_request_parser` + Kani + audit — **INV-SERVE**.
+- **P2-T3** Fail-closed BSP request parser (`servd/src/parser.rs`, `no_std`, zero-alloc, bounded). **S**. Deps: T1 — it parses the wire format T1 now redefines. Verify: `fuzz_servd_request_parser` + Kani + audit — **INV-SERVE**.
 - **P2-T4** `servd`: accept via `transportd`, session manager, per-client frozen capability set. **Both session types** (decision #17): a session is a client session holding `CapServe` or an admin session holding `CapAdmin`, decided at accept and frozen there; nothing promotes one into the other. **S**. Deps: T1, T2, T3, T5. Verify: 2-concurrent-session integration; cross-naming denied; a client session cannot reach an admin verb.
 - **P2-T5** Capability extensions `Serve`/`Model`/`Gpu`/**`Admin`** + grant/derive/revoke rules; extend `src/capability-verify/`. `Admin=14` follows `Serve=11, Model=12, Gpu=13` and is a distinct grant, never derivable from `CapServe` (decision #17). **O** — INV-AUTH, Full tier. Verify: Kani green, including no derivation path from `CapServe` to `CapAdmin`.
 - **P2-T6** Delete `boot/ssh_bridge.rs` `static mut` session globals; route inbound via servd + capability IPC only. **S**. Deps: T4. Verify: grep-gate (no `static mut` session state); connect e2e.
 - **P2-T7** Reframe `db/` for the session table + serving log (fixed pools) + cross-session non-interference Kani. **S** build / **O** proof. Deps: T5. Verify: Kani — no session row readable via another session's capability.
-- **P2-T8** `auditd` extension: subscribe to serving events; manifest unchanged. **S**. Deps: T4. Verify: manifest diff = zero new capabilities (INV-AUDIT); CTF corpus ≥ 95% TP.
+- **P2-T8** `auditd` extension: subscribe to serving events; manifest unchanged. **Admin-session events are in scope** (decision #17): connection accept, selector match or no-match, authentication success or failure, capability grant, **every admin verb**, every denial, and teardown, carrying the credential handle and session id and **never** key material, prompt bytes, or token bytes. Observing an admin verb grants no authority to observe it. **S**. Deps: T4, T14. Verify: manifest diff = zero new capabilities (INV-AUDIT); every verb and every rejection path in T14 produces exactly one attributable event; CTF corpus ≥ 95% TP.
 - **P2-T9** ~~vTPM closure~~ — **DONE** (`c01d0ab`). **x86-64 only**; has no analogue on the primary platform (INV-BOOT/AS).
 - **P2-T10** Fuzz corpus + targets (handshake, parser, session state) into CI. **H** scaffold / **S** corpus. Deps: T2, T3.
-- **P2-T11** Host-side test client `tools/bsp-client/` (std, zero crates), **driving both session types**. Grows the admin verb set of decision #17 — **exactly six verbs**: enroll-key, revoke-key, load-weights, read-audit-log, restart-server, reboot. The set is frozen and compile-time-enumerated; there is **no `rotate` verb** (rotation is enroll-then-revoke), no `set-config`, no file or exec verb, and no verb that adds, removes, or widens a capability. The client exercises every verb and every rejection path. **H**. Deps: T1, T4.
+- **P2-T11** Host-side test client `tools/bsp-client/` (std, zero crates), **driving both session types**. Grows the admin verb set of decision #17 — **exactly six verbs**: enroll-key, revoke-key, load-weights, read-audit-log, restart-server, reboot. The set is frozen and compile-time-enumerated; there is **no `rotate` verb** (rotation is enroll-then-revoke), no `set-config`, no file or exec verb, and no verb that adds, removes, or widens a capability. The client exercises every verb and every rejection path against the T14 dispatcher. **H**. Deps: T1, T4, T14.
 - **P2-T12** Runtime key enrollment + HKDF ratchet (decision #18). Extend `src/kernel/src/boot/credential_store.rs` to enroll and revoke client and admin pre-shared keys at runtime, persisting through `src/kernel/src/arch/virtio_blk.rs` on x86-64 and to ANS2 NVMe on Apple Silicon from AS-4a; **no secret is ever compiled in** — `src/kernel/src/ssh/client_identity.rs:21` (`const CLIENT_KEY_SEED`) is an acknowledged dev seed and is no longer the model. Forward secrecy comes from a symmetric HKDF chain: session key *n* is derived from chain key *n*, the chain advances, and chain key *n* is zeroized — derivation and advance are one operation with no path that does either alone. **The break-glass admin PSK is provisioned over the serial console and authenticates over serial only; the network listener refuses it outright** (decision #17), so a compromised admin session can neither revoke nor replace it. **O**. Deps: T1, T4, T5. Verify: recorded-traffic test — material captured after an advance must not decrypt records sealed before it; enrollment/revocation are attributable audit events; grep-gate on compile-time key material.
-- **P2-T13** Credential store at rest (decision #18) — **split by platform, and stated as unbuilt today**. *x86-64:* seal the credential store to the TPM against the measured boot state established by P2-T9, so a stolen disk does not yield the keys. This is **specified and unimplemented**; the store persists to virtio-blk and seals nothing. *Apple Silicon (primary):* the store is **plaintext at rest, permanently** — a clause of the existing INV-BOOT/AS exception. Sealing binds a secret to a measured boot state, and the platform has neither the measurement nor the hardware to bind against; there is no version of this task that closes the gap there. **O**. Deps: T12, P2-T9. Verify (x86-64 only): sealed blob does not unseal under a divergent PCR set; the release notes state the primary platform's plaintext-at-rest exposure plainly.
+- **P2-T13** Credential store at rest (decision #18) — **split by platform, and stated as unbuilt today**. *x86-64:* seal the credential store to the TPM against the measured boot state established by P2-T9, so a stolen disk does not yield the keys. This is **specified and unimplemented**; the store persists to virtio-blk and seals nothing. *Apple Silicon (primary):* the store is **plaintext at rest, permanently** — a clause of the existing INV-BOOT/AS exception. Sealing binds a secret to a measured boot state, and the platform has neither the measurement nor the hardware to bind against; there is no version of this task that closes the gap there. **O**. Deps: T12, P2-T9. Verify (x86-64 only): sealed blob does not unseal under a divergent PCR set; the release notes state the primary platform's plaintext-at-rest exposure plainly. **P2-A is satisfied on the primary platform by the INV-BOOT/AS clause, not by the work** — there is no Apple Silicon deliverable here to audit, and the gate passes on the exception being correctly recorded and restated in the release notes.
+- **P2-T14** Server-side admin verb dispatch in `servd` — the other half of decision #17, and the thing P2-T11 drives. A compile-time enumeration of **exactly six** handlers, reachable only from a session holding `CapAdmin`, with no command interpreter, no path or filename anywhere in the surface, and no handler that adds, removes, or widens a capability. `enroll-key` / `revoke-key` delegate to the T12 credential store and both refuse the break-glass handle unconditionally and non-configurably. `load-weights` names a **measured digest and never a path or a byte stream** — the blob does not travel over BSP — and activates the blob the P3-T3 loader measured; until P3-T3 lands it fails closed rather than accepting anything. `read-audit-log` is a bounded, read-only cursor over the T7 store; reading grants no authority. `restart-server` takes an **enumerated server identity**, never a name, and relaunches with the target's existing frozen manifest, minting nothing. `reboot` tears down the admin session before proceeding. **O** — this is the network-reachable administrative surface. Deps: T4, T5, T7, T12. Verify: fuzz + Kani on the verb decoder (**Full tier — a hostile-input parser**); grep-gate that the handler table has exactly six entries and no `rotate`; a `CapServe` session reaches none of them; every verb and denial emits an attributable event (T8).
 - **P2-A** Security audit. **O**. Gate.
 
 ### Phase 3 — In-tree CPU inference *(architecture-neutral)*
@@ -309,19 +311,13 @@ The six artifacts are:
 5. **Security audit report** — zero known vulnerabilities, every `unsafe` block justified, constant-time review for key material.
 6. **No-regression bars** — auditd ≥ 95% TP, crate count non-increasing, no `static mut` outside the audited allowlist, grep-gates hold.
 
-Which of them a component owes depends on its tier:
-
-- **Full tier — all six.** The TCB, every hostile-input parser wherever it lives, and all crypto.
-- **Reduced tier — artifacts 1, 2 where a parser exists, 5, and 6.** No Kani, no Prusti. Capability-bounded
-  servers whose compromise the capability model contains.
-
-**The authoritative per-component tier assignment is the table in
-[`security/SECURITY_INVARIANTS.md`](security/SECURITY_INVARIANTS.md) §16, and this roadmap does not restate
-it.** Tier is read off that table at design time; it is not a per-component judgment made at implementation
-time. Two consequences worth stating here because they cut against intuition: a hostile-input parser is
-Full tier even inside a Reduced-tier server, and a proof's tier follows the thing being proven rather than
-the thing being protected — the `INV-DEV-006` no-widening proof is an obligation of the HAL IOMMU trait,
-not of `gpud`. A component absent from that table is **unassessed**, not Reduced.
+**Which of them a component owes is decided by
+[`security/SECURITY_INVARIANTS.md`](security/SECURITY_INVARIANTS.md) §16 and nowhere else.** That section
+defines the tiers, states their corollaries, and assigns every component; **this roadmap deliberately
+restates none of it**, because two documents stating the same rule in different words is how this gate's
+conflict arose. Tier is read off that table at design time — it is not a per-component judgment made at
+implementation time — and a component absent from it is **unassessed**, not Reduced. Read §16 before
+planning any component's proof work.
 
 **Per-release whole-system audit:** end-to-end over the TCB (kernel, boot stub, capability, IPC, HAL
 backends in use), the full serving datapath, all manifests, and the reproducible build. On x86-64 this
@@ -371,7 +367,7 @@ Close this documentation gate first. Then two Wave 2 tasks start in parallel, sh
 1. **P1-T2** — move `arch/*` → `arch/x86_64/` behind the HAL traits, zero behavior change. Single-owner for `arch/`.
 2. **P2-T1** — the BSP v2 protocol spec: PSK handshake, HKDF-SHA256 key schedule, retained record layer, ratchet, and both session types. Design only; no implementation.
 
-**AS-0-T1/T2 is Wave 3** (decision #13) — unblocked but unreserved, and any Wave 2 slippage takes its
+**AS-0-T1/T2 is Wave 3** (decision #19) — unblocked but unreserved, and any Wave 2 slippage takes its
 capacity first.
 
 Before AS-1 can begin, the hardware rig must exist: the Mac mini M2 in Permissive Security, a debug UART
