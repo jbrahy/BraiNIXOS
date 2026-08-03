@@ -57,6 +57,7 @@ const fn floats_per_call(config: &ModelConfig) -> Result<usize, TransformerError
 /// # use brainix_transformer::{workspace_floats, ModelConfig};
 /// # use brainix_tensor::RopePairing;
 /// const CONFIG: ModelConfig = ModelConfig {
+///     architecture_id: 1,
 ///     layer_count: 2, model_width: 32, query_head_count: 4,
 ///     key_value_head_count: 2, head_width: 8, feed_forward_width: 64,
 ///     vocabulary_size: 48, maximum_sequence_length: 16,

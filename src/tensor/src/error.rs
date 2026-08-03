@@ -92,6 +92,15 @@ pub enum TensorError {
     /// the one case that is not disambiguated.
     InvalidRopePairing,
 
+    /// A row index is not less than the matrix's `n_out`.
+    ///
+    /// Raised by [`Q8Weights::dequantize_row_into`](crate::Q8Weights::dequantize_row_into),
+    /// which is a lookup rather than a whole-tensor operation and so is the one
+    /// place in this crate where a caller supplies an index at all. Refused
+    /// rather than wrapped or clamped: a clamped token identifier would select
+    /// some other token's embedding and decode fluently from it.
+    RowOutOfRange,
+
     /// The RoPE position exceeds [`MAX_ROPE_POSITION`](crate::MAX_ROPE_POSITION).
     ///
     /// A stated accuracy bound, not a capacity one: beyond it the argument

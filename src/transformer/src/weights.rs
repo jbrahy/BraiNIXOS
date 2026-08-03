@@ -21,18 +21,24 @@
 //! consumer downstream of that seam — this crate included — sees typed slices
 //! and never re-derives the argument.
 //!
-//! # Q8_0 token embeddings are not servable, and this is a tensor-crate gap
+//! # Q8_0 token embeddings: the kernel gap is closed, this crate's is not
 //!
-//! BXW1 §6.2 permits `tok_embeddings.weight` to be `Q8_0`. The embedding lookup
-//! needs **one row** of it, and `brainix_tensor::Q8Weights` exposes no per-row
-//! accessor — only `dequantize_into`, which materializes the whole
-//! `vocab × d_model` matrix and would need a buffer 3.56× the tensor's stored
-//! size, which is precisely what `Q8_0` exists to avoid and what `INV-MEM`
-//! forbids. [`ModelWeights::token_embeddings`] is therefore `&[f32]`, and a
-//! `Q8_0` embedding table cannot be served today. Closing it is a one-accessor
-//! change to `brainix_tensor` (`Q8Weights::row(index)`), out of scope here.
+//! BXW1 §6.2 permits `tok_embeddings.weight` to be `Q8_0`, and the embedding
+//! lookup needs **one row** of it. Materializing the whole `vocab × d_model`
+//! matrix to reach that row would need a buffer 3.56× the tensor's stored size,
+//! which is precisely what `Q8_0` exists to avoid and what `INV-MEM` forbids.
+//! `brainix_tensor::Q8Weights::dequantize_row_into` now dequantizes a single row
+//! into a caller-supplied slice, so the kernel-side gap no longer exists.
 //!
-//! Every *projection*, including a tied logit projection, takes either dtype.
+//! **This crate has not taken it up.** [`ModelWeights::token_embeddings`] is
+//! still `&[f32]` and [`Model::embed`](crate::Model) still copies a row, so a
+//! `Q8_0` embedding table is still not servable *here*; what changed is that
+//! closing it is now a change to this crate alone. Doing so is not free — a
+//! dequantized row is `d_model` floats that must land somewhere, which means a
+//! workspace view and a sizing change — so it is named rather than assumed.
+//!
+//! Every *projection*, including a tied logit projection through the embedding
+//! table, already takes either dtype: a projection is a matmul, not a lookup.
 
 use brainix_tensor::{matmul_f32, matmul_q8_0, MatMulShape, Q8Weights};
 
@@ -194,7 +200,7 @@ pub struct ModelWeights<'a> {
     /// `tok_embeddings.weight`, `[vocab_size, d_model]`, row-major.
     ///
     /// `F32` only — see the module documentation for why a `Q8_0` embedding
-    /// table cannot be served today and what would close the gap.
+    /// table is not servable through this crate and what taking it up costs.
     pub token_embeddings: &'a [f32],
     /// Exactly `n_layers` blocks, in order.
     pub layers: &'a [LayerWeights<'a>],

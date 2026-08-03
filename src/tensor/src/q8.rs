@@ -259,4 +259,81 @@ impl<'a> Q8Weights<'a> {
         }
         Ok(())
     }
+
+    /// Dequantizes **one row** into a caller-supplied `n_in`-long slice.
+    ///
+    /// This is the accessor a token-embedding lookup needs, and the reason it
+    /// exists rather than being expressed through
+    /// [`Q8Weights::dequantize_into`]: BXW1 §6.2 permits
+    /// `tok_embeddings.weight` to be `Q8_0`, and the embedding of one token is
+    /// one row of a `[vocab_size, d_model]` matrix. Reaching that row through
+    /// the whole-matrix path would materialize `vocab_size × d_model` floats —
+    /// 3.56× the tensor's stored size, in a buffer nothing here may allocate
+    /// (`INV-MEM`) — in order to read `d_model` of them. Without this accessor a
+    /// `Q8_0` embedding table is format-legal and unservable.
+    ///
+    /// **It reads only the row.** Each plane is cut at `row × stride` and no
+    /// other byte is touched, so the traffic is `n_in × 1.125` bytes and the
+    /// work is `n_in` multiplies, both independent of `n_out`. It allocates
+    /// nothing and owns nothing.
+    ///
+    /// The arithmetic is the same normative BXW1 §4.2 formula
+    /// [`Q8Weights::dequantize_into`] applies, over the same bytes in the same
+    /// order, so the two agree element for element on every row — `tests/edges.rs`
+    /// asserts that bit for bit rather than leaving the two derivations to drift.
+    ///
+    /// # Errors
+    ///
+    /// - [`TensorError::RowOutOfRange`] if `row` is not less than `n_out`.
+    /// - [`TensorError::ShapeMismatch`] if `out.len()` is not exactly `n_in`,
+    ///   **in either direction** — a short slice would truncate the row, and a
+    ///   long one means the caller and the shape disagree (BXW1 §7.5).
+    /// - [`TensorError::DimensionOverflow`] if a plane offset overflows.
+    /// - [`TensorError::MalformedPayload`] if a plane slice or a scale could not
+    ///   be read, which the constructor's length check makes unreachable.
+    ///
+    /// Nothing is written on any error path: both agreements are established
+    /// before the first output element.
+    pub fn dequantize_row_into(&self, row: usize, out: &mut [f32]) -> Result<(), TensorError> {
+        if row >= self.n_out {
+            return Err(TensorError::RowOutOfRange);
+        }
+        if out.len() != self.n_in {
+            return Err(TensorError::ShapeMismatch);
+        }
+
+        let scale_start = row
+            .checked_mul(self.scale_stride)
+            .ok_or(TensorError::DimensionOverflow)?;
+        let scale_end = scale_start
+            .checked_add(self.scale_stride)
+            .ok_or(TensorError::DimensionOverflow)?;
+        let quant_start = row
+            .checked_mul(self.quant_stride)
+            .ok_or(TensorError::DimensionOverflow)?;
+        let quant_end = quant_start
+            .checked_add(self.quant_stride)
+            .ok_or(TensorError::DimensionOverflow)?;
+
+        let scale_row = self
+            .scales
+            .get(scale_start..scale_end)
+            .ok_or(TensorError::MalformedPayload)?;
+        let quant_row = self
+            .quants
+            .get(quant_start..quant_end)
+            .ok_or(TensorError::MalformedPayload)?;
+
+        for ((scale_bytes, quant_block), out_block) in scale_row
+            .chunks_exact(SCALE_BYTES)
+            .zip(quant_row.chunks_exact(Q8_0_BLOCK))
+            .zip(out.chunks_exact_mut(Q8_0_BLOCK))
+        {
+            let scale = read_f32_le(scale_bytes).ok_or(TensorError::MalformedPayload)?;
+            for (quant, slot) in quant_block.iter().zip(out_block.iter_mut()) {
+                *slot = scale * f32::from(*quant as i8);
+            }
+        }
+        Ok(())
+    }
 }

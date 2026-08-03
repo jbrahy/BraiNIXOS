@@ -348,6 +348,17 @@ Given the storage convention of §6.1 — weight matrices are `[out_features,
 in_features]`, row-major — this is exactly the requirement that
 `in_features % 32 == 0`.
 
+**The inter-plane pad MUST be zero, and that is rule D21.** The `0..127` bytes
+the diagram labels "zero pad" are a normative requirement on the producer and a
+checked property in the loader, not an artist's impression of the offset
+arithmetic. The rule is enumerated in §7.4 alongside the other pads rather than
+left to the diagram, because this pad differs from all of them in one respect
+that matters: it lies **inside** a tensor's extent, and therefore inside the
+region its `digest` covers. Bytes that are covered by a digest but validated by
+nothing are a place to hide data that survives the integrity check — the digest
+commits to them faithfully and never objects — which is precisely the accounting
+hole §3's "every byte of the blob is accounted for" exists to close.
+
 **Dequantization, normative:**
 
 ```
@@ -452,6 +463,20 @@ before any mapping.** It is emphatically **not** rounded up. Rounding a
 misaligned offset is the silent-corruption path: it would shift every subsequent
 extent relative to the digests that were computed over the unshifted bytes, and
 produce a model that loads, verifies, and computes wrong numbers.
+
+**`total_size` MUST be a multiple of `BXW1_ALIGN`, and that is a producer
+obligation.** Two rules force it and neither says the words: rule D18 requires
+the final extent's end **rounded up to `BXW1_ALIGN`** to equal `total_size`, and
+rule H11 requires `tensor_data_off + tensor_data_len` to equal `total_size`
+exactly. Together they admit only blobs whose total length is a multiple of 128,
+with the trailing bytes present and zero (rule D19). It is stated here because a
+producer reading §3 and §4 in the ordinary way will not derive it — it will size
+the file to the last extent's end, emit a blob whose `total_size` is whatever
+that came to, and be refused by every conforming loader for a reason no rule it
+read named. **A producer therefore pads the file up to the next multiple of 128
+with zero bytes and sets `total_size` to the padded length.** The rules are not
+relaxed to accept the unpadded form: "accept either the exact end or its
+round-up" would admit a trailing region whose length no rule bounds.
 
 ### 4.5 The bandwidth arithmetic that chose Q8_0
 
@@ -616,8 +641,9 @@ mean, which is the minimum for those tasks to be unambiguous.
 | `1` | `BXW1_ARCH_DECODER_ROPE_GQA_SWIGLU` | Decoder-only transformer: pre-normalization RMSNorm, rotary position embedding, grouped-query attention, SwiGLU feed-forward, untied or tied output projection |
 | any other | — | **DENY** |
 
-`arch_id` selects the required tensor-name set of §6.2 and nothing else. The
-cost is explicit: **the format describes one architecture family.** Encoder
+`arch_id` selects the required tensor-name set of §6.2 and the architecture
+conventions §5.6 makes it responsible for — today, the attention score scale —
+and nothing else. The cost is explicit: **the format describes one architecture family.** Encoder
 stacks, mixture-of-experts routing, learned positional embeddings, and attention
 biases cannot be expressed at all — not "are unsupported and ignored," but have
 no field. A second family is a new `arch_id`, a new name set, and new kernels,
@@ -729,6 +755,57 @@ byte-identical tensors and differ only in how the engine reads them. A converter
 that guesses is exactly the failure this field exists to prevent, moved one
 layer earlier — so the converter's obligation is to carry the value forward from
 the source framework's own convention, never to infer it.
+
+### 5.6 The attention score scale is determined by `arch_id`
+
+*Added 2026-08-03, closing the ambiguity P3-T6 raised. **No header field was
+added**, and the last paragraph is why.*
+
+§5.1 pins `rope_theta` as a base and `norm_eps` as living inside the root, and
+§5's closing paragraph assigns operator semantics to P3-T4 and P3-T6 — but no
+earlier section says how an attention score is normalized before the softmax.
+That is the same failure class as `rope_pairing` (§5.5) and as the tokenizer's
+pre-tokenizer: the wrong constant does not crash and does not deny. It changes
+the sharpness of every attention distribution in the model, so the engine runs
+and produces fluent, confident, wrong text, and no kernel test detects it.
+
+**The scale is a property of the architecture family, and `arch_id` is what
+names the family:**
+
+| `arch_id` | Attention score normalization |
+|--:|---|
+| `1` (`BXW1_ARCH_DECODER_ROPE_GQA_SWIGLU`) | `scores[p] = (q · k_p) × d_head^(−1/2)`, applied to the dot product of the **rotated** query and key, before the softmax. `d_head` is the header field — **not** `rope_dim`, and not the concatenated width `n_heads × d_head` |
+| any other | **Unspecified.** DENY (§7.2 rule H13) |
+
+`1/√d_head` is uniform across the LLaMA family `arch_id = 1` describes: one
+scale for the whole model, the same for every layer and every head, not learned,
+not carried in the weights, and not modified by grouped-query attention — a
+query head reading a shared key/value head scales exactly as one reading its own.
+There is no logit soft-cap and no per-layer scale, because `arch_id = 1` has
+neither; a family that has one is a different `arch_id`, a different row in the
+table above, and new kernels.
+
+**An `arch_id` whose scale convention is unspecified fails closed at load**, and
+it does so through a rule that already exists: H13 denies any `arch_id` not in
+§5.2's enumerated set, before any hyperparameter is used. There is no path on
+which an engine reaches the scale for an architecture this table does not cover,
+because there is no path on which such a blob is loaded at all. The order is
+load-bearing in the same way §5.5's is: the refusal happens at load, not at the
+first token, and there is no "unknown architecture, assume `1/√d_head`" fallback
+— that assumption is exactly what this section exists to stop being made
+silently.
+
+**Why this is spec text and not a fourth header field.** `arch_id` is the
+format's existing extension point for architecture conventions, it is already
+mandatory, already enumerated, and already fails closed on an unrecognised value.
+A `attn_scale_kind` field would be a fourth "get this wrong and the model
+silently degrades" value for a converter to fill in, carrying its own DENY rule
+and its own zero-value trap, to express something the value beside it already
+determines — two fields that can disagree where there was one that could not.
+That is redundancy, not defence in depth: `rope_pairing` earned a field because
+it is a property of **the weight file** that two blobs with the same `arch_id`
+can differ on (§5.5), and the attention scale is not — it is a property of the
+architecture, fixed for every model in the family.
 
 ---
 
@@ -904,9 +981,10 @@ console-bound value, and not an index (`INV-MODEL-003`).
 | D15 | Record 0: `data_off ≠ tensor_data_off` | DENY. No unaccounted gap before the first extent |
 | D16 | Record `i > 0`: `data_off[i] < data_off[i-1] + data_len[i-1]` | DENY. This is the overlap check, and because extents are required to be **strictly ascending**, it costs one `u64` of carried state and no scratch proportional to `tensor_count` |
 | D17 | Record `i > 0`: `data_off[i] − (data_off[i-1] + data_len[i-1]) ≥ BXW1_ALIGN` | DENY. A gap larger than the maximum alignment pad is unaccounted space |
-| D18 | The final extent's end, rounded up to `BXW1_ALIGN`, ≠ `total_size` | DENY. No unaccounted trailing region |
+| D18 | The final extent's end, rounded up to `BXW1_ALIGN`, ≠ `total_size` | DENY. No unaccounted trailing region. With H11 this makes `total_size` a multiple of `BXW1_ALIGN`; §4.4 states that consequence as an explicit producer obligation, since it is derivable from these two rules but stated by neither |
 | D19 | Any pad byte — between the table and the first extent, between extents, or after the last — nonzero | DENY. Together with D15–D18 this is what makes "every byte of the blob is accounted for" (§3) a checked property rather than a description |
 | D20 | `reserved_a` or `reserved_b` nonzero | DENY |
+| D21 | Any byte of a `Q8_0` tensor's **inter-plane** pad — the `0..127` bytes between the scale plane's end and `quant_off` (§4.2) — nonzero | DENY. Enumerated separately from D19 because this pad is **inside** an extent and therefore inside the region that extent's `digest` covers. Unvalidated bytes under a digest are a place to hide data that survives the integrity check: the digest commits to them and never objects. Cost: a converter that leaves the pad dirty produces a blob every conforming loader refuses, which is the correct side to err on |
 
 ### 7.5 Content rules (checked during the digest pass)
 
@@ -1244,7 +1322,7 @@ occur.
 | **S4** | Compute SHA-256 over the table bytes and compare to `tensor_table_digest` (C1). **This precedes any use of record contents beyond bounds checking** | DENY, zeroize |
 | **S5** | Validate every record in index order, carrying one `u64` of extent state (§7.3, §7.4) | DENY, zeroize |
 | **S6** | Resolve the required name set for `arch_id`; check completeness, exactness, and every §5.3 shape cross-check (T6, T7, C8) | DENY, zeroize |
-| **S7** | One pass over the payload: compute the whole-blob SHA-256 and every per-tensor SHA-256, validate every `Q8_0` scale and every `F32` element bit pattern, and verify every pad byte is zero (C2, C3, C4, D19) | DENY, zeroize |
+| **S7** | One pass over the payload: compute the whole-blob SHA-256 and every per-tensor SHA-256, validate every `Q8_0` scale and every `F32` element bit pattern, and verify every pad byte is zero — the pads between extents and after the last, and every `Q8_0` inter-plane pad (C2, C3, C4, D19, D21) | DENY, zeroize |
 | **S8** | Compare the whole-blob digest to the digest named by `LoadWeights` (C5), **and** verify the detached Ed25519 signature over that digest against the weights-signing public key (C9, §9.2) | DENY, zeroize |
 | **S9** | Verify the tokenizer blob's length and digest, then its entry count against `vocab_size` (C6, C7) | DENY, zeroize |
 | **S10** | **Seal** the region read-only and non-executable | — |
@@ -1335,6 +1413,52 @@ succeeds. §7.1 item 4's "the previous generation stays active" holds for a load
 that is refused *before* teardown begins; it cannot hold across a teardown, and
 claiming otherwise would require a second region the memory budget (§8.2) does
 not have.
+
+### 10.6 The `&[u8]` → `&[f32]` seam `modeld` owes
+
+*Recorded 2026-08-03 from P3-T6. Nothing below is implemented — there is no
+`modeld` (§11) — and this subsection records an obligation, not a mechanism.*
+
+A tensor payload is bytes: a loader hands out `&[u8]`, because that is what a
+verified extent inside the region is. The `F32` matmul consumes `&[f32]`. Some
+component must turn one into the other, and there are exactly three ways to do
+it: a reinterpreting cast, a copy into an `f32` buffer, or a byte-backed `f32`
+kernel. The copy is a second full-size buffer, which `INV-MEM` forbids at
+weight scale. The byte-backed kernel would put a per-element load-and-assemble in
+the innermost loop of the most bandwidth-bound code in the system. So the cast is
+the answer, and the only question is where it lives.
+
+**It belongs in `modeld`, in one audited place, at the point where a verified
+blob becomes a servable model.** That is the only point in the system where all
+three of its preconditions are simultaneously known and checked rather than
+assumed:
+
+- **Alignment.** The region base is page-aligned and every `data_off` is
+  128-byte aligned and *verified* so (rule D11, §4.4) — but that fact is
+  established by the load, so only a component that ran the load holds it. A
+  kernel crate handed a loose slice cannot re-derive it.
+- **Endianness.** §2 fixes the format little-endian and the target is
+  little-endian, so the reinterpretation is the identity rather than a byte swap.
+  That is a statement about the port, and the port is a property of the system
+  image, not of a host-testable kernel crate.
+- **Extent.** The byte length is a multiple of four and agrees with the shape the
+  header and the table both declare (§4.3, §5.3) — again a conclusion of the
+  load, not of the slice.
+
+It belongs in **neither crate at the ends of the seam**, and for opposite
+reasons. `brainix_tensor` and `brainix_transformer` are `#![forbid(unsafe_code)]`
+and architecture-neutral by construction — they are host-testable precisely
+because they know nothing about a region, a page size, or a target's byte order,
+and admitting the cast would trade that away for a fact they cannot check. A
+loader crate could hold it, but the loader's job ends at "these bytes are
+verified"; handing out typed views is a statement about the machine that will
+compute on them. Splitting the cast across both, or repeating it per consumer, is
+the failure mode worth naming: **one seam can be audited, proved, and pointed
+at; several cannot**, and the third one to be written is the one that skips a
+precondition because the first two "already checked it".
+
+The consequence for every consumer downstream, this document's readers included:
+they see typed slices and never re-derive the argument. `modeld` owes the seam.
 
 ---
 

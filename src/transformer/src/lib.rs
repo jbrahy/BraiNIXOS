@@ -72,6 +72,7 @@
 //! };
 //!
 //! const CONFIG: ModelConfig = ModelConfig {
+//!     architecture_id: 1,
 //!     layer_count: 2,
 //!     model_width: 32,
 //!     query_head_count: 4,
@@ -113,8 +114,8 @@
 //! No batching across sessions, no continuous batching, no speculative decode,
 //! no paged attention. Those trade client isolation or fixed memory for
 //! throughput, and NORTH_STAR forbids both trades. No `Q8_0` token-embedding
-//! table either — see [`weights`] for why that one is a `brainix_tensor` gap
-//! rather than a design choice.
+//! table either — the kernel it needed now exists, and taking it up is a change
+//! to this crate that has not been made; see [`weights`].
 
 #![no_std]
 #![forbid(unsafe_code)]

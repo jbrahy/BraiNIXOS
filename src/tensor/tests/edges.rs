@@ -579,6 +579,93 @@ fn q8_refuses_a_payload_of_the_wrong_length_in_either_direction() {
     assert!(Q8Weights::new(&vec![0_u8; exact], 3, 64).is_ok());
 }
 
+// ------------------------------------------------------- Q8_0 per-row access
+
+#[test]
+fn q8_row_dequantization_agrees_with_the_whole_matrix() {
+    // The property that makes the row accessor safe to use for a token
+    // embedding: it must be the same arithmetic over the same bytes as the
+    // whole-matrix path, not merely close to it. Asserted with `assert_eq!` on
+    // the floats — a one-ulp difference would mean the two derivations of the
+    // plane offsets had drifted, which is exactly the bug worth catching.
+    let mut rng = Rng::new(0x0110_0001);
+    for (n_out, n_in) in [(1_usize, 32_usize), (7, 32), (3, 64), (48, 32), (2, 1024)] {
+        let values = rng.vector(n_out * n_in, 1.5);
+        let payload = quantize_q8_0(&values, n_out, n_in);
+        let weights = Q8Weights::new(&payload, n_out, n_in).unwrap();
+
+        let mut whole = vec![f32::NAN; n_out * n_in];
+        weights.dequantize_into(&mut whole).unwrap();
+
+        for row in 0..n_out {
+            let mut one = vec![f32::NAN; n_in];
+            weights.dequantize_row_into(row, &mut one).unwrap();
+            assert_eq!(
+                one,
+                whole[row * n_in..(row + 1) * n_in],
+                "row {row} of {n_out}x{n_in}"
+            );
+        }
+    }
+}
+
+#[test]
+fn q8_row_dequantization_refuses_a_row_past_the_last() {
+    // A token identifier is a caller-supplied index, so this is the one place
+    // in the crate where an out-of-range index is reachable at all. Refused,
+    // never wrapped and never clamped: a clamped identifier would return some
+    // other token's embedding and decode fluently from it.
+    let mut rng = Rng::new(0x0110_0002);
+    let (n_out, n_in) = (5, 64);
+    let payload = quantize_q8_0(&rng.vector(n_out * n_in, 1.0), n_out, n_in);
+    let weights = Q8Weights::new(&payload, n_out, n_in).unwrap();
+
+    let mut out = vec![0.0_f32; n_in];
+    for row in [n_out, n_out + 1, usize::MAX] {
+        assert_eq!(
+            weights.dequantize_row_into(row, &mut out).unwrap_err(),
+            TensorError::RowOutOfRange,
+            "row {row} was accepted"
+        );
+    }
+    // The last valid row must still be reachable — an off-by-one in the refusal
+    // would hide behind the assertions above.
+    assert!(weights.dequantize_row_into(n_out - 1, &mut out).is_ok());
+}
+
+#[test]
+fn q8_row_dequantization_refuses_an_output_slice_of_the_wrong_length() {
+    // In either direction, per BXW1 §7.5: a short slice would truncate the row
+    // and a long one means the caller and the shape disagree.
+    let mut rng = Rng::new(0x0110_0003);
+    let (n_out, n_in) = (4, 96);
+    let payload = quantize_q8_0(&rng.vector(n_out * n_in, 1.0), n_out, n_in);
+    let weights = Q8Weights::new(&payload, n_out, n_in).unwrap();
+
+    for length in [0, n_in - 1, n_in - 32, n_in + 1, n_in * 2] {
+        let mut out = vec![0.0_f32; length];
+        assert_eq!(
+            weights.dequantize_row_into(0, &mut out).unwrap_err(),
+            TensorError::ShapeMismatch,
+            "length {length} against n_in {n_in}"
+        );
+    }
+}
+
+#[test]
+fn q8_row_dequantization_writes_nothing_when_it_refuses() {
+    // Every check completes before the first output element, so a refused call
+    // leaves the caller's buffer exactly as it found it.
+    let mut rng = Rng::new(0x0110_0004);
+    let (n_out, n_in) = (3, 32);
+    let payload = quantize_q8_0(&rng.vector(n_out * n_in, 1.0), n_out, n_in);
+    let weights = Q8Weights::new(&payload, n_out, n_in).unwrap();
+
+    let mut out = vec![7.0_f32; n_in];
+    assert!(weights.dequantize_row_into(n_out, &mut out).is_err());
+    assert!(out.iter().all(|value| *value == 7.0), "{out:?}");
+}
+
 // --------------------------------------------------------- RMSNorm refusal
 
 #[test]

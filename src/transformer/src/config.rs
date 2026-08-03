@@ -18,6 +18,7 @@
 //!
 //! | BXW1 `Header` | [`ModelConfig`] |
 //! |---|---|
+//! | `arch_id` | `architecture_id` |
 //! | `n_layers` | `layer_count` |
 //! | `d_model` | `model_width` |
 //! | `n_heads` | `query_head_count` |
@@ -36,33 +37,9 @@
 //! [`RopePairing::from_bxw1`] — so an unrecognized convention is refused at the
 //! blob boundary and is unrepresentable here.
 
-use brainix_tensor::{RopePairing, MAX_ROPE_POSITION};
+use brainix_tensor::{is_positive_normal, RopePairing, MAX_ROPE_POSITION};
 
 use crate::error::TransformerError;
-
-/// Bit pattern of the smallest positive normal `f32`, `2⁻¹²⁶`.
-const F32_MIN_POSITIVE_NORMAL_BITS: u32 = 0x0080_0000;
-
-/// Bit pattern of `f32::MAX`. Anything above it is `+Inf` or NaN.
-const F32_MAX_BITS: u32 = 0x7f7f_ffff;
-
-/// Classifies an `f32` as a positive, finite, normal number **by integer
-/// comparison on its bit pattern**, before it is ever compared as a float.
-///
-/// BXW1 §4.7's rule. Comparing an unvalidated float is itself the bug: `NaN < x`
-/// and `NaN > x` are both false, so a range check written with float
-/// comparisons accepts NaN silently. This rejects NaN, ±Inf, subnormals,
-/// negatives and −0.0 in one pair of integer comparisons.
-///
-/// It duplicates a three-line helper that `brainix_tensor` keeps private. The
-/// duplication is deliberate and is recorded rather than worked around: the
-/// alternative is to let an invalid ε or θ reach a kernel mid-forward, which
-/// would mean a configuration error is discovered on a token rather than at
-/// model construction.
-pub(crate) fn is_positive_normal(value: f32) -> bool {
-    let bits = value.to_bits();
-    (F32_MIN_POSITIVE_NORMAL_BITS..=F32_MAX_BITS).contains(&bits)
-}
 
 /// The hyperparameters of one decoder-only model — BXW1 `arch_id = 1`.
 ///
@@ -71,6 +48,13 @@ pub(crate) fn is_positive_normal(value: f32) -> bool {
 /// unambiguous at a glance.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModelConfig {
+    /// BXW1 `arch_id`: the architecture family (BXW1 §5.2).
+    ///
+    /// Carried rather than assumed because it is what determines the attention
+    /// score scale (BXW1 §5.6). An `arch_id` for which the format states no
+    /// scale is refused by [`Model::new`](crate::Model::new) — see
+    /// [`TransformerError::UnspecifiedAttentionScale`].
+    pub architecture_id: u32,
     /// BXW1 `n_layers`: transformer blocks.
     pub layer_count: usize,
     /// BXW1 `d_model`: residual-stream width. Must equal

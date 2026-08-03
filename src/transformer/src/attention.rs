@@ -57,7 +57,8 @@ pub(crate) struct AttentionShape {
     pub(crate) query_head_count: usize,
     /// `n_heads / n_kv_heads`.
     pub(crate) query_heads_per_group: usize,
-    /// `1/√d_head`.
+    /// The score scale BXW1 §5.6 assigns to the model's `arch_id`; `1/√d_head`
+    /// for `arch_id = 1`.
     pub(crate) scale: f32,
 }
 

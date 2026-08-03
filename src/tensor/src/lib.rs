@@ -54,6 +54,16 @@
 //!   They are computed in `f64` because accuracy there is free — none of them
 //!   is on the bandwidth-bound path.
 //!
+//! # Two helpers are published alongside the kernels
+//!
+//! [`rsqrt`] and [`is_positive_normal`] are not kernels and are exported anyway,
+//! because a `#![no_std]` consumer has no `sqrt` in `core` and no way to write
+//! BXW1 §4.7's bit-pattern classification without writing it again. While both
+//! were private, `brainix_transformer` carried its own copy of each. Two
+//! implementations of a rule whose entire value is that every float in the
+//! system is classified identically is a defect in waiting, so the rule has one
+//! home and it is here.
+//!
 //! # SIMD seams
 //!
 //! Named here so the later NEON pass is an edit rather than a rewrite:
@@ -139,8 +149,9 @@ mod softmax;
 
 pub use crate::activation::{silu, swiglu};
 pub use crate::error::TensorError;
+pub use crate::math::rsqrt;
 pub use crate::matmul::{matmul_f32, matmul_q8_0, MatMulShape};
-pub use crate::norm::rmsnorm;
+pub use crate::norm::{is_positive_normal, rmsnorm};
 pub use crate::q8::{Q8Weights, BXW1_ALIGN, Q8_0_BLOCK};
 pub use crate::rope::{rope, RopePairing, RopeParams, MAX_ROPE_POSITION};
 pub use crate::softmax::softmax;

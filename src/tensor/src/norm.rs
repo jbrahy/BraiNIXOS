@@ -27,7 +27,13 @@ const F32_MAX_BITS: u32 = 0x7f7f_ffff;
 /// so a range check written with float comparisons accepts NaN silently. The
 /// rule rejects NaN, ±Inf, subnormals, negatives, and −0.0 in a single pair of
 /// integer comparisons.
-pub(crate) fn is_positive_normal(value: f32) -> bool {
+///
+/// **Published, and re-exported as [`crate::is_positive_normal`].** It is three
+/// lines, and three lines is exactly the size at which a consumer reimplements
+/// it rather than asking — which is what `brainix_transformer` did while this
+/// was private, giving two copies of a rule whose whole value is that every
+/// float in the system is classified the same way. One copy is the point.
+pub fn is_positive_normal(value: f32) -> bool {
     let bits = value.to_bits();
     (F32_MIN_POSITIVE_NORMAL_BITS..=F32_MAX_BITS).contains(&bits)
 }

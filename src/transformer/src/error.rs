@@ -44,6 +44,18 @@ pub enum TransformerError {
     /// `rope_dim` is zero, odd, or greater than `d_head` (BXW1 §7.2 rule H17).
     InvalidRopeDimensions,
 
+    /// `arch_id` names an architecture family for which BXW1 §5.6 states no
+    /// attention score scale.
+    ///
+    /// Refused at [`Model::new`](crate::Model::new), before a token is decoded.
+    /// The scale is a property of the architecture, and guessing one for an
+    /// unrecognized family is the failure class §5.5 and §5.6 exist to
+    /// eliminate: it does not crash and does not deny, it changes the sharpness
+    /// of every attention distribution, and the engine emits fluent, confident,
+    /// wrong text. There is no fallback to `1/√d_head`, because assuming it
+    /// silently is the bug.
+    UnspecifiedAttentionScale,
+
     /// `norm_eps` is not a positive, finite, normal `f32`.
     ///
     /// Classified from its bit pattern, following BXW1 §4.7: comparing an

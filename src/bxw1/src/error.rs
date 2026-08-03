@@ -418,8 +418,8 @@ pub enum Bxw1Error {
     TrailingBytesAfterLastExtent,
 
     /// A pad byte -- between the table and the first extent, between two
-    /// extents, inside a `Q8_0` tensor between its planes, or after the last
-    /// extent -- is nonzero (rule D19).
+    /// extents, or after the last extent (rule D19), or inside a `Q8_0` tensor
+    /// between its planes (rule D21) -- is nonzero.
     ///
     /// Together with rules D15-D18 this is what makes "every byte of the blob
     /// is accounted for" (§3) a checked property rather than a description.

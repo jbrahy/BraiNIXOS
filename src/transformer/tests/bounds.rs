@@ -107,6 +107,32 @@ fn the_epsilon_and_theta_are_classified_by_bit_pattern() {
     }
 }
 
+#[test]
+fn an_architecture_with_no_specified_attention_scale_is_refused() {
+    // BXW1 §5.6: the attention score scale is determined by `arch_id`, and the
+    // format states one only for `arch_id = 1`. An architecture whose
+    // convention is unspecified is refused at construction rather than served
+    // with a guessed scale — a wrong scale does not crash, it changes the
+    // sharpness of every attention distribution and the model goes on emitting
+    // fluent, confident, wrong text.
+    let config = fixture_config(RopePairing::Interleaved);
+    let fixture = Fixture::new(config, 0x900d_0021);
+    let layers = fixture.layer_views();
+
+    for architecture_id in [0_u32, 2, 3, u32::MAX] {
+        let mut other = config;
+        other.architecture_id = architecture_id;
+        assert_eq!(
+            Model::new(other, fixture.weights(&layers)).unwrap_err(),
+            TransformerError::UnspecifiedAttentionScale,
+            "arch_id {architecture_id} was accepted"
+        );
+    }
+    // `arch_id = 1` is the one the format specifies, and it must still build —
+    // an over-broad refusal would hide behind the loop above.
+    assert!(Model::new(config, fixture.weights(&layers)).is_ok());
+}
+
 // ---------------------------------------------------------------- weight set
 
 #[test]

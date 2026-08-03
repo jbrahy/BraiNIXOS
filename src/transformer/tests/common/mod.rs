@@ -56,6 +56,7 @@ const BXW1_ALIGN: usize = 128;
 #[must_use]
 pub fn fixture_config(rope_pairing: RopePairing) -> ModelConfig {
     ModelConfig {
+        architecture_id: 1,
         layer_count: 2,
         model_width: 32,
         query_head_count: 4,

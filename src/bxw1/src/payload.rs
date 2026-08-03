@@ -2,7 +2,8 @@
 //!
 //! Computes the whole-blob SHA-256 and every per-tensor SHA-256, validates
 //! every `Q8_0` scale and every `F32` element bit pattern, and verifies that
-//! every pad byte is zero (rules C2, C3, C4, D19).
+//! every pad byte is zero -- the pads between extents and after the last, and
+//! every `Q8_0` inter-plane pad (rules C2, C3, C4, D19, D21).
 //!
 //! **Every byte of the blob is read exactly once.** The extents are already
 //! known to be ascending and disjoint (rules D15-D18), so the walk below
@@ -115,7 +116,7 @@ fn verify_tensor_digest(payload: &[u8], declared: &[u8]) -> Result<(), Bxw1Error
     Ok(())
 }
 
-/// Rules C3, C4 and the `Q8_0` inter-plane pad.
+/// Rules C3, C4 and the `Q8_0` inter-plane pad (rule D21).
 fn verify_content(record: &Record<'_>, payload: &[u8]) -> Result<(), Bxw1Error> {
     match record.dtype {
         Dtype::F32 => {

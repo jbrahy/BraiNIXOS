@@ -230,7 +230,18 @@ pub(crate) fn powf(base: f64, exponent: f64) -> f64 {
 /// (`e ← 1.5 e²`), so four iterations reach `f64` precision and the fifth is
 /// margin. Returning the reciprocal square root directly, rather than
 /// `1.0/sqrt(x)`, avoids a division on RMSNorm's per-row path.
-pub(crate) fn rsqrt(x: f64) -> f64 {
+///
+/// **Published, and re-exported as [`crate::rsqrt`]** — the one function in this
+/// module a consumer outside the crate has needed. `core` has no `sqrt` and no
+/// `rsqrt`, so a `#![no_std]` caller that needs `1/√n` for anything — the
+/// attention score scale `1/√d_head` is the live case — has to write a Newton
+/// iteration or take a dependency. Keeping this private bought nothing and cost
+/// a second implementation of the same iteration in `brainix_transformer`.
+///
+/// The domain is unchanged by publishing it: **accurate only for a positive
+/// normal `x`**, total for everything else. A caller classifies by bit pattern
+/// first ([`crate::is_positive_normal`], BXW1 §4.7).
+pub fn rsqrt(x: f64) -> f64 {
     let mut y = f64::from_bits(RSQRT_SEED.wrapping_sub(x.to_bits() >> 1));
     let half = x * 0.5;
     y *= 1.5 - half * y * y;

@@ -63,7 +63,9 @@ use crate::workspace::Workspace;
 pub struct Model<'a> {
     config: ModelConfig,
     weights: ModelWeights<'a>,
-    /// `1/√d_head`, computed once at construction rather than once per score.
+    /// The attention score scale BXW1 §5.6 assigns to the configuration's
+    /// `arch_id` — `1/√d_head` for `arch_id = 1` — derived once at construction
+    /// rather than once per score.
     scale: f32,
     /// The cache shape this model requires, computed once so every call
     /// compares rather than derives.
@@ -75,14 +77,16 @@ impl<'a> Model<'a> {
     ///
     /// # Errors
     ///
-    /// Whatever [`ModelConfig::validate`] or [`ModelWeights::validate`] refuse.
+    /// Whatever [`ModelConfig::validate`] or [`ModelWeights::validate`] refuse,
+    /// plus [`TransformerError::UnspecifiedAttentionScale`] when BXW1 §5.6
+    /// states no attention score scale for the configuration's `arch_id`.
     pub fn new(config: ModelConfig, weights: ModelWeights<'a>) -> Result<Self, TransformerError> {
         config.validate()?;
         weights.validate(&config)?;
         Ok(Self {
             config,
             weights,
-            scale: attention_scale(config.head_width)?,
+            scale: attention_scale(config.architecture_id, config.head_width)?,
             geometry: CacheGeometry::for_config(&config)?,
         })
     }

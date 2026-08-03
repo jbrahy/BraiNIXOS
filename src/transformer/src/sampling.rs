@@ -22,9 +22,8 @@
 //! fixed [`MAXIMUM_TOP_K`]-entry array on the stack, which is why `k` has a
 //! ceiling: the array is not a growable buffer and never will be.
 
-use brainix_tensor::softmax;
+use brainix_tensor::{is_positive_normal, softmax};
 
-use crate::config::is_positive_normal;
 use crate::error::TransformerError;
 
 /// The largest `top_k` this crate accepts.
