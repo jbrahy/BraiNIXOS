@@ -1,3 +1,31 @@
+> # ⛔ SUPERSEDED — do not use as guidance
+>
+> **The HAL is cancelled. Owner decision 2 of 2026-08-03; see [`../ROADMAP.md`](../ROADMAP.md)
+> decisions #20–#21.**
+>
+> x86-64 was dropped as a platform on 2026-08-03, leaving one architecture. An eleven-trait
+> abstraction layer with a single backend is an abstraction over nothing: it buys no portability,
+> and it costs a layer of indirection through the most security-critical code in the tree. **Phase 1
+> (P1-T2..T7, P1-A) is cancelled**, struck through in place in `ROADMAP.md` rather than deleted.
+>
+> The obligations this document defined did not go away — they moved home. The W^X and page-table
+> proof obligation attaches to the **aarch64 MMU** directly; the `INV-DEV-006` no-widening proof
+> attaches to the **DART backend's own IOMMU trait** (AS-3). Both remain **Full tier** in
+> [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) §16. Where
+> `NORTH_STAR.md`, `THREAT_MODEL.md`, or `ROADMAP.md` still say "the HAL IOMMU trait" in the
+> TCB-AS/GPU preconditions, they mean that DART trait; the obligation is unchanged in scope.
+>
+> **No code is removed by this cancellation.** `src/kernel/src/arch/**` stays in tree and stays
+> building as the frozen reference implementation the aarch64 port is written against
+> (`ROADMAP.md` decision #26).
+>
+> Retained unedited as a historical record: the trait decomposition below is still the clearest
+> written account of what each platform concern actually requires, and it was written to be
+> Apple-capable. Read it as analysis, not as a plan. See
+> [`../DOCUMENTATION_MAP.md`](../DOCUMENTATION_MAP.md).
+
+---
+
 # BraiNIX Hardware Abstraction Layer (HAL)
 
 Status: design (P1-T1, landed `670e072`). Implementation-ready specification. No code is

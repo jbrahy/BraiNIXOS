@@ -30,20 +30,25 @@ mediates every request through capabilities; an **in-tree inference engine** tha
 with all available compute devoted to it within fixed, reserved regions; and an **observe-only LLM
 security auditor** that continuously checks the running serving stack against its documented invariants.
 
-## Target platforms
+## Target platform
 
-**Primary: Apple Silicon (aarch64).** The reference deployment is a Mac mini M2 Pro (`Mac14,12`, SoC
-`T6020`, 32 GB unified memory). Unified-memory bandwidth makes M-series CPUs a credible CPU-inference
-platform, and 32 GB is real serving capacity. Owner decision, 2026-08-02.
+**Apple Silicon (aarch64), and nothing else.** BraiNIX is single-architecture. The reference deployment is
+a Mac mini M2 Pro (`Mac14,12`, SoC `T6020`, 32 GB unified memory). Unified-memory bandwidth makes M-series
+CPUs a credible CPU-inference platform, and 32 GB is real serving capacity. Owner decision, 2026-08-02;
+made the *only* platform by owner decision, 2026-08-03.
 
-**Secondary: x86-64.** Retained as the **attested** platform — the only target where INV-BOOT holds in
-full (see INV-BOOT/AS below). Any deployment whose threat model requires remote attestation or sealing
-runs on x86-64, not on Apple Silicon. x86-64 also remains the development and CI target, and the
-platform against which the HAL traits are first proven.
+**x86-64 was dropped as a platform on 2026-08-03.** The x86-64 code stays in tree and stays building as the
+**frozen reference implementation** the aarch64 port is written against — it is deleted when aarch64
+replaces it, not before — but it is not a target, not a deployment, and not a fallback. There is in
+particular no attested target to fall back to; see **INV-BOOT** below.
 
-Both are backends behind one hardware abstraction layer (`docs/architecture/HAL.md`). Architecture-
-neutral subsystems — the serving protocol, the request parser, the tokenizer, the tensor kernels, the
-transformer — are written once and are not permitted to acquire platform assumptions.
+Architecture-neutral subsystems — the serving protocol, the request parser, the tokenizer, the tensor
+kernels, the transformer — are written once and are not permitted to acquire platform assumptions. That
+rule survives the loss of the second architecture unchanged: it is what keeps the serving path and the
+inference engine host-testable on `aarch64-apple-darwin` while the platform work proceeds.
+
+**Vocabulary.** Documents in this tree that say *"the primary platform"* mean **the only platform**. The
+word is a residue of the two-platform period and carries no implication that a second one exists.
 
 ## Performance is a goal, not a leftover
 
@@ -144,6 +149,10 @@ firmware is ever loaded**, and they are the acceptance criteria for AS-5-T0.
 5. No iBoot-locked DART on the GPU path — or, if one exists, its locked semantics are honestly
    represented in the HAL trait rather than papered over.
 
+*(Naming note, 2026-08-03: the HAL is cancelled — an eleven-trait abstraction with one backend abstracts
+nothing. Preconditions 2 and 5 are unchanged in substance; "the HAL IOMMU trait" now means the DART
+backend's own IOMMU trait, which is where that obligation lives. The obligation moved home, not scope.)*
+
 **If any precondition proves unsatisfiable on real hardware, this exception self-voids and AS-5 stops.**
 That is the correct failure mode, not an obstacle to route around. Until all five are green, no build
 ships with the GPU enabled. INV-GPU is no longer deferred on the primary platform; it is the invariant
@@ -180,8 +189,12 @@ consequences-of-compromise are in THREAT_MODEL.md.
   weights and KV-cache live in fixed, reserved regions sized at build time — never a growing allocator.
 - **INV-IPC**: inter-process communication is synchronous rendezvous only; no shared-memory IPC and no
   async queues exist in tree.
-- **INV-BOOT**: every release is measured into the TPM, reproducibly built, and Ed25519-signed, with
-  predicted PCRs published before the artifact ships. **Holds in full on x86-64 only** — see INV-BOOT/AS.
+- **INV-BOOT**: every release is reproducibly built and Ed25519-signed, and its on-disk payload's integrity
+  is verified at every boot by iBoot2 against the machine's Secure-Enclave-held local policy. The kernel
+  records a **self-reported** software measurement log, which is a debugging aid and never evidence.
+  **Remote attestation, sealing, and runtime-chain measurement are permanently unavailable** — the only
+  supported platform has no TPM and none can be added. This is the whole of INV-BOOT; see *INV-BOOT is the
+  Apple boot posture* below.
 - **INV-SERVE**: inbound clients are mutually isolated; no client can name a capability to another
   client's session, weights view, or KV state. The network request decoder is a fail-closed hostile-input
   parser; a malformed or over-length request denies, never grows a pool.
@@ -195,19 +208,24 @@ consequences-of-compromise are in THREAT_MODEL.md.
   IOMMU; the GPU driver is an ordinary capability-bounded server with no ambient device authority; the
   driver cannot widen its own DMA window. With AGX in scope, this is no longer a deferred target — it is
   the control that makes running Apple's opaque GPU firmware survivable, and it must be enforced and
-  proven **before** that firmware is ever loaded. On x86-64 it remains a stated target.
+  proven **before** that firmware is ever loaded.
 
-### INV-BOOT/AS — named exception, Apple Silicon
+### INV-BOOT is the Apple boot posture — formerly the exception INV-BOOT/AS
 
-**Signed off by the owner, 2026-08-02.** Required by the hard-line rule below; recorded here rather than
-in a subordinate document because it degrades a headline invariant on the *primary* platform.
+**Signed off by the owner as an exception on 2026-08-02; promoted to the rule on 2026-08-03.** INV-BOOT/AS
+was written as a named degradation of a headline invariant on the *primary* platform, on the understanding
+that x86-64 remained available as the undegraded one. Decision 1 of 2026-08-03 dropped x86-64 as a
+platform, so there is no undegraded platform for the exception to be an exception *to*. **What INV-BOOT/AS
+described is now simply what INV-BOOT means.** It is listed in the exceptions ledger below and in every
+subordinate ledger as **superseded — now the rule**, kept named so the exception count stays checkable
+rather than silently dropping by one.
 
 Apple Silicon has no TPM, and none can be added — there is no LPC/SPI TPM header, and a USB TPM is not a
 root of trust. The Secure Enclave is **not** a TPM substitute: it exposes no PCR-style extend/quote/seal
 interface to third-party software, its protocol is proprietary and undocumented, and driving it from a
 non-Apple kernel is out of scope.
 
-On Apple Silicon, INV-BOOT is satisfied **only** in these clauses:
+INV-BOOT is therefore satisfied **only** in these clauses, everywhere, always:
 
 - **Reproducible build** — unchanged. A third party can rebuild the published payload bit-for-bit.
 - **Ed25519 release signature** — unchanged. These are properties of the artifact, not the platform.
@@ -217,18 +235,21 @@ On Apple Silicon, INV-BOOT is satisfied **only** in these clauses:
 - **Software-only measurement log** — the kernel hashes what it loads (weights, servers) and records the
   log. Self-reported, and therefore worthless against an attacker who compromised the kernel early.
 
-What is **permanently lost** on the primary platform:
+What is **permanently lost** — not deferred, not scheduled, not achievable by any later phase:
 
 - **Remote attestation.** No quote. A remote party cannot distinguish a genuine BraiNIX boot from a
   compromised one. This is the single capability that most distinguished BraiNIX from a commodity
-  inference server, and on Apple Silicon it is gone.
+  inference server, and it is gone.
 - **Sealing.** No secrets bound to boot state. Data at rest is protected only by what the kernel does at
-  runtime.
+  runtime, and the credential store is consequently **plaintext at rest** — see THREAT_MODEL.md.
 - **Runtime-chain measurement.** Detection of a divergent boot chain — the exact property INV-BOOT's
   blast-radius entry exists for — is unavailable.
 
-Deployments requiring attestation or sealing **must** use the x86-64 target. This is not a gap that
-closes later; it is structural.
+**There is nowhere to move a deployment that needs these.** The previous wording sent such deployments to
+x86-64; that platform no longer exists, and the escape hatch is deleted rather than repointed. Stated
+without softening: **BraiNIX cannot prove its boot state to a remote party, and never will.** A deployment
+whose threat model requires remote attestation or sealing cannot be served by BraiNIX at all. That is the
+honest answer, and no configuration, target, or later phase changes it.
 
 ### TCB-AS — unavoidable trusted components, Apple Silicon
 
@@ -318,7 +339,8 @@ assurance problem than curve25519. Clients speak the BSP protocol or they do not
 - No dynamic kernel heap. Fixed-size pool allocators only. "Give all resources to the LLM" is satisfied
   by large fixed reserved regions for weights and KV-cache, never by adding an allocator.
 - No new external crate dependencies. The standing job is to remove the ones still present (multiboot2,
-  sha2, chacha20, x86_64, bitflags, log, uefi-raw, uguid, ptr_meta), not add more. The in-tree crypto set
+  sha2, chacha20, `x86_64` — the crate, still vendored by the frozen reference — bitflags, log, uefi-raw,
+  uguid, ptr_meta), not add more. The in-tree crypto set
   is SHA-256, HKDF, ChaCha20, and Poly1305, which deletes `sha2` and `chacha20`. The Ed25519
   *verification* stack is the one family that stays, under the named crypto exception above. The
   inference engine, the device drivers, and every Apple Silicon platform component are in-tree.
@@ -338,9 +360,10 @@ assurance problem than curve25519. Clients speak the BSP protocol or they do not
   another client's session or another process, and never makes a network call except through the
   capability-mediated serving channel.
 - No path to security depends on attacker ignorance.
-- **Degrading a named invariant on any platform requires a written, named exception with owner sign-off,
-  recorded in this document.** INV-BOOT/AS, TCB-AS, the conditionally signed TCB-AS/GPU, and the named
-  Ed25519 verification exception are the only such exceptions in force.
+- **Degrading a named invariant requires a written, named exception with owner sign-off, recorded in this
+  document.** Four are named here: **INV-BOOT/AS** — *superseded 2026-08-03, now the rule*, retained by
+  name so the count stays checkable — plus TCB-AS, the conditionally signed TCB-AS/GPU, and the named
+  Ed25519 verification exception. Those are the only such exceptions in force.
 
 ## Non-goals
 
@@ -348,8 +371,13 @@ POSIX compatibility, dynamic loading, ambient authority, a general-purpose remot
 phone-home of any kind, treating the served model or any remote client as trusted, and any security
 argument that rests on obscurity.
 
-Platform-specific non-goals: the **Secure Enclave** as a security component, and any attempt to present
-Apple Silicon as an attested platform.
+**A second architecture is a non-goal** (owner decision, 2026-08-03). BraiNIX is single-architecture
+aarch64/Apple Silicon. Adding another architecture — reviving x86-64 as a target or porting to anything
+else — requires reversing that decision in this document, not a build-system change. The in-tree x86-64
+code is a frozen reference implementation, not a dormant target.
+
+Platform-specific non-goals: the **Secure Enclave** as a security component, and any attempt to describe
+BraiNIX as attested.
 
 Apple's **AGX GPU is no longer a non-goal** (owner ruling, 2026-08-02) — see *The GPU is in scope* above.
 It remains the largest single body of work on the platform and carries the conditionally signed

@@ -1,6 +1,7 @@
 # BraiNIX Security Invariants
 
-**Status:** Mandatory · **Reconciled:** 2026-08-02 (serving pivot + Apple-primary platform decision)
+**Status:** Mandatory · **Reconciled:** 2026-08-03 (single-platform Apple decision; supersedes the
+2026-08-02 serving-pivot + Apple-primary reconciliation)
 
 ## Purpose
 
@@ -73,7 +74,7 @@ no other mechanism, and a document claiming an exemption not on this list is dri
 
 | Exception | Scope | Signed | Effect |
 |---|---|---|---|
-| **INV-BOOT/AS** | Apple Silicon | 2026-08-02 | Measurement, remote attestation, and sealing are structurally unavailable. See §7. |
+| **INV-BOOT/AS** — ***superseded 2026-08-03 — now the rule*** | Apple Silicon (the only platform) | 2026-08-02 | Measurement, remote attestation, and sealing are structurally unavailable. With x86-64 dropped as a platform there is no undegraded platform for this to be an exception *to*, so it is no longer an exception: **it is what INV-BOOT means.** Retained by name here so the exception count stays checkable rather than silently dropping by one. See §7. |
 | **TCB-AS** | Apple Silicon | 2026-08-02 | SecureROM, iBoot1, iBoot2, sepOS are in the TCB by force — closed, unauditable, unremovable. |
 | **TCB-EXCEPTION-001** | All platforms | 2026-06-27 | Relational SQL engine in ring 0. See [`TCB_EXCEPTION_001_IN_KERNEL_SQL.md`](TCB_EXCEPTION_001_IN_KERNEL_SQL.md). |
 | **TCB-AS/GPU** | Apple Silicon | 2026-08-02 — **conditional** | Running AGX requires loading Apple's opaque, DMA-capable GPU firmware, which executes **concurrently with our kernel for the life of the system**. In force now, so design and implementation may proceed; conditional on five preconditions all being green **before GPU firmware is ever loaded** (they are AS-5-T0's acceptance criteria). If any proves unsatisfiable on real hardware, the exception **self-voids and AS-5 stops**. Until all five are green, no build ships with the GPU enabled. See `INV-DEV-004..006`, `INV-SERVE-006`, `INV-PARSE-001`. |
@@ -332,16 +333,16 @@ The kernel may not trust raw userspace pointers without validation, ownership ch
 
 ---
 
-## INV-MEM-009 — Page size is a HAL parameter, never an assumption
-No memory code outside the HAL may assume a specific base page size. Apple Silicon uses **16 KiB** base pages; x86-64 uses **4 KiB**. Region sizing, alignment, guard-page placement, and W^X granularity must all derive from the HAL's page-size constant.
+## INV-MEM-009 — Page size is a platform parameter, never an assumption
+No memory code outside `arch/` may assume a specific base page size. The platform uses **16 KiB** base pages; the frozen x86-64 reference uses **4 KiB**. Region sizing, alignment, guard-page placement, and W^X granularity must all derive from the platform's page-size constant. *(Restated 2026-08-03: the HAL is cancelled, so the constant's home is the aarch64 MMU code rather than `hal/mmu.rs`. The obligation is unchanged.)*
 
-**Why it matters:** A hardcoded 4 KiB that reaches the primary platform does not fail loudly — it silently misaligns reserved regions, misplaces guard pages, and can make W^X enforcement coarser than intended. That is an isolation failure wearing the costume of a portability bug.
+**Why it matters:** A hardcoded page size does not fail loudly — it silently misaligns reserved regions, misplaces guard pages, and can make W^X enforcement coarser than intended. That is an isolation failure wearing the costume of a portability bug. **With one platform the risk inverts and does not shrink:** a hardcoded **16 KiB** is now the likelier defect, and the QEMU `virt` harness that would have caught the 4 KiB direction was cancelled with Phase 4.
 
 **Enforcement directions:**
-- page size exposed once, from `hal/mmu.rs`; no literal `4096` in architecture-neutral memory code
-- grep-gate against bare page-size literals outside `arch/` and `hal/`
+- page size exposed once, from the aarch64 MMU module; no bare page-size literal in architecture-neutral memory code
+- grep-gate against bare page-size literals — `4096` **and** `16384` — outside `arch/`
 - `WEIGHTS_REGION` and `KV_REGION` sizing expressed in pages, not bytes
-- MMU and reserved-region code tested at both page sizes (QEMU `virt` at 4 KiB, Apple at 16 KiB)
+- with no 4 KiB harness left, the frozen x86-64 reference build is the only remaining second data point, and review is the primary control
 
 **Related:** INV-MEM-003, INV-MEM-007. Introduced 2026-08-02 with the Apple-primary decision.
 
@@ -513,11 +514,14 @@ Pool exhaustion, quota exhaustion, or scheduler admission failure must return a 
 
 # 6. Platform and Execution Invariants
 
-Platform-specific invariants are stated per architecture. **Both supported platforms must satisfy the
-equivalent property**; only the mechanism differs. A property available on one platform and absent on the
-other is a named exception (see §7), not a silent asymmetry.
+**Reconciled 2026-08-03: there is one platform.** x86-64 was dropped as a platform; the x86-64 code stays
+in tree and stays building as the **frozen reference implementation** the aarch64 port is written against,
+and is deleted only when aarch64 replaces it. Every obligation below is discharged on **aarch64 / Apple**.
+The x86-64 column is retained because the reference implementation is the thing the aarch64 work is read
+against — it is **frozen reference, not scheduled**, and nothing is required to keep working there beyond
+continuing to compile.
 
-| Property | x86-64 mechanism | aarch64 / Apple mechanism |
+| Property | x86-64 mechanism *(frozen reference, not scheduled)* | aarch64 / Apple mechanism *(the platform)* |
 |---|---|---|
 | Kernel cannot execute user code | SMEP | PXN |
 | Kernel cannot implicitly read/write user memory | SMAP | PAN |
@@ -527,7 +531,14 @@ other is a named exception (see §7), not a silent asymmetry.
 | IOMMU | VT-d | **DART** (many instances — see §8) |
 | Interrupt controller | APIC | **AIC** (FIQ split — see `INV-ARM-005`) |
 
-## 6a. x86-64
+## 6a. x86-64 — *frozen reference, not scheduled*
+
+**Reconciled 2026-08-03.** x86-64 is no longer a platform. `INV-X86-001..006` and `INV-FAULT-001..003`
+below are **not deleted and not weakened**: they remain the invariants the in-tree x86-64 reference
+implementation is held to, and it is still expected to compile and to hold them. What changed is that
+**nothing is scheduled against them** — no release, deployment, or assurance claim rests on this
+architecture, and no new work is planned here. They are retained because deleting the invariants of code
+that is still in the tree would leave that code unaccountable, which is the opposite of the point.
 
 ## INV-X86-001 — Only supported x86-64 execution modes are used
 BraiNIX operates only in documented 64-bit modes and does not depend on legacy mode behavior beyond controlled bootstrap transitions.
@@ -653,7 +664,7 @@ The kernel runs at EL1 with userspace at EL0. Entry from firmware may occur at E
 ## INV-ARM-002 — PAN and PXN are enabled and equivalent to SMAP/SMEP
 Kernel execution of user-mapped code is prevented (PXN), and implicit kernel access to user memory is prevented (PAN). Explicit, scoped accessor helpers are the only path.
 
-**Why it matters:** These discharge the same obligations as `INV-X86-002` and `INV-X86-003` on the primary platform. Missing them means the primary platform is *weaker* than the secondary one.
+**Why it matters:** These discharge the same obligations as `INV-X86-002` and `INV-X86-003`, and they are now the *only* place those obligations are discharged in shipping code. Missing them means the obligation is not met anywhere — there is no second platform where it still holds.
 
 ---
 
@@ -668,7 +679,7 @@ Pointer authentication and branch-target identification are enabled on cores tha
 ---
 
 ## INV-ARM-005 — Interrupt-controller abstraction survives the AIC's shape
-The `hal/interrupts` trait must express the Apple Interrupt Controller honestly rather than forcing it into a GIC-shaped API:
+The interrupt-controller abstraction must express the Apple Interrupt Controller honestly rather than forcing it into a GIC-shaped API. *(Restated 2026-08-03: the HAL is cancelled, so this is the AIC backend's own interface rather than a `hal/interrupts` trait. The rule is unchanged, and with no GIC backend left the pressure to GIC-shape the API is gone — the obligation now reads as "do not inherit GIC assumptions from habit.")*
 
 - a single packed **event word** read replaces the GIC ack/EOI register pair
 - per-CPU timers and some other sources arrive as **FIQ**, entirely outside the controller — the trait needs a notion of CPU-local sources the controller does not own
@@ -680,6 +691,18 @@ The `hal/interrupts` trait must express the Apple Interrupt Controller honestly 
 ---
 
 # 7. Boot and Attestation Invariants
+
+**Restated 2026-08-03 for a single platform.** [`../NORTH_STAR.md`](../NORTH_STAR.md) is authoritative and
+now states INV-BOOT as exactly four clauses, everywhere and always: a **reproducible build**, an **Ed25519
+release signature**, **iBoot-verified payload integrity** under the machine's Secure-Enclave-held local
+policy, and a **self-reported software measurement log** that is a debugging aid and never evidence.
+**Remote attestation, sealing, and runtime-chain measurement are permanently unavailable — not deferred,
+not scheduled, not achievable by any later phase.** There is no TPM on the only supported platform and none
+can be added.
+
+`INV-BOOT-AS-001..003` below therefore stopped being the Apple-specific consequences of an exception and
+became the boot rules, full stop. They are unchanged in wording and strengthened in reach: what used to
+constrain "Apple Silicon code paths" now constrains every code path there is.
 
 ## INV-BOOT-001 — Production security claims require a trusted production boot path
 No production-grade security claim may be made without the required measured boot and hardware assumptions being satisfied.
@@ -718,9 +741,22 @@ The kernel must define when cryptographic operations may begin and what minimum 
 
 ## INV-BOOT-006 — Key material is enrolled at runtime, never built in
 Client pre-shared keys and admin keys are enrolled while the system is running and persisted by the
-kernel's credential store (`src/kernel/src/boot/credential_store.rs`) — to virtio-blk on x86-64, to ANS2
-NVMe on Apple Silicon from AS-4a. Enrollment happens over the admin channel (`CapAdmin`, INV-AUTH-009) or
-over the serial console, and nowhere else.
+kernel's credential store (`src/kernel/src/boot/credential_store.rs`) — to ANS2 NVMe on Apple Silicon from
+AS-4a. (The virtio-blk path is the frozen x86-64 reference, not a scheduled target.) Enrollment happens
+over the admin channel (`CapAdmin`, INV-AUTH-009) or over the serial console, and nowhere else.
+
+**The store is plaintext at rest, permanently** *(owner ruling 2026-08-02, Apple half; made unconditional
+2026-08-03 when the sealing half died with the x86-64 platform).* Sealing binds a secret to a measured boot
+state; the only supported platform has neither the measurement nor the hardware to bind against, so there
+is no sealed-at-rest design to schedule and none is planned. iBoot2's device-local policy protects the
+*payload* at rest and seals nothing of ours. The consequence is stated rather than softened: **anyone who
+obtains the disk obtains every client and admin pre-shared key**, and combined with the absent forward
+secrecy of `INV-BOOT-007` that retroactively decrypts every session recorded from that machine.
+
+**Enforcement directions (at rest):**
+- no code, log line, protocol field, or release note may describe the credential store as sealed or
+  encrypted at rest (`INV-BOOT-AS-001`)
+- the release notes state the plaintext-at-rest exposure plainly
 
 **Why it matters:** Runtime enrollment is what makes `INV-BUILD-004` achievable rather than aspirational:
 the published image can be byte-identical for every deployment precisely because it carries no
@@ -731,7 +767,7 @@ without a rebuild.
 - the credential store is the only writer of key material to persistent storage
 - enrollment and revocation are attributable events (INV-AUTH-008)
 - a key that fails to persist fails the enrollment; there is no in-memory-only "temporarily enrolled" state
-- persistence is a HAL-backed choice of device, not a per-platform key format
+- the key format is a property of the store, not of the backing device
 
 ---
 
@@ -770,21 +806,22 @@ requires physical presence to repair.
 
 ---
 
-## Apple Silicon: INV-BOOT/AS
+## The boot posture: INV-BOOT-AS-001..003 *(formerly the INV-BOOT/AS exception)*
 
-The exception is recorded in [`../NORTH_STAR.md`](../NORTH_STAR.md); these are its enforcement
-consequences. **This is the primary platform**, so these are not edge cases — they describe the assurance
-level of the shipping product.
+Recorded in [`../NORTH_STAR.md`](../NORTH_STAR.md); these are its enforcement consequences. **This is the
+only platform**, so these are not edge cases and no longer a degradation *relative to* anything — they
+describe the assurance level of the product, everywhere. INV-BOOT/AS is listed in the ledger above as
+*superseded — now the rule*.
 
-## INV-BOOT-AS-001 — Attestation claims are forbidden on Apple Silicon
-No BraiNIX component, release note, log line, protocol field, or document may assert remote attestation, sealing, or hardware-anchored measurement on Apple Silicon. There is no TPM, and the Secure Enclave exposes no PCR-style extend/quote/seal interface to third-party software.
+## INV-BOOT-AS-001 — Attestation claims are forbidden
+No BraiNIX component, release note, log line, protocol field, or document may assert remote attestation, sealing, or hardware-anchored measurement. There is no TPM, and the Secure Enclave exposes no PCR-style extend/quote/seal interface to third-party software.
 
-**Why it matters:** A false attestation claim is worse than no attestation, because a client will rely on it. This invariant is the guard against the strongest temptation created by the 2026-08-02 decision.
+**Why it matters:** A false attestation claim is worse than no attestation, because a client will rely on it. This invariant is the guard against the strongest temptation created by the platform decisions of 2026-08-02 and 2026-08-03 — and the temptation is larger now, because there is no longer a second platform to which an attested deployment could honestly be pointed.
 
 **Enforcement directions:**
-- the BSP protocol must not offer an attestation field the primary platform cannot populate honestly
-- grep-gate on attestation vocabulary in Apple Silicon code paths
-- release notes for Apple Silicon builds state the degradation explicitly
+- the BSP protocol must not offer an attestation field that cannot be populated honestly — and none can be
+- grep-gate on attestation vocabulary across the whole tree, not merely Apple Silicon code paths
+- release notes state the posture explicitly on every build
 
 ---
 
@@ -1066,7 +1103,7 @@ and central to nothing in the TCB's authority.
 ## INV-MODEL-002 — Weights are integrity-checked before first use
 The BXW1 loader verifies a per-tensor digest against a known value before any weight byte is used, and fails closed on a malformed, truncated, or oversized blob.
 
-**Platform note:** on x86-64 the digest is anchored to a hardware quote. On Apple Silicon it is anchored only to the software measurement log, so it detects corruption and accidental substitution but **not** an attacker who already controls the kernel (`INV-BOOT-AS-002`).
+**Anchoring, stated plainly (2026-08-03):** the digest is anchored **only** to the self-reported software measurement log. It detects corruption and accidental substitution; it does **not** detect an attacker who already controls the kernel (`INV-BOOT-AS-002`). There is no hardware quote to anchor it to and no platform on which there would be.
 
 ---
 
@@ -1106,7 +1143,7 @@ The set, current and planned:
 | Tokenizer vocab blob | Disk | P3-T5 |
 | **Apple Device Tree** | **Firmware** | **AS-0** |
 | **boot-args structure** | **Firmware** | **AS-0-T4** |
-| GPU completion parser | Device | Phase 5 (deferred) |
+| GPU completion parser | Device | **AS-5-T3** *(Phase 5 was the discrete-x86-64-GPU phase and is cancelled with that platform; the AGX parser is the one that ships)* |
 
 ## INV-PARSE-003 — Firmware-supplied data is hostile input
 The Apple Device Tree and boot-args come from software we did not write, cannot audit, and cannot replace, and they are parsed **earlier and with more authority** than anything from the network. They receive exactly the treatment network bytes receive.
@@ -1141,7 +1178,7 @@ Three corollaries decide the arguable cases:
   component can *reach*; it does not make a parser's bugs safe. A Full-tier parser inside a Reduced-tier
   server does not inherit the server's tier. Every Reduced-tier row below that has such a parser says so.
 - **A proof's tier follows the thing being proven, not the thing being protected.** The `INV-DEV-006`
-  no-widening proof is a Full-tier obligation of the HAL IOMMU trait, not of `gpud`.
+  no-widening proof is a Full-tier obligation of the DART backend's IOMMU trait, not of `gpud`.
 - **An artifact that cannot be produced is a stated gap, never a downgrade.** Components are tiered by
   the risk they carry, not by the assurance that is convenient to produce for them — vendored code
   included. Where a Full-tier component cannot ship one of the six artifacts, its row names the missing
@@ -1160,8 +1197,9 @@ table is not thereby Reduced tier; it is **unassessed**, and assessing it is a p
 | Capability subsystem | **Full** | TCB, and it *is* the containment every Reduced-tier assignment below relies on. |
 | IPC | **Full** | TCB. The only authorized channel between domains and the place rights transfer (`INV-IPC-002`). |
 | Context switch | **Full** | TCB. An error here leaks register and address-space state across every boundary at once. |
-| HAL MMU | **Full** | TCB. W^X and kernel/user separation are its output (`INV-MEM-003`, `INV-MEM-009`). |
-| HAL IOMMU / DART backend | **Full** | TCB, and the confinement the Reduced tier is justified by. Carries the `INV-DEV-006` no-widening proof. |
+| ~~HAL MMU~~ → **aarch64 MMU** | **Full** | TCB. W^X and kernel/user separation are its output (`INV-MEM-003`, `INV-MEM-009`). *Renamed 2026-08-03: the HAL is cancelled, so the obligation attaches to the aarch64 MMU directly. Tier, obligation, and artifacts are unchanged — only the home is.* |
+| ~~HAL IOMMU~~ → **DART backend / its IOMMU trait** | **Full** | TCB, and the confinement the Reduced tier is justified by. Carries the `INV-DEV-006` no-widening proof. *Renamed 2026-08-03 for the same reason; the proof is unchanged and remains an obligation of the confinement, not of `gpud`.* |
+| x86-64 arch code (`arch/x86_64*`, `e1000`, `virtio_blk`, `pci`, the x86 boot path) | *(unassessed — frozen reference)* | **Frozen reference, not scheduled** (2026-08-03). It stays in tree and keeps building as the implementation the aarch64 port is read against, and no release or assurance claim rests on it. It is deliberately **not** assigned a tier: assigning one would imply scheduled proof work, and assessing it is not a phase-gate obligation because nothing ships from it. It is deleted when aarch64 replaces it. |
 | In-kernel SQL engine (TCB-EXCEPTION-001) | **Full** | TCB by exception — ring 0, kernel address space — and it parses attacker-controlled B-tree and WAL pages *inside* the TCB. The size of the resulting Full-tier obligation is part of what that exception costs, and is one more reason the P2-T7 reframing is the point to re-examine ring-0 residency. |
 | Crypto primitives (SHA-256, HKDF, ChaCha20, Poly1305) | **Full** | Handle key material; a silent defect still produces plausible output, so tests alone cannot find it. |
 | Ed25519 verification stack (`ed25519-dalek`, `curve25519-dalek`, `fiat-crypto`, `subtle`) | **Full** | Crypto, and it decides whether a **forged release signature** is accepted — INV-BOOT's trust anchor. Assigned by risk, not by producibility: as permanently vendored code it can carry the invariant mapping, a fuzz target on the verify entry point, an audit report, and no-regression bars, but **Kani and Prusti cannot be produced for it** — the code is not ours to annotate and the group-operation and verification-equation layers are beyond harness scope. `fiat-crypto`'s field arithmetic is machine-verified upstream against a formal specification, which covers the field layer only; above it the gap is real and is stated rather than tiered away. |
@@ -1240,6 +1278,6 @@ If an invariant is weakened, security is weakened, even if the code still compil
 
 Two corollaries, added 2026-08-02:
 
-**A weakened invariant is written down or it is a lie.** The Apple-primary decision cost real assurance — remote attestation and sealing are gone on the primary platform. That is recorded as INV-BOOT/AS with owner sign-off, restated in §7, and guarded by INV-BOOT-AS-001..003. The failure mode this discipline prevents is not the loss itself; it is the loss being quietly forgotten and the platform later described as though it were attested.
+**A weakened invariant is written down or it is a lie.** The Apple-primary decision cost real assurance — remote attestation and sealing are gone. That was recorded as INV-BOOT/AS with owner sign-off, restated in §7, and guarded by INV-BOOT-AS-001..003. **On 2026-08-03 the single-platform decision removed the last hedge:** the exception became the rule, the credential store became unconditionally plaintext at rest, and the sentence "deployments that need attestation run x86-64" was deleted rather than repointed, because that platform no longer exists. The failure mode this discipline prevents is not the loss itself; it is the loss being quietly forgotten and BraiNIX later described as though it could attest. It cannot, and it never will.
 
 **Serving inverted the threat picture, and the invariants moved with it.** BraiNIX now accepts connections from hostile remote clients and runs a model that adversaries prompt directly. §13, §14, and §15 exist because the old invariant set — written for an internal-only microkernel — did not cover any of that. An invariant set that lags the system's actual attack surface provides confidence, not security.

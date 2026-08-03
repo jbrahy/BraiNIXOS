@@ -10,25 +10,31 @@ This is an authoritative specification. If code or configuration diverges from t
 
 ## 0. Platform scope — read this first
 
-**Everything in this document applies to x86-64 only.**
+**BraiNIX has no attestation model. Everything below §0 describes a platform that was dropped.**
 
-As of the owner decision of 2026-08-02, the **primary** platform is Apple Silicon (Mac mini M2 Pro, `T6020`),
-and on that platform **there is no attestation model at all**. This is not an unimplemented feature. It is
+As of the owner decision of 2026-08-02 the **primary** platform was Apple Silicon (Mac mini M2 Pro,
+`T6020`); as of **2026-08-03 it is the only platform** — x86-64 was dropped, and the x86-64 code remains in
+tree solely as a frozen reference implementation nothing is deployed from. On the platform BraiNIX
+actually runs on **there is no attestation model at all**. This is not an unimplemented feature. It is
 structural: Apple Silicon has no TPM, none can be added (no LPC/SPI header, and a USB TPM is not a root of
 trust), and the Secure Enclave exposes no PCR-style extend/quote/seal interface to third-party software.
 
-| Capability | x86-64 (secondary) | Apple Silicon (**primary**) |
+**§§1–8 below are retained as a historical record of the measured-boot design and of what P2-T9's swtpm
+work implemented on the frozen reference.** Nothing in them is a supported capability, a roadmap item, or
+a claim BraiNIX may make. There is no successor document, because there is nothing to succeed them with.
+
+| Capability | ~~x86-64~~ *(dropped 2026-08-03; frozen reference only)* | Apple Silicon (**the only platform**) |
 |---|---|---|
-| PCR measurement (§1, §2) | ✅ | ❌ structurally unavailable |
-| TPM quote (§3) | ✅ | ❌ structurally unavailable |
-| Attestation gate (§4) | ✅ | ❌ nothing to gate on |
-| Rollback protection via monotonic counter (§7) | ✅ | ❌ no TPM counter |
-| Sealing secrets to boot state | ✅ | ❌ structurally unavailable |
+| PCR measurement (§1, §2) | ~~✅~~ | ❌ structurally unavailable |
+| TPM quote (§3) | ~~✅~~ | ❌ structurally unavailable |
+| Attestation gate (§4) | ~~✅~~ | ❌ nothing to gate on |
+| Rollback protection via monotonic counter (§7) | ~~✅~~ | ❌ no TPM counter |
+| Sealing secrets to boot state | ~~✅~~ | ❌ structurally unavailable — the credential store is plaintext at rest |
 | Reproducible build | ✅ | ✅ unchanged |
 | Ed25519 release signature | ✅ | ✅ unchanged |
-| Payload integrity at rest | ✅ UEFI Secure Boot | ✅ iBoot2 vs. device-local SEP policy — *Apple's* root, not ours |
+| Payload integrity at rest | ~~✅ UEFI Secure Boot~~ | ✅ iBoot2 vs. device-local SEP policy — *Apple's* root, not ours |
 
-### What Apple Silicon has instead
+### What the platform has instead
 
 **iBoot2 verifies the Image4-wrapped payload against a Secure-Enclave-held, device-local policy at every
 boot.** A tampered on-disk payload does not boot. This is real, hardware-rooted tamper-resistance **for
@@ -50,12 +56,14 @@ evidence against an attacker, or called a measurement (`INV-BOOT-AS-002`).
 ### The rule this creates
 
 **No BraiNIX component, protocol field, log line, release note, or document may assert attestation,
-sealing, or hardware-anchored measurement on Apple Silicon** (`INV-BOOT-AS-001`, `PROJECT_RULES.md` Rule
-13.0). In particular, the BSP serving protocol must not define an attestation field the primary platform
+sealing, or hardware-anchored measurement** (`INV-BOOT-AS-001`, `PROJECT_RULES.md` Rule
+13.0). In particular, the BSP serving protocol must not define an attestation field the platform
 cannot populate honestly — an unfillable field invites a dishonest filling.
 
-**Deployments requiring attestation must run x86-64.** Recorded as the signed exception INV-BOOT/AS in
-[`../NORTH_STAR.md`](../NORTH_STAR.md); consequences in
+~~**Deployments requiring attestation must run on the x86-64 target.**~~ — **deleted 2026-08-03 with the platform.**
+There is nowhere to send such a deployment: **BraiNIX cannot prove its boot state to a remote party, and
+never will.** Recorded in [`../NORTH_STAR.md`](../NORTH_STAR.md) as the boot posture — formerly the signed
+exception INV-BOOT/AS, now the rule; consequences in
 [`../THREAT_MODEL.md`](../THREAT_MODEL.md) and [`PLATFORM_SUPPORT_MATRIX.md`](PLATFORM_SUPPORT_MATRIX.md).
 
 ---

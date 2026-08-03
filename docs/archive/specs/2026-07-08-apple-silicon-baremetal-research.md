@@ -9,7 +9,7 @@
 > |---|---|
 > | Apple Silicon **deferred / out of active scope** | **Primary platform** — Mac mini **M2 Pro** (`Mac14,12`, SoC `T6020`, 32 GB unified memory) |
 > | AS-4 (end-to-end serving on M-series) **NO-GO** | **In scope** — the MVP exit criterion |
-> | "must never block the x86-64 MVP" (§8) | x86-64 is now the **secondary**, attested platform |
+> | "must never block the x86-64 MVP" (§8) | **x86-64 is not a platform at all** (2026-08-03) — see the note below |
 > | INV-BOOT/AS "must be surfaced to the owner before any implementation phase is funded" (risk 2) | **Surfaced and signed off** — see `docs/NORTH_STAR.md` |
 >
 > **The cost estimates behind those verdicts were not revised — only the decision about whether to pay
@@ -26,8 +26,23 @@
 > on an unknown string (§AIC) — which is the right behavior on either SoC. `NORTH_STAR.md` and
 > `ROADMAP.md` remain authoritative on the machine.
 >
+> **⚠️ Single-platform decision, 2026-08-03 — three of this memo's framings are now wrong.** The body
+> below is unedited and this note is the only correction:
+>
+> 1. **x86-64 is not a platform.** §8's resourcing rule ("Apple Silicon tasks are preemptible by any
+>    x86-64 MVP task, hold no reserved capacity") described a world with an x86-64 MVP to be preempted
+>    by. There is none. The x86-64 code stays in tree as a **frozen reference implementation** and
+>    nothing is scheduled against it.
+> 2. **"Deployments needing attestation use the x86-64 target" (risk 2) has no target to name.** The
+>    INV-BOOT/AS posture the memo correctly predicted is now simply what INV-BOOT means, everywhere.
+>    BraiNIX cannot prove its boot state to a remote party, and there is no alternative build that can.
+> 3. **The QEMU `virt` aarch64 harness is cancelled** (Phase 4). Where the memo assumes core aarch64 work
+>    can be rehearsed in emulation before hardware, that step no longer exists — which makes its §6
+>    risk 3 warning *more* accurate, not less.
+>
 > Authoritative scope and phasing: [`docs/ROADMAP.md`](../../ROADMAP.md). Authoritative invariants and the
-> INV-BOOT/AS and TCB-AS exceptions: [`docs/NORTH_STAR.md`](../../NORTH_STAR.md).
+> TCB-AS and TCB-AS/GPU exceptions — and the INV-BOOT boot posture that INV-BOOT/AS became:
+> [`docs/NORTH_STAR.md`](../../NORTH_STAR.md).
 
 **Status:** research memo — go/no-go assessment, no code. **Verdicts superseded; technical content current.**
 **Scope:** native bare-metal BraiNIX on Apple Silicon (M-series) — now the primary platform.

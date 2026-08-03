@@ -243,13 +243,16 @@ Timeout processing is deterministic with respect to the scheduler tick. The kern
 ## 8. Syscall ABI
 
 The IPC **semantics** in this document are architecture-neutral. Only the entry mechanism and register
-layout differ per platform, and that difference is confined to `hal/syscall.rs`.
+layout differ per platform, and that difference is confined to the architecture's syscall entry code.
 
-> **Reconciled 2026-08-02.** §8.1 below is the x86-64 ABI as implemented. §8.2 states the obligations the
-> aarch64 backend must meet on the **primary** platform (P4-T4). The register layout there is
-> **not yet specified** — it is defined when the backend is written, not guessed here.
+> **Reconciled 2026-08-02; restated 2026-08-03.** §8.1 below is the x86-64 ABI as implemented — that is
+> now the **frozen reference implementation**, not a supported platform, and it is retained because it is
+> the working code the aarch64 entry path is written against. §8.2 states the obligations the aarch64
+> entry path must meet on **the platform**. The register layout there is **not yet specified** — it is
+> defined when the code is written, not guessed here. *(The HAL is cancelled, so `hal/syscall.rs` does not
+> exist; the aarch64 obligations attach to AS-1's SVC entry path, which absorbed P4-T4.)*
 
-### 8.1 x86-64: SYSCALL/SYSRET
+### 8.1 x86-64: SYSCALL/SYSRET *(frozen reference, not scheduled)*
 
 BraiNIX uses the x86-64 `SYSCALL`/`SYSRET` instruction pair for fast-path kernel entry and exit. This section defines the register layout for IPC syscalls.
 
@@ -300,11 +303,13 @@ When the kernel returns to userspace via `SYSRET`:
 
 ---
 
-### 8.2 aarch64 / Apple Silicon: SVC *(obligations — backend at P4-T4)*
+### 8.2 aarch64 / Apple Silicon: SVC *(obligations — implemented at AS-1)*
 
-The primary platform enters the kernel via the `SVC` instruction from EL0 to EL1, dispatched through the
-exception vector table. The register layout is defined when the backend is implemented; this section
+The platform enters the kernel via the `SVC` instruction from EL0 to EL1, dispatched through the
+exception vector table. The register layout is defined when the code is implemented (AS-1); this section
 states what that implementation must satisfy so the obligations are reviewable before the code exists.
+**This matters more than it did:** with the QEMU `virt` harness cancelled on 2026-08-03, this text is the
+only review artifact standing between the obligations and their first run on hardware.
 
 1. **Identical semantics.** Everything in §§1–7 and §§9–11 — rendezvous blocking, capability transfer
    atomicity, reply-capability lifecycle, timeout behavior, deadlock prevention — is unchanged. A

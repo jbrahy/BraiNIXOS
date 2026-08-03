@@ -3,17 +3,21 @@
 Every Markdown file in this repository, what it is for, and whether it is current. Read this before
 trusting any other document.
 
-**Last reconciled:** 2026-08-02, against the nineteen locked owner decisions in [`ROADMAP.md`](ROADMAP.md)
-— the PSK transport, the admin channel, the tiered proof gate, and the Wave 2 / Wave 3 split.
+**Last reconciled:** 2026-08-03, against the twenty-seven locked owner decisions in
+[`ROADMAP.md`](ROADMAP.md) — most recently **#20–#27, the single-platform decision**: x86-64 is dropped as
+a platform, the HAL is cancelled, Phases 1, 4, and 5 are cancelled, INV-BOOT is restated to the Apple boot
+posture, and the x86-64 code is **frozen, not deleted**. The 2026-08-02 pass (the PSK transport, the admin
+channel, the tiered proof gate) stands except where those eight decisions change it.
 
 ## Authority order
 
 When two documents disagree, the higher one wins and the lower one is drift to be fixed.
 
 1. **[`NORTH_STAR.md`](NORTH_STAR.md)** — the contract: destination, first principles, invariants, hard
-   lines, non-goals. Named invariant exceptions (INV-BOOT/AS, TCB-AS, the conditionally signed TCB-AS/GPU,
-   and the Ed25519 release-signature verification exception) live here and nowhere else; the fifth,
-   TCB-EXCEPTION-001, predates them and has its own file. See *Governance* below.
+   lines, non-goals. Named invariant exceptions (INV-BOOT/AS — *superseded 2026-08-03, now the rule* —
+   TCB-AS, the conditionally signed TCB-AS/GPU, and the Ed25519 release-signature verification exception)
+   live here and nowhere else; the fifth, TCB-EXCEPTION-001, predates them and has its own file. See
+   *Governance* below.
 2. **[`THREAT_MODEL.md`](THREAT_MODEL.md)** — attacker model, trust boundary, per-invariant verification
    and blast radius, deployment threat profile.
 3. **[`ROADMAP.md`](ROADMAP.md)** — phasing, task breakdown, status, per-component "done" gate, risks.
@@ -72,8 +76,11 @@ than through this index still sees the warning.
 | [`security/UNSAFE_CODE_POLICY.md`](security/UNSAFE_CODE_POLICY.md) | CURRENT | Unsafe Rust is prohibited by default; the allowlist and its justification discipline. |
 | [`security/TCB_EXCEPTION_001_IN_KERNEL_SQL.md`](security/TCB_EXCEPTION_001_IN_KERNEL_SQL.md) | CURRENT | Approved exception: the in-kernel SQL engine in ring 0. Owner sign-off 2026-06-27. |
 
-**Exceptions.** Five in force, all requiring owner sign-off. Four are recorded in NORTH_STAR.md, which is
-the only place a named exception may be introduced: **INV-BOOT/AS** and **TCB-AS** (signed 2026-08-02),
+**Exceptions.** Five named, all requiring owner sign-off — **one of which is now the rule rather than an
+exception**, and is retained by name so the count stays checkable. Four are recorded in NORTH_STAR.md,
+which is the only place a named exception may be introduced: **INV-BOOT/AS** (signed 2026-08-02;
+***superseded 2026-08-03 — now the rule***, because x86-64 was dropped and there is no undegraded platform
+for it to be an exception to) and **TCB-AS** (signed 2026-08-02),
 the **Ed25519 release-signature verification** crypto exception (signed 2026-08-02 — that stack stays
 vendored, verify-only, permanently), and **TCB-AS/GPU** (Apple GPU firmware — **conditionally signed
 2026-08-02**: in force for design and implementation work, but five preconditions must all be green before
@@ -86,7 +93,7 @@ list is drift.
 
 | File | Status | What it is |
 |---|---|---|
-| [`architecture/HAL.md`](architecture/HAL.md) | CURRENT | Hardware abstraction layer trait design. Delivered by P1-T1. |
+| [`architecture/HAL.md`](architecture/HAL.md) | SUPERSEDED | Hardware abstraction layer trait design, delivered by P1-T1. **The HAL is cancelled** (owner decision 2026-08-03, `ROADMAP.md` #21): with x86-64 dropped there is one architecture, and an eleven-trait layer over a single backend is an abstraction over nothing. Not replaced by a successor document — the obligations moved into the subsystems that own them (the aarch64 MMU; the DART backend's IOMMU trait, AS-3), both still **Full tier**. Body preserved unedited under its ⛔ banner; the trait decomposition remains the clearest written account of what each platform concern requires. |
 | [`architecture/BSP-v2-serving-protocol.md`](architecture/BSP-v2-serving-protocol.md) | CURRENT | **The** inbound serving protocol: pre-shared-key handshake, HKDF-SHA256 key schedule, ChaCha20-Poly1305 record layer, the HKDF ratchet, and **both session types** — client (`CapServe`) and admin (`CapAdmin`). Nothing in it is implemented yet; it states so itself. Delivered by the re-opened P2-T1. |
 | [`architecture/BSP-v1-serving-protocol.md`](architecture/BSP-v1-serving-protocol.md) | SUPERSEDED | Replaced by [`architecture/BSP-v2-serving-protocol.md`](architecture/BSP-v2-serving-protocol.md) on 2026-08-02. v1's signature-over-ephemeral-key-agreement handshake and compile-time client allowlist are obsolete; its record layer, sizing discipline, and message grammar were carried into v2. Body preserved unedited under its ⛔ banner. |
 | [`architecture/CAPABILITY_MODEL.md`](architecture/CAPABILITY_MODEL.md) | CURRENT | Capability types, grant/derive/revoke rules, unforgeability argument. **The only normative home of the capability numbering** — `Serve=11, Model=12, Gpu=13, Admin=14` — and of the frozen six-verb admin set. `NORTH_STAR.md` deliberately carries no discriminants. |
@@ -138,7 +145,8 @@ only)* and `../.planning/planning-keep/ARCHIVED.md` *(local only)*.
 >
 > **The one exception was the P6-T1 research memo**, which was excluded and load-bearing at the same time
 > — the reference for all Apple Silicon work, cited by `ROADMAP.md` for both the P3-T9 gate and the
-> Wave 3 resourcing rule, and absent from every clone. On 2026-08-02 it was **relocated into the tracked
+> Wave 3 resourcing rule (both since superseded by decisions #23 and #27), and absent from every clone.
+> On 2026-08-02 it was **relocated into the tracked
 > tree** at `archive/specs/`, unedited, and every inbound link repointed.
 
 | Path | What it is |
@@ -162,6 +170,7 @@ only)* and `../.planning/planning-keep/ARCHIVED.md` *(local only)*.
 | [`security/PROJECT_DESCRIPTION.md`](security/PROJECT_DESCRIPTION.md) | [`NORTH_STAR.md`](NORTH_STAR.md) + [`../README.md`](../README.md) |
 | [`security/SECURITY.md`](security/SECURITY.md) | [`operations/DEVICE_ISOLATION_POLICY.md`](operations/DEVICE_ISOLATION_POLICY.md) — it was a Phase 08 device-isolation note, not a security policy. Disclosure policy is [`../SECURITY.md`](../SECURITY.md). |
 | [`architecture/BSP-v1-serving-protocol.md`](architecture/BSP-v1-serving-protocol.md) | [`architecture/BSP-v2-serving-protocol.md`](architecture/BSP-v2-serving-protocol.md) — decision #16 replaced v1's signature-over-ephemeral-key-agreement handshake and compile-time client allowlist with the pre-shared-key handshake on 2026-08-02. Its record layer, sizing discipline, and message grammar were carried into v2. |
+| [`architecture/HAL.md`](architecture/HAL.md) | *(no successor — cancelled, not replaced)* — decision #21 cancelled the HAL on 2026-08-03 with the second architecture. Its proof obligations moved to the aarch64 MMU and the DART backend's IOMMU trait; no document takes its place, because there is nothing left for one to describe. |
 | [`REMOTE_MANAGEMENT_SHELL_SPEC.md`](REMOTE_MANAGEMENT_SHELL_SPEC.md) | [`architecture/BSP-v2-serving-protocol.md`](architecture/BSP-v2-serving-protocol.md) — decision #17 chose the admin session type's frozen six-verb set over a shell on 2026-08-02; a general-purpose remote shell is a NORTH_STAR non-goal. Not deferred — answered differently. |
 | [`dev-rules.md`](dev-rules.md) | [`../PROJECT_RULES.md`](../PROJECT_RULES.md) — near-duplicate, same title inside. |
 | [`security-rules.md`](security-rules.md) | [`security/SECURITY_INVARIANTS.md`](security/SECURITY_INVARIANTS.md) |

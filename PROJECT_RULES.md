@@ -1,9 +1,10 @@
 # BraiNIX Project Rules
-## Non-Negotiable Rules for a Secure Multi-Architecture LLM Inference Serving System
+## Non-Negotiable Rules for a Secure Single-Architecture LLM Inference Serving System
 
-Version: 2.0
+Version: 2.1
 Status: Mandatory
-Reconciled: 2026-08-02 (serving pivot + Apple-primary platform decision)
+Reconciled: 2026-08-03 (single-platform Apple decision; supersedes the 2026-08-02 serving-pivot +
+Apple-primary reconciliation)
 Applies To: Architecture, kernel code, userspace services, platform backends, build pipeline, CI, deployment, documentation, verification, and operational governance
 
 **Authority.** These rules are subordinate to [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md), which is the
@@ -26,10 +27,12 @@ No engineering convenience, compatibility target, schedule pressure, throughput 
 implementation shortcut may override these rules without an explicit documented security exception
 approved at the project-governance level.
 
-**Two decisions of 2026-08-02 shape everything below.** The primary platform is **Apple Silicon** (Mac
-mini M2 Pro, `Mac14,12`, SoC `T6020`), with x86-64 retained as the secondary and **attested** platform; and
-**INV-BOOT/AS** is signed off, meaning remote attestation and sealing are permanently unavailable on the
-primary platform. Rules 6.1, 12.0, 13.0, and §24–§26 exist because of these.
+**Three decisions shape everything below.** The platform is **Apple Silicon** (Mac mini M2 Pro,
+`Mac14,12`, SoC `T6020`) — primary as of 2026-08-02 and, since **x86-64 was dropped on 2026-08-03**, the
+**only** one. **INV-BOOT/AS** was signed off on 2026-08-02, meaning remote attestation and sealing are
+permanently unavailable; on 2026-08-03 it stopped being an exception and became **the boot posture**,
+because there is no undegraded platform left for it to be an exception to. Rules 6.1, 12.0, 13.0, and
+§24–§26 exist because of these.
 
 ---
 
@@ -43,7 +46,7 @@ The following words have strict meaning in this document:
 - **May** means allowed if it does not violate a stronger rule.
 - **Trusted Computing Base (TCB)** means all components that must behave correctly for a stated security guarantee to hold.
 - **Development mode** means QEMU, containerized, emulated, CI, or otherwise non-production execution.
-- **Production mode** means supported bare-metal execution on a supported platform with the required hardware and verified boot assumptions. Two production platforms exist, at **different assurance levels**: Apple Silicon (primary, **not attested** — INV-BOOT/AS) and x86-64 (secondary, **attested**). "Production" alone is therefore no longer sufficient to describe a deployment's assurance; the platform must be named.
+- **Production mode** means supported bare-metal execution on the supported platform with the required hardware and verified boot assumptions. **Exactly one production platform exists: Apple Silicon**, and it is **not attested** — reproducible build, Ed25519 release signature, and iBoot-verified payload integrity, with no measurement, no remote attestation, and no sealing. There is no higher-assurance variant to name, so "production" describes the assurance level completely, and it is this one.
 - **Security domain** means a unit of isolation whose compromise must not automatically compromise another domain.
 - **Confined tenant** means a component granted compute and memory but no authority — specifically the served model, which is central to the product and central to nothing in the TCB's authority.
 
@@ -131,27 +134,33 @@ Unstated scope boundaries are prohibited.
 
 ## 6. Architecture Rules
 
-### Rule 6.1 — Two Supported Architectures, One HAL
-*(Replaced 2026-08-02. Formerly "x86-64 Only".)*
+### Rule 6.1 — One Supported Architecture, No HAL
+*(Replaced 2026-08-03. Formerly "Two Supported Architectures, One HAL"; before that, "x86-64 Only".)*
 
-BraiNIX supports exactly two architectures:
+BraiNIX supports exactly one architecture:
 
 | Platform | Role |
 |---|---|
-| **aarch64 / Apple Silicon** — Mac mini M2 Pro (`Mac14,12`, `T6020`) | **Primary.** The serving deployment. CPU + AGX GPU at maximum. **Not attested** (INV-BOOT/AS). |
-| **x86-64** | Secondary. Development, CI, and the **attested** deployment target — the only platform where INV-BOOT holds in full. |
+| **aarch64 / Apple Silicon** — Mac mini M2 Pro (`Mac14,12`, `T6020`) | The serving deployment, and the only one. CPU + AGX GPU at maximum. **Not attested** — see Rule 13.0. |
 
-No 32-bit support and no legacy compatibility burden. A third architecture may not be added without owner
-sign-off.
+**x86-64 is not a supported architecture.** Its code stays in tree and **must keep building** as the frozen
+reference implementation the aarch64 port is written against, and is deleted only when aarch64 replaces
+it. No deployment, release, or assurance claim may rest on it, and no rule below is discharged by it.
 
-Both are **compile-time backends behind one hardware abstraction layer** (`hal/`), never runtime dispatch.
-Architecture-neutral code — the serving protocol, the request parser, the tokenizer, the tensor kernels,
-the transformer — must contain no platform assumption. In particular, **page size is a HAL parameter**:
-Apple Silicon uses 16 KiB base pages and x86-64 uses 4 KiB, and a hardcoded page size in neutral code is a
-security defect (INV-MEM-009), not a portability nit.
+No 32-bit support and no legacy compatibility burden. **A second architecture may not be added without
+owner sign-off** — including reviving x86-64 as a target. A second architecture is a north-star non-goal.
 
-`arch/` is **single-owner** during HAL extraction. Two concurrent refactors there are a guaranteed merge
-disaster and are prohibited.
+~~Both are compile-time backends behind one hardware abstraction layer (`hal/`).~~ — **the HAL is
+cancelled** (2026-08-03): one backend is not an abstraction. Platform code lives directly under
+`arch/aarch64/`. Architecture-neutral code — the serving protocol, the request parser, the tokenizer, the
+tensor kernels, the transformer — must still contain no platform assumption; that rule is what keeps those
+subsystems host-testable and it survives the loss of the second architecture unchanged. In particular,
+**page size is a platform parameter**: the platform uses 16 KiB base pages, and a hardcoded page size in
+neutral code is a security defect (INV-MEM-009), not a portability nit — **including a hardcoded 16 KiB**,
+which is now the likelier mistake.
+
+~~`arch/` is single-owner during HAL extraction.~~ — no extraction is happening; the rule lapses with the
+work it governed.
 
 ### Rule 6.1a — Reference-Only External Work
 Reverse-engineering documentation produced by third parties — principally the Asahi Linux project, which
@@ -369,15 +378,17 @@ Where simultaneous multithreading creates cross-domain leakage risk, sibling hyp
 
 ## 12. Hardware Security Rules
 
-### Rule 12.0 — Both Platforms Must Satisfy the Equivalent Property
-*(Added 2026-08-02.)*
+### Rule 12.0 — The Platform Must Satisfy Every Obligation
+*(Added 2026-08-02; restated 2026-08-03 for a single platform.)*
 
 The hardware-security rules below were written for x86-64. **Each states an obligation, not a mechanism.**
-The primary platform must discharge every one of them; only the mechanism differs. A property present on
-the secondary platform and absent on the primary is a **named exception requiring owner sign-off**, never
-a silent asymmetry — the primary platform must not be the weaker one by accident.
+The platform must discharge every one of them. ~~A property present on the secondary platform and absent
+on the primary is a named exception.~~ — there is no secondary platform, so **an obligation the platform
+does not discharge is simply undischarged**, and saying so is required. The x86-64 column is retained
+because the frozen reference implementation is what the aarch64 work is read against; it discharges
+nothing on anyone's behalf.
 
-| Obligation | x86-64 | aarch64 / Apple |
+| Obligation | x86-64 *(frozen reference, not a platform)* | aarch64 / Apple *(the platform)* |
 |---|---|---|
 | Kernel cannot execute user code (12.3) | SMEP | PXN |
 | Kernel cannot implicitly touch user memory (12.4) | SMAP | PAN |
@@ -387,7 +398,7 @@ a silent asymmetry — the primary platform must not be the weaker one by accide
 | IOMMU required in production (12.7) | VT-d | **DART** — dozens of per-device instances, **each deny-all by default**; unknown variant fails closed |
 | Interrupt controller | APIC | **AIC** — packed event word, FIQ timer path outside the controller, implementation-defined IPIs |
 
-Two Apple-specific obligations with no x86-64 analogue:
+Two obligations the frozen x86-64 reference has no analogue for:
 
 - **Assume nothing at firmware handoff.** MMU, cache, and translation state at the iBoot handoff are
   undocumented and have changed across releases. Re-establish our own page tables, vectors, and stack
@@ -432,11 +443,12 @@ If the system claims mitigation for specific speculative-execution or side-chann
 
 ## 13. Boot, Attestation, and Update Rules
 
-### Rule 13.0 — No Attestation Claims on Apple Silicon
-*(Added 2026-08-02. Enforces INV-BOOT/AS.)*
+### Rule 13.0 — No Attestation Claims, Anywhere
+*(Added 2026-08-02 as "No Attestation Claims on Apple Silicon"; generalized 2026-08-03, when Apple Silicon
+became the only platform and INV-BOOT/AS became the boot posture rather than an exception.)*
 
 Apple Silicon has no TPM and none can be added; the Secure Enclave exposes no PCR-style
-extend/quote/seal interface to third-party software. On the **primary** platform, therefore:
+extend/quote/seal interface to third-party software. On the **only** platform, therefore:
 
 **Permitted claims.** Reproducible build. Ed25519 release signature. Payload-at-rest integrity, described
 accurately as *"iBoot2 verifies the Image4 payload against a Secure-Enclave-held, device-local policy"* —
@@ -450,9 +462,18 @@ The software measurement log is for operational debugging and accidental-corrupt
 is self-reported: a kernel compromised early can produce any log it likes. It must never be exported as an
 attestation or described as a measurement.
 
-The BSP serving protocol must not define an attestation field the primary platform cannot populate
-honestly. Deployments requiring attestation run x86-64. This interacts directly with Rule 4.5 — no
-marketing claims beyond proof scope — and is the single most likely place for that rule to be violated.
+The BSP serving protocol must not define an attestation field the platform cannot populate
+honestly. ~~Deployments requiring attestation run x86-64.~~ — **deleted 2026-08-03 with the platform.**
+There is nowhere to send such a deployment: **BraiNIX cannot prove its boot state to a remote party, and
+never will.** This interacts directly with Rule 4.5 — no marketing claims beyond proof scope — and is the
+single most likely place for that rule to be violated, more so now that the honest alternative the old
+sentence offered no longer exists.
+
+**The credential store is plaintext at rest, permanently** *(owner ruling, 2026-08-02, made unconditional
+2026-08-03 when the x86-64 sealing half died with the platform)*. Sealing binds a secret to a measured boot
+state and there is no measurement to bind against. No code, log line, protocol field, or release note may
+describe the store as sealed or encrypted at rest, and the release notes must state the exposure plainly:
+a stolen disk yields every client and admin pre-shared key.
 
 ### Rule 13.1 — Measured Boot Claims Are Production-Only
 Virtual TPM or emulated attestation in development mode is for testing flows, not for establishing production trust.
@@ -760,9 +781,10 @@ framing. No consumer may interpret in-band control sequences from model output.
 
 ### Rule 25.4 — Weights Are Verified Before Use, and the Anchor Is Stated
 The loader checks a per-tensor digest before any weight byte is used and fails closed on malformed,
-truncated, or oversized input. On x86-64 the digest is anchored to a hardware quote; **on Apple Silicon it
-is anchored only to the software measurement log**, so it detects corruption but not an attacker who
-already controls the kernel. Documentation must not blur the two.
+truncated, or oversized input. **The digest is anchored only to the self-reported software measurement
+log** — there is no hardware quote and no platform on which there would be — so it detects corruption and
+accidental substitution but **not** an attacker who already controls the kernel. Documentation must not
+imply a stronger anchor than that.
 
 ### Rule 25.5 — Confinement Is Tested Adversarially
 A prompt-injection corpus runs as a CI regression bar. The passing condition is **zero escalations under
@@ -780,8 +802,15 @@ This document, `docs/security/SECURITY_INVARIANTS.md`, and every architecture sp
 restate them — never introduce, reword, or qualify one. A qualification existing only in a subordinate
 document is a bug to be reported.
 
-### Rule 26.2 — Five Exceptions In Force
-**In force:** **INV-BOOT/AS** and **TCB-AS** (2026-08-02); the **Ed25519 release-signature verification**
+### Rule 26.2 — Five Named Exceptions, One of Them Now the Rule
+This ledger must match [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md) exactly. The north star introduces named
+exceptions; this rule only reproduces them, and where the two differ the north star is right and this rule
+is the bug.
+
+**Named:** **INV-BOOT/AS** (2026-08-02 — ***superseded 2026-08-03, now the rule***: with x86-64 dropped
+there is no undegraded platform for it to be an exception to, so what it described is simply what INV-BOOT
+means; retained by name so the count stays checkable rather than silently dropping to four); **TCB-AS**
+(2026-08-02); the **Ed25519 release-signature verification**
 crypto exception (2026-08-02 — that stack stays vendored, verify-only, permanently); **TCB-AS/GPU**
 (2026-08-02, **conditionally signed** — see below); and **TCB-EXCEPTION-001** (in-kernel SQL, 2026-06-27).
 

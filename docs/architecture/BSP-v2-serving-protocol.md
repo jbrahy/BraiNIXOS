@@ -161,15 +161,17 @@ nothing outside them (THREAT_MODEL §"The admin channel's blast radius").
 Stated because the transport's entire security rests on it, and because asserting
 an unbuilt control would violate NORTH_STAR's "every claim is falsifiable":
 
-- *Apple Silicon (primary):* the credential store is **plaintext at rest**, a
-  clause of the INV-BOOT/AS exception. Anyone who obtains the disk obtains every
-  client and admin credential. Sealing means binding a secret to a measured boot
-  state, and the platform has neither the measurement nor the hardware.
-- *x86-64 (attested):* the credential store is **specified to be TPM-sealed** and
-  **that has not shipped.** `src/kernel/src/boot/credential_store.rs` persists to
-  virtio-blk and seals nothing. x86-64 today has the same plaintext-at-rest
-  exposure as the primary platform, with a route out the primary platform does
-  not have.
+The credential store is **plaintext at rest, permanently** (owner ruling
+2026-08-02, made unconditional 2026-08-03). Anyone who obtains the disk obtains
+every client and admin credential. Sealing means binding a secret to a measured
+boot state, and the only platform has neither the measurement nor the hardware.
+`src/kernel/src/boot/credential_store.rs` persists to disk and seals nothing, and
+that is the end state, not a pending task.
+
+~~*x86-64 (attested):* the credential store is specified to be TPM-sealed…~~ —
+**deleted 2026-08-03 with the platform.** There is no target on which sealing
+could ship, so there is no route out and no better-configured deployment to
+point at.
 
 Combined with the absent forward secrecy, this is THREAT_MODEL's dominant threat
 *Credential-store disclosure, retroactively*: physical possession of the machine,
@@ -1151,8 +1153,8 @@ and the `0x1X` tag range is a decoding error on a client session.
 **Credential-store disclosure, retroactively.** BSP does not defend against this
 and must not be described as if it did. The transport's authentication and
 confidentiality reduce entirely to secrets held in the credential store, which is
-plaintext at rest on the primary platform and unsealed in practice on x86-64
-(§2.4). What BSP contributes is limited and worth stating exactly: the enrolled
+plaintext at rest, permanently and on the only platform there is (§2.4).
+What BSP contributes is limited and worth stating exactly: the enrolled
 key material is destroyed at enrollment so the stored values are one-way
 derivatives rather than the key itself (§5.2); the ratchet, once shipped, deletes
 chain keys as it advances so a later disclosure stops being retroactive (§6); and

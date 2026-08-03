@@ -9,52 +9,60 @@ between development and production environments.
 This is an authoritative specification. If code or configuration diverges from this document, the document
 must be updated in the same PR that introduces the change.
 
-**Reconciled 2026-08-02** for the Apple-primary platform decision. The previous version of this document
-stated "No ARM (AArch64 or AArch32) support" — that is now false, and the reversal is the single most
-consequential change in this file.
+**Reconciled 2026-08-03** for the single-platform decision, superseding the 2026-08-02 Apple-primary
+reconciliation. Two reversals now sit in this file's history: the original "No ARM (AArch64 or AArch32)
+support" became false on 2026-08-02, and on 2026-08-03 **x86-64 stopped being a platform at all**.
 
 ---
 
 ## 1. Supported Platforms
 
-BraiNIX supports exactly **two** platforms, at **different assurance levels**. Naming the platform is
-therefore part of describing a deployment; "production BraiNIX" alone is not a meaningful assurance claim.
+BraiNIX supports exactly **one** platform.
 
-| | Platform | Role | Assurance |
-|---|---|---|---|
-| **Primary** | **aarch64 / Apple Silicon** — Mac mini M2 Pro (`Mac14,12`, SoC `T6020`, 32 GB unified memory) | The serving deployment | **Degraded** — INV-BOOT/AS: no measurement, no remote attestation, no sealing |
-| **Secondary** | **x86-64 long mode** | Development, CI, and **attested** deployments | **Full** — INV-BOOT holds in all clauses |
+| Platform | Role | Assurance |
+|---|---|---|
+| **aarch64 / Apple Silicon** — Mac mini M2 Pro (`Mac14,12`, SoC `T6020`, 32 GB unified memory) | The serving deployment, and the only one | **No measurement, no remote attestation, no sealing** — this is INV-BOOT, not a degradation of it |
 
-Not supported: 32-bit (i386/IA-32), AArch32, RISC-V, generic aarch64 servers (Graviton/Ampere — descoped
-2026-08-02), and real or protected mode beyond controlled bootstrap transitions.
+**x86-64 is not a supported platform** (owner decision, 2026-08-03). The x86-64 code stays in tree and
+stays building as the **frozen reference implementation** the aarch64 port is written against, and is
+deleted only when aarch64 replaces it. §3 below is retained on those terms: it documents what the
+reference implementation assumes, not what any deployment runs on. **Nothing may be deployed from it, and
+no assurance claim rests on it.**
 
-Both platforms are **compile-time backends** behind one hardware abstraction layer
-([`../architecture/HAL.md`](../architecture/HAL.md)) — never runtime dispatch. Every obligation in this
-document must be discharged by both; only the mechanism differs.
+Not supported: x86-64 (as of 2026-08-03), 32-bit (i386/IA-32), AArch32, RISC-V, generic aarch64 servers
+(Graviton/Ampere — descoped 2026-08-02), and real or protected mode beyond controlled bootstrap
+transitions.
 
-### 1.1 The assurance asymmetry, stated plainly
+~~Both platforms are compile-time backends behind one hardware abstraction layer.~~ — **the HAL is
+cancelled** (2026-08-03): one backend is not an abstraction. Platform code lives directly under
+`arch/aarch64/`. See [`../architecture/HAL.md`](../architecture/HAL.md), which carries a SUPERSEDED banner.
 
-**Deployments requiring remote attestation or sealing must run x86-64.** Apple Silicon has no TPM and none
+### 1.1 The assurance ceiling, stated plainly
+
+**BraiNIX cannot attest, and cannot seal.** Apple Silicon has no TPM and none
 can be added; the Secure Enclave exposes no PCR-style extend/quote/seal interface to third-party software.
-This is structural and permanent — not a gap that closes in a later release. See
-[`ATTESTATION_MODEL.md`](ATTESTATION_MODEL.md) and the INV-BOOT/AS exception in
-[`../NORTH_STAR.md`](../NORTH_STAR.md).
+This is structural and permanent — not a gap that closes in a later release. ~~Deployments requiring
+remote attestation or sealing must run on the x86-64 target.~~ **That sentence is deleted, not repointed**: the platform
+it named does not exist, so a deployment whose threat model requires remote attestation or sealing cannot
+use BraiNIX at all. See [`ATTESTATION_MODEL.md`](ATTESTATION_MODEL.md) and the boot posture in
+[`../NORTH_STAR.md`](../NORTH_STAR.md) (formerly the INV-BOOT/AS exception, now the rule).
 
 ### 1.2 Page size
 
 | Platform | Base page |
 |---|---|
 | Apple Silicon | **16 KiB** |
-| x86-64 | 4 KiB |
-| QEMU `virt` aarch64 (bring-up harness only) | 4 KiB |
+| ~~x86-64~~ *(frozen reference, not a platform)* | 4 KiB |
+| ~~QEMU `virt` aarch64 (bring-up harness only)~~ | ~~4 KiB~~ — **harness cancelled 2026-08-03** |
 
-The third row is a trap: aarch64 code can pass every harness test at 4 KiB and still be wrong on the
-machine it targets. Page size is a HAL parameter (`INV-MEM-009`); see
+The trap has inverted and has not gone away. There is no longer a 4 KiB harness that a 16 KiB assumption
+can fail, so a hardcoded **16 KiB** is now the likelier defect and nothing in CI disagrees with it. Page
+size is a platform parameter (`INV-MEM-009`) sourced from the aarch64 MMU code; see
 [`../architecture/MEMORY_MODEL.md`](../architecture/MEMORY_MODEL.md) §12.
 
 ---
 
-## 2. Apple Silicon (primary)
+## 2. Apple Silicon (the only platform)
 
 ### 2.1 Supported hardware
 
@@ -91,8 +99,8 @@ Consequences, stated because they constrain operations:
 ### 2.3 Trusted components we cannot remove (TCB-AS)
 
 **SecureROM, iBoot1, iBoot2, and sepOS** are Apple-signed, immutable, closed-source, and always running.
-They are in the TCB by force. This permanently violates the dependency-closure rule on the primary
-platform and is recorded as the named exception TCB-AS.
+They are in the TCB by force. This permanently violates the dependency-closure rule — on every build there
+is, now that this is the only platform — and is recorded as the named exception TCB-AS.
 
 ### 2.4 Required platform features
 
@@ -116,6 +124,10 @@ Required before any hardware bring-up (AS-1):
   Running m1n1 as a tool is permitted; incorporating its code is not, regardless of license
   (`PROJECT_RULES.md` Rule 6.1a).
 
+**The rig is now on the critical path in a way it was not before.** With the QEMU `virt` harness cancelled
+(2026-08-03), there is no environment in which aarch64 core code can be run before it runs on this
+machine. Until the rig exists, the only verifiable Apple work is the host-side ADT and boot-args parser.
+
 The serial console is **development-only**: it is unauthenticated and grants whoever holds the cable
 physical-access authority. It must not be present in a production configuration.
 
@@ -131,10 +143,17 @@ every break is re-derived in-tree rather than pulled from upstream.
 
 ---
 
-## 3. x86-64 (secondary — attested)
+## 3. x86-64 — *frozen reference, not a platform*
 
-Retained as the development and CI target, and as the **only** platform where INV-BOOT holds in full.
-Sections 3.1–3.5 are unchanged from the original specification and remain accurate.
+**Dropped as a platform 2026-08-03.** ~~Retained as the development and CI target, and as the only platform
+where INV-BOOT holds in full.~~ Neither clause survives: nothing attests, and there is no
+second deployment target. The x86-64 code stays in tree and stays building as the reference implementation
+the aarch64 port is written against.
+
+Sections 3.1–3.5 are retained **unchanged and unweakened** — they remain the hardware contract the frozen
+reference assumes, and deleting them would leave in-tree code with no stated requirements. Read every
+"required", "production", and "refused boot" below as describing that reference implementation, **not a
+supported deployment**. Nothing may be deployed from it.
 
 ### 3.1 Minimum CPU generations
 
@@ -208,7 +227,7 @@ minimum for the detected CPU. Older microcode is a **refused boot**, not a degra
 
 ## 4. Development environments
 
-### 4.1 QEMU x86-64 (primary development target today)
+### 4.1 QEMU x86-64 (the frozen reference's runner — not a platform)
 
 ```
 qemu-system-x86_64 \
@@ -234,14 +253,20 @@ swtpm socket \
 attached via `-chardev socket,id=chrtpm,path=…` + `-tpmdev emulator,id=tpm0,chardev=chrtpm` +
 `-device tpm-tis,tpmdev=tpm0`. Wired at P2-T9 (`c01d0ab`).
 
-### 4.2 QEMU `virt` aarch64 (bring-up harness)
+### ~~4.2 QEMU `virt` aarch64 (bring-up harness)~~ — **CANCELLED 2026-08-03**
 
-Used to develop the aarch64 **core** — exception levels, MMU, generic timers, context switch, SVC entry —
-with a working console, before facing hardware where nothing works until the UART does. Uses GICv3 and
-PL011, **neither of which exists on the primary platform**; these backends are harness-only and are not
-product code.
+~~Used to develop the aarch64 **core** — exception levels, MMU, generic timers, context switch, SVC
+entry — with a working console, before facing hardware where nothing works until the UART does.~~
 
-Runs at 4 KiB pages. See §1.2 — this harness cannot validate 16 KiB behavior.
+**Cancelled** with Phase 4: GICv3 and PL011 exist on neither the machine nor anywhere else in scope, so
+maintaining them is a second platform's worth of work to rehearse against hardware they do not resemble.
+The cost is stated rather than softened: the sentence above was correct, and **there is now no
+console-having environment in which aarch64 core code can be debugged before it runs on the mini.** The
+aarch64 core work is not lost — it is absorbed into AS-1 — but its first execution is on hardware, over a
+debug UART cable, with no prior console.
+
+The harness also ran at 4 KiB pages, which made it the only automatic check against a hardcoded page size.
+See §1.2: that check is gone, and review is now the control.
 
 ### 4.3 Docker development container
 
@@ -257,18 +282,21 @@ When KVM is unavailable (CI), QEMU runs in full emulation (TCG) with no special 
 
 ## 5. Production vs development separation
 
-| Property | Development | Production (x86-64) | Production (Apple Silicon) |
-|----------|------------|---------------------|----------------------------|
-| **Execution environment** | QEMU (q35 / `virt`, TCG or KVM) | Bare-metal x86-64 with UEFI Secure Boot | Mac mini M2 Pro in Permissive Security, Image4 payload via `kmutil` |
-| **Root of trust** | None (emulated) | UEFI Secure Boot + hardware TPM 2.0 | **Apple's** SecureROM/iBoot + device-local SEP policy |
-| **Measurement** | swtpm (software emulation) | Hardware TPM 2.0 PCRs | **None** — software-only log, self-reported |
-| **Remote attestation** | Flow rehearsal only | Trust-anchor-backed quote | **None** (INV-BOOT/AS) |
-| **Sealing** | No | Yes | **None** (INV-BOOT/AS) |
-| **Signing keys** | Development keys (local keyring) | Production keys (HSM-stored) | Production keys (HSM-stored) for the release signature; Apple's device-local policy for payload integrity |
-| **Binary marker** | `DEV_BUILD` present | `DEV_BUILD` absent | `DEV_BUILD` absent |
-| **IOMMU** | QEMU intel-iommu / AMD-vi emulation | Hardware VT-d / AMD-Vi | **DART** — all instances deny-all by default |
-| **Serial console** | Present | Absent | **Must be absent** (§2.5) |
-| **Security claims** | Testing and behavioral validation only | Full structural guarantees | Full structural guarantees **except** measurement, attestation, and sealing |
+| Property | Development *(and the frozen x86-64 reference)* | Production — Apple Silicon *(the only production there is)* |
+|----------|------------|----------------------------|
+| **Execution environment** | QEMU q35, TCG or KVM | Mac mini M2 Pro in Permissive Security, Image4 payload via `kmutil` |
+| **Root of trust** | None (emulated) | **Apple's** SecureROM/iBoot + device-local SEP policy |
+| **Measurement** | swtpm (software emulation) | **None** — software-only log, self-reported |
+| **Remote attestation** | Flow rehearsal only | **None, permanently** |
+| **Sealing** | No | **None, permanently** — the credential store is plaintext at rest |
+| **Signing keys** | Development keys (local keyring) | Production keys (HSM-stored) for the release signature; Apple's device-local policy for payload integrity |
+| **Binary marker** | `DEV_BUILD` present | `DEV_BUILD` absent |
+| **IOMMU** | QEMU intel-iommu emulation | **DART** — all instances deny-all by default |
+| **Serial console** | Present | **Must be absent** (§2.5) |
+| **Security claims** | Testing and behavioral validation only | Full structural guarantees **except** measurement, attestation, and sealing, which are unavailable rather than unimplemented |
+
+~~Production (x86-64)~~ — **that column is deleted with the platform.** There is no bare-metal x86-64
+deployment, no UEFI Secure Boot chain in the TCB, and no hardware TPM anywhere in the system.
 
 ### Structural enforcement
 
@@ -278,11 +306,12 @@ When KVM is unavailable (CI), QEMU runs in full emulation (TCG) with no special 
   material never overlaps (`INV-BOOT-003`).
 - swtpm results are never presented as production trust. Development and production PCR values use
   distinct trust anchors.
-- **On Apple Silicon, no build may emit an attestation claim at all** (`INV-BOOT-AS-001`). The absence of
+- **No build may emit an attestation claim at all** (`INV-BOOT-AS-001`). The absence of
   attestation is enforced, not merely expected: the serving protocol must not define a field the platform
-  cannot populate honestly.
+  cannot populate honestly, and there is no longer a second platform on which such a field could be
+  honestly filled.
 
 ---
 
-*Last reconciled: 2026-08-02 (Apple-primary platform decision).*
+*Last reconciled: 2026-08-03 (single-platform Apple decision).*
 *This document is the authoritative specification for BraiNIX platform support.*

@@ -8,14 +8,16 @@ This is an authoritative specification. If code or configuration diverges from t
 
 ---
 
-## 0. Two IOMMUs, two shapes
+## 0. One IOMMU, and it is not VT-d shaped
 
-*(Added 2026-08-02 with the Apple-primary platform decision.)*
+*(Added 2026-08-02 with the Apple-primary platform decision; restated 2026-08-03 when x86-64 was dropped.)*
 
-The principles in this document are platform-neutral. The **IOMMU requirement** in §4 is not: the primary
+The principles in this document are platform-neutral. The **IOMMU requirement** in §4 is not: the
 platform's IOMMU differs from VT-d in a way that changes what "configure the IOMMU" means operationally.
+The VT-d column is retained as the contrast that makes DART's shape legible — it is the frozen x86-64
+reference, not a supported platform.
 
-| | x86-64 | Apple Silicon (**primary**) |
+| | ~~x86-64~~ *(frozen reference, not a platform)* | Apple Silicon (**the only platform**) |
 |---|---|---|
 | IOMMU | VT-d / AMD-Vi | **DART** |
 | Topology | A small number of translation units covering the PCIe hierarchy | **Dozens of per-device-cluster instances** scattered across the SoC |
@@ -36,29 +38,34 @@ layout we have not implemented, halts bring-up for that device. There is no perm
 best-guess layout. A guessed PTE layout that happens not to fault is indistinguishable from a correct one
 until a device DMAs somewhere it should not — guessing at IOMMU configuration is guessing at isolation.
 
-**3. A driver cannot widen its own window** (`INV-DEV-006`). The `hal/iommu.rs` trait exposes no operation
+**3. A driver cannot widen its own window** (`INV-DEV-006`). The IOMMU trait exposes no operation
 by which a window's holder can enlarge, relocate, or add to it. Window changes are made by the
 capability-bounded authority that granted the window. This is a Kani obligation, and it applies **now** —
-every DMA-capable driver on the primary platform (NVMe via ANS2, PCIe, Ethernet) depends on it long before
-any GPU work begins.
+every DMA-capable driver on the platform (NVMe via ANS2, PCIe, Ethernet) depends on it long before
+any GPU work begins. *(2026-08-03: the HAL is cancelled, so this trait belongs to the DART backend itself,
+built at AS-3. It stays **Full tier** and it still carries the proof — the obligation moved home, not
+away.)*
 
 ### Trait shape
 
-The HAL IOMMU trait must be **instance-oriented**: *for each protection domain, map/unmap/flush on a
+The IOMMU trait must be **instance-oriented**: *for each protection domain, map/unmap/flush on a
 specific IOMMU instance*. A global address-space registry — the natural shape for VT-d — cannot express
-DART honestly. Where the trait fits VT-d comfortably but forces DART into an awkward shape, the trait is
-wrong. Locked-DART semantics (instances firmware has already configured and locked) must be represented
+DART honestly. With no VT-d backend left to accommodate, this is no longer a compromise between two
+shapes: **the trait is DART's, and inheriting a VT-d shape out of habit is the defect to watch for.**
+Locked-DART semantics (instances firmware has already configured and locked) must be represented
 explicitly rather than papered over.
 
 ### Note on INV-GPU
 
 **Apple's AGX GPU is in scope as of 2026-08-02 (owner ruling: "GPU and CPU at maximum"), so INV-GPU is
-active on the primary platform** — not a deferred target. It is the control that makes running Apple's
+active** — not a deferred target. It is the control that makes running Apple's
 opaque, DMA-capable GPU firmware survivable, and the DART confinement below must be enforced and proven
-**before** that firmware is ever loaded (AS-5-T0 gates AS-5-T2). On x86-64, INV-GPU remains deferred.
+**before** that firmware is ever loaded (AS-5-T0 gates AS-5-T2). ~~On x86-64, INV-GPU remains deferred.~~
+— the discrete-accelerator case was **cancelled with the x86-64 platform** on 2026-08-03 (Phase 5); AGX is
+the only accelerator in scope.
 
 Superseded text, retained for context: *"Apple's AGX GPU is out of scope, so INV-GPU remains deferred and applies to x86-64 only."* **DMA confinement
-itself is not deferred** — it is load-bearing on the primary platform from AS-3 onward.
+itself is not deferred** — it is load-bearing from AS-3 onward.
 
 ---
 

@@ -65,8 +65,8 @@ The following table is the exhaustive list of source locations where `unsafe` is
 1. **File-level, not block-level.** The `#![allow(unsafe_code)]` attribute is applied at the file level for allowlisted modules. Individual blocks within those files still require `// SAFETY:` comments.
 2. **No transitive expansion.** Being in an allowlisted module does not grant permission to use unsafe in helper modules that the allowlisted module depends on. Each file that contains unsafe must be independently allowlisted.
 3. **Minimal scope within allowlisted files.** Even within an allowlisted file, unsafe blocks must be as small as possible. A function that performs one unsafe operation and ten safe operations must wrap only the unsafe operation in an `unsafe` block, not the entire function body.
-4. **A path move is not a re-authorization.** The HAL extraction (P1-T2) relocates `src/kernel/src/arch/*` to `src/kernel/src/arch/x86_64/*`. Allowlist entries move with their files and their justifications carry over unchanged — but a move is the *only* thing that is automatic. If a file's unsafe operations change during the refactor, the entry is re-justified through the exception process below.
-5. **Per-architecture entries are separate entries.** An allowlisted x86-64 file does not implicitly allowlist its aarch64 counterpart. `arch/x86_64/paging/` being allowlisted grants nothing to `arch/aarch64/paging/`; each requires its own row with its own justification, because the operations genuinely differ.
+4. ~~**A path move is not a re-authorization.** The HAL extraction (P1-T2) relocates `src/kernel/src/arch/*` to `src/kernel/src/arch/x86_64/*`.~~ — **moot as of 2026-08-03: the HAL is cancelled and no move is scheduled.** The existing x86-64 allowlist entries stay exactly where they are, with their justifications unchanged, covering the **frozen reference implementation** that stays in tree and keeps building. The underlying rule survives for any future move: a path move carries a justification over unchanged, and *only* a path move does. If a file's unsafe operations change, the entry is re-justified through the exception process below.
+5. **Per-architecture entries are separate entries.** An allowlisted x86-64 file does not implicitly allowlist its aarch64 counterpart. `arch/x86_64/paging/` being allowlisted grants nothing to `arch/aarch64/paging/`; each requires its own row with its own justification, because the operations genuinely differ. **This is now the load-bearing half of the rule:** the aarch64 platform code is written *against* the frozen x86-64 reference, so the temptation to inherit its allowlist rows along with its structure is real, and the answer is no.
 
 ---
 
@@ -83,7 +83,7 @@ and reviewed rather than arriving as a surprise.
 |---|---|---|
 | aarch64 boot stub / entry | Entry ABI from iBoot, establishing our own MMU state, exception vectors, and stack before any abstraction exists. Nothing about the inherited state may be assumed. | AS-1 |
 | s5l UART console | MMIO writes before any safe abstraction layer exists — the aarch64 analogue of the existing COM1 entry. | AS-1 |
-| aarch64 page tables / MMU | Raw PTE writes, TLB maintenance. Distinct from x86-64: 16 KiB granule, different descriptor format. | P4-T2 |
+| aarch64 page tables / MMU | Raw PTE writes, TLB maintenance. Distinct from the x86-64 reference: 16 KiB granule, different descriptor format. | ~~P4-T2~~ **AS-1** (Phase 4 cancelled 2026-08-03; the work was absorbed, not dropped) |
 | aarch64 exception vectors / context switch | Inline assembly for vector entry, register save/restore, FP/NEON state. | P4-T3, P4-T4 |
 | AIC interrupt controller | MMIO register access, FIQ path, implementation-defined IPI system registers. | AS-2 |
 | DART IOMMU | MMIO register access and page-table entry writes for **every discovered instance**. | AS-3 |

@@ -7,7 +7,7 @@
 Every security property is *structural*. Nothing rests on an attacker not knowing something.
 
 [![Site](https://img.shields.io/badge/site-brainix-5af2a8?style=flat-square)](https://jbrahy.github.io/BraiNIXOS/)
-[![Target](https://img.shields.io/badge/target-Apple%20Silicon%20%2B%20x86__64-blue?style=flat-square)](#platforms)
+[![Target](https://img.shields.io/badge/target-Apple%20Silicon%20(aarch64)-blue?style=flat-square)](#platform)
 [![Rust](https://img.shields.io/badge/rust-no__std%20nightly-orange?style=flat-square)](rust-toolchain.toml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green?style=flat-square)](#license)
 
@@ -48,11 +48,11 @@ Each invariant is named, documented, and individually checkable. *Asserted is no
 | **INV-AUTH** | No ambient authority. Every server's capability set is frozen at launch; capabilities are unforgeable typed tokens. A remote client is granted only its own session. |
 | **INV-MEM**  | W^X holds for every page, always. No dynamic kernel heap — fixed-size pool allocators only (KPTI per-process page tables). Model weights and KV-cache live in fixed reserved regions, never a growing allocator. |
 | **INV-IPC**  | Synchronous rendezvous IPC only. No shared-memory IPC, no async queues. |
-| **INV-BOOT** | Every release is measured into the TPM, reproducibly built, and Ed25519-signed, with predicted PCRs published before the artifact ships. ⚠️ **Holds in full on x86-64 only** — see [Platforms](#platforms). |
+| **INV-BOOT** | Every release is reproducibly built and Ed25519-signed, and its payload's integrity is verified at every boot by iBoot against the machine's Secure-Enclave-held local policy. The kernel records a self-reported measurement log — a debugging aid, never evidence. ⚠️ **No remote attestation, no sealing, permanently** — see [Platform](#platform). |
 | **INV-SERVE** | Inbound clients are mutually isolated — no client can name another's session, weights view, or KV state. The network request decoder is a fail-closed, zero-allocation hostile-input parser. |
 | **INV-MODEL** | The served model is a confined tenant, never a trusted authority. Its weights are integrity-checked before use; it cannot escalate, read another client's session, or reach the network outside the serving channel. The confinement holds under adversarial prompting. |
 | **INV-AUDIT**| The observe-only auditor watches the serving stack and reports — nothing else. It holds no spawn, kernel-mutation, or network capability, so its compromise costs visibility, never privilege. |
-| **INV-GPU** *(active on the primary platform)* | Accelerator DMA is confined by the IOMMU; the GPU driver is an ordinary capability-bounded server with no ambient device authority, and cannot widen its own DMA window. It is the control that makes running Apple's opaque GPU firmware survivable, and must be proven **before** that firmware is ever loaded. Inference is still CPU-first by ordering. ⚠️ **On x86-64 it remains a stated target.** |
+| **INV-GPU** | Accelerator DMA is confined by the IOMMU; the GPU driver is an ordinary capability-bounded server with no ambient device authority, and cannot widen its own DMA window. It is the control that makes running Apple's opaque GPU firmware survivable, and must be proven **before** that firmware is ever loaded. Inference is still CPU-first by ordering. |
 
 See [`docs/security/`](docs/security/) and [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the full
 contract, attacker model, and verification posture.
@@ -65,29 +65,34 @@ contract, attacker model, and verification posture.
 - **Secure serving path** — an authenticated, capability-gated inbound protocol (pre-shared client keys, HKDF-SHA256 key schedule, ChaCha20-Poly1305 records) with mutually isolated per-client sessions.
 - **In-tree inference engine** — a `no_std` transformer runtime; the served model runs as a confined tenant with weights in fixed reserved regions.
 - **Decomposed network stack** — link, IP, and transport run as isolated servers chained only by synchronous IPC.
-- **Multi-arch by design** — a hardware abstraction layer with **Apple Silicon (aarch64)** and **x86-64** as compile-time backends.
-- **Reproducible, signed boot** — reproducibly built and Ed25519-signed on both platforms; measured into a TPM on x86-64 only.
+- **Single-architecture by decision** — **Apple Silicon (aarch64)** and nothing else. The in-tree x86-64 code is a frozen reference implementation, not a second target.
+- **Reproducible, signed boot** — reproducibly built, Ed25519-signed, and iBoot-verified at rest. **Not measured, not attested** — there is no TPM on the platform.
 
-## Platforms
+## Platform
 
-BraiNIX targets two platforms at **different assurance levels**. Naming the platform is part of describing
-a deployment.
+BraiNIX runs on **one** platform.
 
-| | Platform | Role | Assurance |
-|---|---|---|---|
-| **Primary** | **Apple Silicon** — Mac mini M2 Pro (`Mac14,12`, `T6020`, 32 GB) | The serving deployment. CPU + AGX GPU at maximum. |  ⚠️ **No remote attestation, no sealing** |
-| **Secondary** | **x86-64** | Development, CI, and attested deployments | ✅ Full — INV-BOOT holds in every clause |
+| Platform | Role | Assurance |
+|---|---|---|
+| **Apple Silicon (aarch64)** — Mac mini M2 Pro (`Mac14,12`, `T6020`, 32 GB) | The serving deployment, and the only one. CPU + AGX GPU at maximum. | ⚠️ **No remote attestation, no sealing — permanently** |
 
-**Why the asymmetry.** Apple Silicon has no TPM and none can be added; the Secure Enclave exposes no
-PCR-style extend/quote/seal interface to third-party software. On the primary platform a remote client
+x86-64 was **dropped as a platform** on 2026-08-03. Its code stays in tree and stays building as the
+**frozen reference implementation** the aarch64 port is written against, and is deleted only when aarch64
+replaces it. It is not a target, not a deployment, and not a fallback.
+
+**What that costs, plainly.** Apple Silicon has no TPM and none can be added; the Secure Enclave exposes no
+PCR-style extend/quote/seal interface to third-party software. A remote client
 **cannot cryptographically verify what it is talking to**, and an early kernel compromise is undetectable
-from outside. What survives there is reproducible builds, Ed25519 release signatures, and iBoot-verified
+from outside. What survives is reproducible builds, Ed25519 release signatures, and iBoot-verified
 payload integrity at rest — real tamper-resistance, but Apple's trust root, keyed to one machine, proving
-nothing to anyone else.
+nothing to anyone else. The credential store is likewise **plaintext at rest**: a stolen disk yields every
+client and admin key.
 
-This is structural and permanent, not an unimplemented feature. It is recorded as the signed exception
-**INV-BOOT/AS** in the [north star](docs/NORTH_STAR.md). **Deployments requiring attestation or sealing
-must run x86-64.** Full detail: [platform support matrix](docs/operations/PLATFORM_SUPPORT_MATRIX.md) ·
+This is structural and permanent, not an unimplemented feature. **BraiNIX cannot prove its boot state to a
+remote party, and never will** — and with x86-64 gone there is no other target to point such a deployment
+at. It is recorded in the [north star](docs/NORTH_STAR.md) as the boot posture (formerly the signed
+exception **INV-BOOT/AS**, now the rule). Full detail:
+[platform support matrix](docs/operations/PLATFORM_SUPPORT_MATRIX.md) ·
 [attestation model](docs/operations/ATTESTATION_MODEL.md).
 
 Third-party reverse-engineering work (notably [Asahi Linux](https://asahilinux.org/)) is **reference-only**:
@@ -96,32 +101,37 @@ published documentation in, clean-room implementation out. No code is copied, re
 ## Status
 
 Early, actively developed. BraiNIX pivoted from an internal-only hardened microkernel to a
-**network-facing secure inference server** (2026-07-07), and Apple Silicon became the primary platform
-(2026-08-02). The [north star](docs/NORTH_STAR.md), [threat model](docs/THREAT_MODEL.md), and
-[roadmap](docs/ROADMAP.md) are the authoritative, up-to-date contract.
+**network-facing secure inference server** (2026-07-07), Apple Silicon became the primary platform
+(2026-08-02), and on **2026-08-03 it became the only one**. The [north star](docs/NORTH_STAR.md),
+[threat model](docs/THREAT_MODEL.md), and [roadmap](docs/ROADMAP.md) are the authoritative, up-to-date
+contract.
 
-**What exists (the substrate, on x86-64):**
+**What exists — on the frozen x86-64 reference, which is not a platform. None of it runs on Apple Silicon
+yet:**
 - ✅ Boots under QEMU via a GRUB2 ISO: bootloader → kernel → `[OK] BraiNIX: boot complete`.
 - ✅ Userspace ELF loader into KPTI-isolated address spaces with W^X-correct mappings and guard-protected stacks.
 - ✅ Capability model, synchronous IPC, decomposed network stack, and a fixed-pool in-kernel store — with Kani proofs and fuzz targets on the hostile-input paths.
 - ✅ Measured boot via swtpm, with honest runtime TPM-presence gating.
 
 **Designed, not yet implemented:**
-- 📐 Multi-arch HAL — trait design landed ([`HAL.md`](docs/architecture/HAL.md)); **no backend extracted yet**. This gates all Apple Silicon work.
 - 📐 BSP v2 serving protocol — [spec landed](docs/architecture/BSP-v2-serving-protocol.md); server not built.
 
+**Cancelled:**
+- ⛔ Multi-arch HAL ([`HAL.md`](docs/architecture/HAL.md), SUPERSEDED) — one platform needs no abstraction layer over one backend. Its proof obligations moved to the aarch64 MMU and the DART backend.
+
 **Not started:**
-- ⬜ Apple Silicon platform (ADT parser, boot stub, AIC, DART, RTKit/ANS2, PCIe, Ethernet).
+- ⬜ Apple Silicon platform (ADT parser — the next piece of code — then boot stub, AIC, DART, RTKit/ANS2, PCIe, Ethernet).
 - ⬜ In-tree CPU inference engine and the confined-model tenant.
 
-> ⚠️ BraiNIX does not yet serve inference. It is research-grade and not suitable for production use.
+> ⚠️ BraiNIX does not yet serve inference, and **does not yet run on the platform it targets.** It is
+> research-grade and not suitable for production use.
 
 ## Requirements
 
 - A nightly Rust toolchain (pinned in [`rust-toolchain.toml`](rust-toolchain.toml)) with the
   `rust-src`, `rustfmt`, `clippy`, and `llvm-tools-preview` components.
-- Bare-metal target `x86_64-unknown-none` today. `aarch64-unknown-none` is added by the HAL extraction; the
-  Apple Silicon boot stub needs a custom in-tree target spec beyond that.
+- Bare-metal target `x86_64-unknown-none` today — that is the **frozen reference** build, kept green. The
+  Apple Silicon boot stub needs a custom in-tree aarch64 target spec, which lands with it.
 - For Apple Silicon bring-up (not yet started): a Mac mini M2 Pro in Permissive Security, a debug UART cable,
   and a macOS stub install that must remain on disk. Provisioning requires physical presence.
 - For the live boot: Docker (the dev container ships QEMU, GRUB, `xorriso`, and `swtpm`).
@@ -129,7 +139,8 @@ Early, actively developed. BraiNIX pivoted from an internal-only hardened microk
 ## Building
 
 ```bash
-# Type-check, format, lint, and build for the bare-metal target
+# Type-check, format, lint, and build the frozen x86-64 reference (the only bare-metal
+# target that exists today; the aarch64 target spec lands with the Apple boot stub)
 cargo check   --target x86_64-unknown-none
 cargo fmt     --all -- --check
 cargo clippy  --workspace --all-targets
@@ -162,7 +173,7 @@ bin/, docker/      build + live-boot tooling
 
 - [North star](docs/NORTH_STAR.md) — the timeless target and the rules that defend it.
 - [Threat model](docs/THREAT_MODEL.md) — attacker model, the TCB, per-invariant verification.
-- [Architecture](docs/architecture/) — capability model, IPC spec, memory model, the multi-arch HAL, the serving protocol.
+- [Architecture](docs/architecture/) — capability model, IPC spec, memory model, the serving protocol.
 - [Security](docs/security/) — invariants, unsafe-code policy.
 
 ## Contributing

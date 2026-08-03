@@ -38,14 +38,18 @@ These are enforced in review (and much of it in CI):
    [Asahi Linux](https://asahilinux.org/). Their work is **reference-only**: read the published
    documentation and reimplement from understanding. Where only source documents a behavior, write a
    specification and implement from that. Running m1n1 as a lab instrument is fine — that is using a tool.
-8. **No page-size assumptions.** Apple Silicon uses 16 KiB base pages; x86-64 uses 4 KiB. A hardcoded
-   `4096` outside `arch/` or `hal/` is a security defect (`INV-MEM-009`), not a portability nit.
-9. **No attestation claims on Apple Silicon.** That platform has no TPM and cannot attest. Code, protocol
-   fields, log lines, and docs must not imply otherwise (`INV-BOOT-AS-001`).
+8. **No page-size assumptions.** The platform uses 16 KiB base pages; the frozen x86-64 reference uses
+   4 KiB. A hardcoded `4096` **or `16384`** outside `arch/` is a security defect (`INV-MEM-009`), not a
+   portability nit — and with the 4 KiB aarch64 harness cancelled, a hardcoded 16 KiB is the likelier
+   mistake and nothing in CI disagrees with it.
+9. **No attestation claims, anywhere.** BraiNIX runs on one platform, it has no TPM, and it cannot attest
+   or seal. Code, protocol fields, log lines, and docs must not imply otherwise (`INV-BOOT-AS-001`), and
+   must not point at another target as the attested option — there is none.
 
 ## Checks
 
-Before opening a pull request, please run:
+Before opening a pull request, please run these against the **frozen x86-64 reference** — it is not a
+supported platform, but it must keep building, and today it is the only bare-metal target that exists:
 
 ```bash
 cargo check   --target x86_64-unknown-none
