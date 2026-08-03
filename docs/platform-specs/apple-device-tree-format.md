@@ -79,6 +79,8 @@ weaker footing:
 | Little-endian for all integer fields | §4.4 | **S** for the *format*; **O** corroborates the values. Asahi prose says only "byte order differs from Linux DT", never "little-endian". |
 | `boot_args` field order and derived offsets | §3 | **S** (XNU `arm64/boot.h`, m1n1 `xnuboot.h` — two agreeing) |
 | CPU release sequence register offsets | §8.4 | **P** for the sequence, **S** for the `T6020` constant `0x28000` |
+| CPU release **access widths** (64-bit `RVBAR`, 32-bit PMGR), **plain-store not read-modify-write**, and the **two different bit indices** (`4 × cluster + core` at `+0x04`, `core` at `+0x08 + 4 × cluster`) | §8.4 | **S** only. The prose says "the core's bit" for both registers and states no access width; only the implementation distinguishes them. |
+| PMGR per-die stride `0x20_0000_0000` | §8.4 | **S** only |
 | ADT node names carry no `@unit` suffix | §4.5 | **O** (decisive; see §4.5) |
 
 ---
@@ -147,18 +149,37 @@ field order given by two agreeing sources, applying standard AArch64 alignment.
 | `0x68` | 4 | `devtree_size` | **Total length of the ADT blob in bytes.** |
 | `0x6C` | ... | `cmdline` | Boot command line. **Offset disputed — see OQ-1.** Not needed by AS-1. |
 
-**Deriving the ADT window.** With `BA` = the physical address in `x0`:
+**Deriving the ADT window.** With `BA` = the physical address in `x0`, and writing `u64le@X` for "the
+little-endian 64-bit integer stored at address `X`" (a value, not a function call):
 
 ```
-adt_phys  = load_u64(BA + 0x60) - load_u64(BA + 0x08) + load_u64(BA + 0x10)
-adt_len   = load_u32(BA + 0x68)
+adt_phys  = (u64le@(BA + 0x60)) - (u64le@(BA + 0x08)) + (u64le@(BA + 0x10))
+adt_len   =  u32le@(BA + 0x68)
 ```
 
-(That block is arithmetic, not code — there is no language in it.) The ADT occupies
+The ADT occupies
 `[adt_phys, adt_phys + adt_len)`. **Every pointer the parser ever forms must be proved to lie inside that
 half-open interval before it is dereferenced** (§9).
 
 `adt_len` is a **claim made by firmware**, not a measurement. §9.1 states what must be checked about it.
+
+### 3.1 The offset basis — normative
+
+**The parser works entirely in buffer-relative byte offsets.** This is a requirement of this spec, not an
+implementation preference, because every bound in §6 and §9 is stated against it.
+
+| Rule | Statement |
+|---|---|
+| Basis | The parser is handed **one contiguous byte buffer** of exactly `adt_len` bytes, starting at `adt_phys`, and works only in offsets measured from **byte 0 of that buffer**. Offset 0 is the root node header. |
+| Physical addresses | `adt_phys` is used **once**, to locate and bound the buffer. It never appears in the parser's arithmetic afterwards. No offset in this document is ever a physical address. |
+| "Start of the buffer" | Offset `0`. |
+| "End of the buffer" | Offset `adt_len`. All intervals are half-open: valid *read* offsets are `[0, adt_len)`. |
+| Buffer alignment | **`adt_phys` must be 4-byte aligned; reject the ADT if it is not.** This is what makes the §9.7 alignment check well-defined: with a 4-byte-aligned base, "offset is a multiple of 4" and "address is a multiple of 4" are the same statement. Without it they are not, and the check silently means neither. |
+| `adt_len` alignment | **`adt_len` must be a multiple of 4; reject the ADT if it is not.** Every record is a multiple of 4 bytes (§4.3), so a well-formed tree can never end on a non-multiple-of-4 offset. A buffer length that is not a multiple of 4 is either a truncated blob or a mis-read `boot_args`. |
+
+An implementation that takes the buffer as a bounds-checked byte slice gets the "is this offset inside the
+buffer" half of §9 from the slice itself and must still perform every other check in §9 explicitly. A
+slice bound is not a substitute for the overflow, count, length, alignment, or depth checks.
 
 ---
 
@@ -209,9 +230,15 @@ A property record is a 36-byte header followed by a variable-length value. `[S �
 - Therefore the size of a whole property record is:
 
 ```
-padded_len   = (value_len + 3) rounded down to a multiple of 4      i.e. (value_len + 3) AND NOT 3
+padded_len   = value_len rounded UP to the next multiple of 4      i.e. ((value_len + 3) AND NOT 3)
 record_size  = 32 + 4 + padded_len = 36 + padded_len
 ```
+
+Note the parentheses in `((value_len + 3) AND NOT 3)`: the addition binds first. `AND NOT 3` clears the
+low two bits of the *sum*. Written without the inner parentheses the expression would be read as
+`value_len + (3 AND NOT 3)` = `value_len + 0`, i.e. no padding at all — a walk that desynchronises on the
+first property whose length is not already a multiple of 4. Every restatement of this rule in this
+document (§6.2, §9.3) is parenthesised the same way.
 
 - **`record_size` is always a multiple of 4** (36 is, `padded_len` is).
 - The last property of a node may, in the wild, be found un-padded at the very end of the buffer. bazad's
@@ -262,7 +289,8 @@ which is a NUL-terminated ASCII string inside that property's value. `[S, O]`
   silently lost the top nibble. `[O]`
 - Maximum name length: Apple's declaration allows an entry name of up to **63** characters plus
   terminator (older revisions said 31). Since the name lives in a property *value*, not a fixed field, the
-  only hard bound is the property length. A parser must bound it explicitly (§9.6). `[S]`
+  format imposes no bound at all — the only limit is the property length, which can be up to 2 GiB. A
+  parser must therefore impose its own bound; **§9.5 states the required check.** `[S]`
 
 ---
 
@@ -347,18 +375,28 @@ front to back visits nodes in depth-first pre-order.
 
 ### 6.2 The four navigation primitives
 
-Let `N` be the offset of a node header, and let `P` be the offset of a property record.
+All offsets below are buffer-relative per §3.1. Let `N` be the offset of a node header, and let `P` be the
+offset of a property record. Notation: `u32le@X` means "the little-endian 32-bit integer stored at buffer
+offset `X`". It denotes a value, not a function call.
 
 | Operation | Arithmetic |
 |---|---|
 | First property of `N` | `N + 8` |
-| Next property after `P` | `P + 36 + ((length_at(P + 32) AND 0x7FFFFFFF) + 3 AND NOT 3)` |
+| `value_len` of the property at `P` | `(u32le@(P + 32)) AND 0x7FFFFFFF` |
+| `padded_len` of the property at `P` | `((value_len + 3) AND NOT 3)` — parenthesised exactly as in §4.3; the `+ 3` binds before the `AND NOT 3` |
+| Next property after `P` | `P + 36 + padded_len` |
 | **First child** of `N` | Start at `N + 8`; advance by "next property" exactly `property_count(N)` times. The offset you land on is the first child. |
 | **End of node `N`** (= its next sibling, if it has one) | `end_of(N)` = start at "first child of `N`", then apply `end_of` recursively `child_count(N)` times. |
 | Next sibling of `N` | `end_of(N)` — valid **only if** the caller knows from the parent's `child_count` that another sibling exists. |
 
 **"First child" and "end of properties" are the same offset.** When `child_count(N) = 0`, that offset is
 the end of node `N` itself.
+
+**Two of these are *extent* offsets, not *read* offsets.** "End of node `N`" and — when
+`child_count(N) = 0` — "first child of `N`" are one-past-the-end positions. They are legitimately allowed
+to **equal** `adt_len`, and for the last node in the blob they always do. They must not be dereferenced
+while they hold that value. §9.7 states the two different bounds tests this requires; conflating them
+rejects every well-formed ADT.
 
 ### 6.3 How to know a node's children are exhausted
 
@@ -418,29 +456,99 @@ properties.
 0110  00 00 20 79 00 00 00 00  00 40 00 00 00 00 00 00  |.. y.....@......|
 ```
 
-Walk-through:
+Walk-through. All offsets are buffer-relative (§3.1) and absolute within the blob — none are
+record-relative. **Every row below was re-derived mechanically by walking the bytes above with the rules
+of §4 and §6.2, not written by hand.**
 
-| Offset | Bytes | Reading |
+**Root node, at offset `0x0000`.**
+
+| Offset | Field | Bytes | Reading |
+|---|---|---|---|
+| `0x0000` | `property_count` | `03 00 00 00` | 3 |
+| `0x0004` | `child_count` | `01 00 00 00` | 1 |
+| `0x0008` | property 0 begins | — | first property = `0x0000 + 8` |
+
+*Root property 0:*
+
+| Offset | Field | Reading |
 |---|---|---|
-| `0x0000` | `03 00 00 00` | root header: `property_count` = 3 |
-| `0x0004` | `01 00 00 00` | root header: `child_count` = 1 |
-| `0x0008` | `name` + 27 NULs | property 0 name, 32 bytes, terminated at `+0x0C`, byte at `0x0027` is `0x00` — passes the §4.2 check |
-| `0x0028` | `07 00 00 00` | `length_word` = 7. Bit 31 clear. `value_len` = 7. |
-| `0x002C` | `arm-io\0` | 7 value bytes |
-| `0x0033` | `00` | one padding byte: `padded_len` = 8 |
-| `0x0034` | — | next property = `0x0008 + 36 + 8` = `0x0034`. Name `#address-cells`. |
-| `0x0054` | `04 00 00 00` | `value_len` = 4 |
-| `0x0058` | `02 00 00 00` | value = 2 (little-endian), no padding needed |
-| `0x005C` | — | next property = `0x0034 + 36 + 4` = `0x005C`. Name `#size-cells`, `value_len` 4, value 2. |
-| `0x0084` | — | after 3 properties: `0x005C + 36 + 4` = `0x0084`. **This is the first child.** |
-| `0x0084` | `03 00 00 00 00 00 00 00` | child header: 3 properties, 0 children |
-| `0x008C` | `name` … `06 00 00 00` `uart0\0` | property `name`, `value_len` 6, padded to 8 |
-| `0x00B8` | `compatible` … `0F 00 00 00` | `value_len` = 15: the bytes `uart-1,samsung\0`, padded to 16 |
-| `0x00E4` | `reg` … `10 00 00 00` | `value_len` = 16: two little-endian `u64` — address `0x79200000`, size `0x4000` |
-| `0x0120` | — | end of the child = `0x00E4 + 36 + 16` = `0x0120` = end of blob. `child_count` of the child is 0, so this is also the end of the root. |
+| `0x0008` | name field, 32 bytes (`0x0008`–`0x0027`) | `name`, i.e. 4 ASCII bytes then 28 NULs. Terminator at `0x000C`. Byte at `0x0027` is `0x00` — passes the §4.2 check. |
+| `0x0028` | `length_word` | `07 00 00 00` = 7. Bit 31 clear. `value_len` = 7. |
+| `0x002C` | value, 7 bytes (`0x002C`–`0x0032`) | `arm-io` + NUL |
+| `0x0033` | padding, 1 byte | `padded_len` = `((7 + 3) AND NOT 3)` = 8 |
+| → `0x0034` | next property | `0x0008 + 36 + 8` = `0x0034` |
 
-Total = `0x0120` = 288 bytes, which must equal `devtree_size`. On a real ADT it will not — see §9.1 for
-what a mismatch means and does not mean.
+*Root property 1:*
+
+| Offset | Field | Reading |
+|---|---|---|
+| `0x0034` | name field (`0x0034`–`0x0053`) | `#address-cells`; byte at `0x0053` is `0x00` |
+| `0x0054` | `length_word` | `04 00 00 00` = 4 |
+| `0x0058` | value, 4 bytes | `02 00 00 00` = **2**, little-endian. `padded_len` = 4, no padding bytes. |
+| → `0x005C` | next property | `0x0034 + 36 + 4` = `0x005C` |
+
+*Root property 2:*
+
+| Offset | Field | Reading |
+|---|---|---|
+| `0x005C` | name field (`0x005C`–`0x007B`) | `#size-cells`; byte at `0x007B` is `0x00` |
+| `0x007C` | `length_word` | `04 00 00 00` = 4 |
+| `0x0080` | value, 4 bytes | `02 00 00 00` = **2**. `padded_len` = 4. |
+| → `0x0084` | next property | `0x005C + 36 + 4` = `0x0084` |
+
+**After exactly `property_count` = 3 properties the walk lands on `0x0084`. That offset is both the root's
+end-of-properties and — since `child_count` = 1 — its first child.**
+
+**Child node, at offset `0x0084`.**
+
+| Offset | Field | Bytes | Reading |
+|---|---|---|---|
+| `0x0084` | `property_count` | `03 00 00 00` | 3 |
+| `0x0088` | `child_count` | `00 00 00 00` | 0 |
+| `0x008C` | property 0 begins | — | first property = `0x0084 + 8` |
+
+*Child property 0:*
+
+| Offset | Field | Reading |
+|---|---|---|
+| `0x008C` | name field (`0x008C`–`0x00AB`) | `name`; byte at `0x00AB` is `0x00` |
+| `0x00AC` | `length_word` | `06 00 00 00` = 6 |
+| `0x00B0` | value, 6 bytes (`0x00B0`–`0x00B5`) | `uart0` + NUL |
+| `0x00B6` | padding, 2 bytes | `padded_len` = 8 |
+| → `0x00B8` | next property | `0x008C + 36 + 8` = `0x00B8` |
+
+*Child property 1:*
+
+| Offset | Field | Reading |
+|---|---|---|
+| `0x00B8` | name field (`0x00B8`–`0x00D7`) | `compatible`; byte at `0x00D7` is `0x00` |
+| `0x00D8` | `length_word` | `0F 00 00 00` = 15 |
+| `0x00DC` | value, 15 bytes (`0x00DC`–`0x00EA`) | `uart-1,samsung` + NUL |
+| `0x00EB` | padding, 1 byte | `padded_len` = `((15 + 3) AND NOT 3)` = 16 |
+| → `0x00EC` | next property | `0x00B8 + 36 + 16` = **`0x00EC`** |
+
+*Child property 2:*
+
+| Offset | Field | Reading |
+|---|---|---|
+| `0x00EC` | name field (`0x00EC`–`0x010B`) | `reg`; byte at `0x010B` is `0x00` |
+| `0x010C` | `length_word` | `10 00 00 00` = 16 |
+| `0x0110` | value, 16 bytes (`0x0110`–`0x011F`) | two little-endian `u64`: address `0x79200000`, size `0x4000`. `padded_len` = 16, no padding bytes. |
+| → `0x0120` | next property | `0x00EC + 36 + 16` = `0x0120` |
+
+**Terminal offsets.** After exactly 3 child properties the walk lands on `0x0120`. Because the child's
+`child_count` is 0, that offset is simultaneously the child's end-of-properties, its first-child position,
+and `end_of(child)`. Since the child is the root's only child, it is also `end_of(root)`, and it equals
+the blob length `0x0120` = 288.
+
+**This is the case §6.2 and §9.7 warn about**: `0x0120` is a legitimate *extent* offset that equals
+`adt_len`. A bounds check that requires every computed offset to be strictly less than the buffer end
+rejects this fixture — and every real ADT. `0x0120` must never be dereferenced; it must also never be
+rejected.
+
+Total = `0x0120` = 288 bytes. Here that happens to equal `adt_len` exactly. **On a real ADT it usually
+will not** — trailing slack after the tree is normal. See §9.1 for what a mismatch does and does not
+mean.
 
 ---
 
@@ -543,23 +651,53 @@ Inputs needed:
 
 | Input | Where from |
 |---|---|
-| `RVBAR` for core *n* | `cpu-impl-reg[0]` of that core's node, offset `+0x00`. `[P]` |
+| `RVBAR` for core *n* | `cpu-impl-reg` container 0's **address** field (the first of the two `u64`) of that core's node, at offset `+0x00` within that block. `[P]` |
 | PMGR register base | `/arm-io/pmgr` property `reg`, container 0, **translated through `/arm-io` `ranges`** (§8.5). Observed untranslated `[O]`: address `0x1_4070_0000`, size `0xCC000`. |
 | CPU-start block offset within PMGR | Per-SoC constant. **`T6020` / `T6021` / `T6022` (M2 Pro / Max / Ultra): `0x28000`.** The Asahi prose table ("M2 Pro/Max: 0x28000") and the bootloader's constant agree exactly. `[P + S]` For reference only: `T8103`/`T600x` (M1 family) `0x54000`; `T8112` (M2) `0x34000`; `T6031` (M3 Max) `0x88000`. **Do not generalise from this table** — for `T6030` (M3 Pro) the prose says `0x88000` while the bootloader uses `0x34000`, a direct conflict (OQ-8). The target value is unaffected. |
 
-Sequence, per the Asahi SMP documentation `[P]`:
+**The three index values, and which register uses which.** This is the part the prose leaves ambiguous —
+"the core's bit" is written twice and means a different index each time. Resolved from the bootloader's
+implementation `[S]`. Three distinct values are in play, all obtained from §8.3:
 
-1. Write the entry address to `RVBAR` at `cpu_impl_reg_base + 0x00`.
-2. Set the core's bit in the system-wide core-activation register at `pmgr_base + cpu_start_off + 0x04`.
-3. Set the core's bit in the cluster-specific startup register at
-   `pmgr_base + cpu_start_off + 0x08 + 4 × cluster`.
+| Symbol | Where from | Meaning |
+|---|---|---|
+| `core` | `reg` bits 7..0 | Index of the core **within its cluster** |
+| `cluster` | `reg` bits 10..8 | Index of the cluster |
+| `die` | `reg` bits 14..11 | Index of the die (0 on all single-die parts, including `T6020`) |
 
-The core begins executing at `RVBAR`.
+`cpu-id` (or the whole `reg` word) identifies the core to *software* and indexes per-CPU arrays. It is
+**not** used as a hardware bit index in either register below.
 
-`RVBAR` field layout `[S]`: bit 0 = **lock**. If it reads as 1 the address is locked and cannot be
-written — this is the expected state for the boot CPU, which iBoot locks. Address bits occupy 47..12,
-i.e. the entry point must be **4 KiB aligned**. A parser/driver must read back and verify rather than
-assume the write took.
+**Sequence**, with access widths — the prose gives the sequence `[P]`, the widths and bit indices are
+`[S]`:
+
+| # | Access | Address | Value | Notes |
+|---|---|---|---|---|
+| 0 | — | — | — | Establish the die-adjusted base first: `cpu_start_base` = `pmgr_base + cpu_start_off + die × 0x20_0000_0000`. The die stride is `0x20_0000_0000`. On `T6020` `die` is 0 and the term vanishes. `[S]` |
+| 1 | **64-bit read** | `cpu_impl_reg_base + 0x00` | — | Read `RVBAR`. If bit 0 (lock) is set, the address cannot be changed; verify that bits 47..12 already equal the intended entry point and **fail loudly if they do not**. This is the expected state for the boot CPU, which iBoot locks. |
+| 2 | **64-bit write** | `cpu_impl_reg_base + 0x00` | entry point address | Plain write of the whole 64-bit word, **not** read-modify-write. Writing the address also clears the lock bit, since a 4 KiB-aligned address has bit 0 clear. Only possible when the lock is not already set. |
+| 3 | barrier | — | — | A full system data barrier between the `RVBAR` write and the PMGR writes. |
+| 4 | **32-bit write** | `cpu_start_base + 0x04` | `1 << (4 × cluster + core)` | System-level activation. **Plain write of a single set bit, not read-modify-write.** The bit index is the composite `4 × cluster + core` — **not** `cpu-id`, and **not** `core` alone. Without this write the core starts but its interrupts do not work. `[S]` |
+| 5 | **32-bit write** | `cpu_start_base + 0x08 + 4 × cluster` | `1 << core` | Actually releases the core. **Plain write of a single set bit, not read-modify-write.** Here the bit index is `core` alone — the core's index *within its cluster* — because the register is already selected per-cluster by the `+ 4 × cluster` term. `[S]` |
+
+The core then begins executing at `RVBAR`.
+
+> **The two writes use different bit indices, and this is the single easiest thing to get wrong here.**
+> Step 4 uses `4 × cluster + core`; step 5 uses `core`. They coincide only for cluster 0. An
+> implementation that uses one index for both will appear to work on the first (efficiency) cluster and
+> fail on every performance core.
+
+**Both PMGR writes are plain stores of a single set bit**, not read-modify-writes. These are
+write-1-to-act registers; reading them and OR-ing does not preserve meaningful state and is not what the
+reference implementation does.
+
+`RVBAR` field layout `[S]`: bit 0 = **lock**; address bits occupy 47..12, so the entry point must be
+**4 KiB aligned**. Read back and verify rather than assuming the write took.
+
+**Caveat on the `4 × cluster + core` composite (OQ-9).** That formula embeds an assumption of **at most 4
+cores per cluster** — with 5 it would alias onto the next cluster's bits. It holds for the `T6020` target
+(4 E-cores in one cluster, 8 P-cores in two clusters of 4), which is why it is stated here without
+qualification for that part. It is **not** safe to carry to other SoCs unchecked.
 
 ### 8.5 `reg` and address translation
 
@@ -656,11 +794,32 @@ different-version firmware can supply anything at all. Every rule below is manda
   node's extent is unknowable without walking it (§4.1), there is no up-front validation pass that can
   make later reads safe. Apple's reader adopts precisely this discipline and documents why.
 
+### 9.0 Format rules versus BraiNIX policy
+
+Some checks below follow from the format; others are **numeric limits BraiNIX chooses**. They are listed
+together because a parser must apply both, but they are not the same kind of statement and must not be
+recorded as if they were.
+
+| Limit | Value | Status | Provenance |
+|---|---|---|---|
+| Property/child count ceiling | 2048 | **BraiNIX policy** | Adopted from the Asahi bootloader, which ships this ceiling against real firmware. Not a format rule; no source states a maximum. |
+| Value length ceiling | 1 MiB − 1 | **BraiNIX policy** | Same. The format permits up to `0x7FFFFFFF` (§5). |
+| Maximum nesting depth | 8 | **BraiNIX policy** | Same. The format imposes no depth limit. |
+| Maximum node-name length | 63 bytes + NUL | **BraiNIX policy**, anchored on a format hint | Apple's declaration names 63 as the maximum entry-name length, but the name lives in a property value that the format does not bound (§4.5). |
+| Rejecting a non-NUL byte at name offset 31 | — | **BraiNIX policy** | Adopted from a third-party parser. The format does not *require* termination (§4.2); this makes it required. |
+| Everything else in §9 | — | **Format-derived** | Follows from §3–§6: overflow, truncation, alignment, and the counts-are-authoritative rule. |
+
+Each policy limit must carry a **distinct failure reason** in the implementation, so that a tree rejected
+by BraiNIX policy can be told apart from a tree that is genuinely malformed. If real firmware ever trips
+one of these, the log must say which, and the limit is a decision to revisit — not evidence that the ADT
+is corrupt.
+
 ### 9.1 `devtree_size` — the total-size claim
 
 | Attacker-controlled value | Required check |
 |---|---|
-| `boot_args.devtree_size` | Reject 0. Reject any value less than 8 (a blob cannot hold even a root header). Reject if `adt_phys + devtree_size` overflows a 64-bit address. Reject if the resulting interval is not entirely inside the physical DRAM window derived from `boot_args.phys_base`/`mem_size`. |
+| `boot_args.devtree_size` | Reject 0. Reject any value less than 8 (a blob cannot hold even a root header). **Reject any value that is not a multiple of 4** (§3.1). Reject if `adt_phys + devtree_size` overflows a 64-bit address. Reject if the resulting interval is not entirely inside the physical DRAM window derived from `boot_args.phys_base`/`mem_size`. |
+| `adt_phys` (derived) | **Reject unless 4-byte aligned** (§3.1). This is what gives the §9.7 alignment check a well-defined meaning; without it, offset alignment and address alignment are different properties and the check silently guarantees neither. |
 | `boot_args.devtree` (virtual) | The subtraction `devtree − virt_base` must not underflow, and the addition of `phys_base` must not overflow. Both are attacker-controlled 64-bit values. |
 | Relationship to the parse | `devtree_size` is a **claim**, and the tree inside it is a second, independent claim. **They need not agree, and a mismatch is not automatically fatal**: a well-formed tree may end before `devtree_size` (trailing slack is normal). What is fatal is the converse — the tree extending *beyond* `devtree_size`. Never use "the tree ended exactly at the buffer end" as a validity signal, and never extend the buffer to fit the tree. |
 
@@ -670,9 +829,9 @@ Both are 32-bit unsigned values read directly from the blob. Both are used as lo
 
 | Value | Required check |
 |---|---|
-| `property_count` | Reject `0` — structurally invalid (§4.1). Reject any value that cannot fit: the node's properties alone need at least `property_count × 36` bytes, so reject if `8 + property_count × 36` exceeds the bytes remaining from the node's offset to the end of the buffer. That multiplication must be overflow-checked. Additionally enforce a hard policy ceiling; **2048** is the ceiling the Asahi bootloader ships against real firmware and is a defensible choice. |
-| `child_count` | Same remaining-space test with the 8-byte node header as the minimum per child: reject if `child_count × 8` exceeds the bytes remaining. Overflow-check the multiplication. Same **2048** policy ceiling. |
-| Both | A count of `0xFFFFFFFF` must be rejected by the space test, not merely by the ceiling — the space test is the one that is correct for small buffers. |
+| `property_count` | Reject `0` — structurally invalid (§4.1). **Minimum-space test, applied at the node header:** the node's properties alone need at least `property_count × 36` bytes, so reject if `8 + property_count × 36` exceeds `adt_len − node_offset`. Overflow-check the multiplication. Then apply the **2048** ceiling (§9.0 — BraiNIX policy). |
+| `child_count` | **Minimum-space test, applied after the property walk, not at the node header.** Each child needs at least an 8-byte header, so once the first-child offset `F` is known (§6.2), reject if `child_count × 8` exceeds `adt_len − F`. Measuring against `adt_len − node_offset` instead is wrong: it counts the node's own properties as space available to its children, so it accepts a `child_count` that cannot possibly fit. A cheap pre-check against `adt_len − node_offset` at the header is permitted as an *early* reject, but it does not discharge the real test. Overflow-check the multiplication. Then apply the **2048** ceiling (§9.0 — BraiNIX policy). |
+| Both | A count of `0xFFFFFFFF` must be rejected by the space test, not merely by the ceiling — the space test is the one that stays correct for small buffers, and it is the one that is a format rule rather than a policy. |
 
 ### 9.3 The length word
 
@@ -681,8 +840,8 @@ Both are 32-bit unsigned values read directly from the blob. Both are used as lo
 | Bit 31 set | **Reject the tree** (§5.3). Distinct failure reason. |
 | `value_len = length_word AND 0x7FFFFFFF` | Reject if `property_offset + 36 + value_len` overflows, **or** exceeds the buffer end. |
 | Padding | Reject if `property_offset + 36 + padded_len` overflows or exceeds the buffer end — note this is a **strictly stronger** test than the one on `value_len`, and it is the one that matters, because the padded size is what the next-property arithmetic uses. Checking only the unpadded length lets a property whose value ends exactly at the buffer end produce a next-property offset past the end. |
-| `(value_len + 3) AND NOT 3` | `value_len` can be `0x7FFFFFFF`; `value_len + 3` must be computed in a width where it cannot wrap (do the addition in 64 bits, or reject `value_len > 0x7FFFFFFC` first). |
-| Policy ceiling | Reject `value_len` greater than **1 MiB − 1** (equivalently: any of bits 30..20 set) as a policy bound with its own distinct failure reason (§5.3 rule 4). |
+| `padded_len = ((value_len + 3) AND NOT 3)` | Note the inner parentheses (§4.3). `value_len` can be as large as `0x7FFFFFFF`, so `value_len + 3` must be computed in a width where it cannot wrap — do the addition in 64 bits, or reject `value_len > 0x7FFFFFFC` first. A wrapped `padded_len` is small and passes every subsequent bounds test. |
+| Policy ceiling | Reject `value_len` greater than **1 MiB − 1** (equivalently: any of bits 30..20 set). **BraiNIX policy, not a format rule** (§9.0). Distinct failure reason (§5.3 rule 4). |
 
 ### 9.4 Truncation
 
@@ -699,9 +858,10 @@ A blob may end in the middle of any record.
 
 | Value | Required check |
 |---|---|
-| Property `name` field | Reject the property unless the byte at `name + 31` is `0x00`. This is checked **before** any string operation on the name. Rationale: Apple's own reader compares property names with an unbounded string comparison, which over-reads past the 36-byte header on a non-terminated name. |
+| Property `name` field | Reject the property unless the byte at `name + 31` is `0x00`. This is checked **before** any string operation on the name. **BraiNIX policy** (§9.0) — the format does not require termination. Rationale: Apple's own reader compares property names with an unbounded string comparison, which over-reads past the 36-byte header on a non-terminated name. |
 | Name comparison | Compare bounded to 32 bytes regardless, even after the termination check — defence in depth. |
 | `name` property *value* (the node's name) | The value is not guaranteed to contain a NUL. Search for a NUL only within `value_len` bytes. If there is none, the node name is malformed — reject the node; do not treat the whole value as the name. |
+| **Node-name length bound** (the check §4.5 requires) | The node name is a string inside a property value, and the format bounds that value only by `0x7FFFFFFF` (§4.5). **Reject any node whose `name` property has `value_len` greater than 64** — 63 name characters plus the terminator, the maximum entry-name length Apple's own declaration names. **BraiNIX policy** (§9.0). Without it, a single crafted `name` property can present a 2 GiB "node name" to every path comparison at every level of the walk. |
 | Any string value (`compatible`, `state`, `cluster-type`, `device_type`, `model`, …) | Same rule. Every string read is bounded by `value_len`. Never hand a property value to anything that scans for a terminator without a length bound. |
 
 ### 9.6 Nesting depth
@@ -713,7 +873,7 @@ lies below the stack.
 
 | Required check |
 |---|
-| Enforce a hard maximum depth and reject any tree that exceeds it. **The Asahi bootloader uses 8.** Real Apple ADTs are shallow; a limit in the range 8–16 is generous. |
+| Enforce a hard maximum depth and reject any tree that exceeds it. **BraiNIX policy** (§9.0), adopted from the Asahi bootloader, which uses **8**. Real Apple ADTs are shallow; a limit in the range 8–16 is generous. |
 | The depth counter is incremented before descending and checked before the recursive step, so that the limit is enforced even on the first descent. |
 | Prefer an explicit bounded stack over language-level recursion, so that the limit is a data-structure property rather than a discipline. |
 
@@ -732,12 +892,27 @@ attacker-controlled *and* used to compute an offset:
 | `ranges` entry cell counts | The stride between `ranges` entries | §9.8 |
 | `reg` container index | The byte offset within the `reg` value | §9.8 |
 
-For each: check that the computed offset is **≥ the start of the buffer**, **< the end of the buffer**,
-and that the *entire* record starting at that offset also fits. Then, and only then, read.
+**Two kinds of offset, two different bounds.** Conflating them is a real defect in either direction: the
+strict test rejects every well-formed ADT, the loose test permits a read past the end.
 
-Additionally: every offset a node or property is found at must be **4-byte aligned** (§4.3). A misaligned
-landing offset means the walk has desynchronised and must fail closed. The Asahi bootloader checks exactly
-this.
+| Kind | What it is | Required bound |
+|---|---|---|
+| **Read offset** | An offset the parser is about to dereference: a node header, a property header, a property value, a cell within a value. | `0 ≤ offset` **and** `offset < adt_len` **and** the *entire* record starting there fits, i.e. `offset + record_size ≤ adt_len`, computed without overflow. |
+| **Extent offset** | A one-past-the-end position: `end_of(N)`, and the first-child offset of a node whose `child_count` is 0. It marks where something *stopped*, and is never dereferenced while it holds that value. | `0 ≤ offset` **and** `offset ≤ adt_len`. **Equality with `adt_len` is legal and normal** — for the last node in the blob it is guaranteed. |
+
+The transition between the two is the only place this matters: an extent offset **becomes** a read offset
+the moment the parser decides to read a node or property there — which happens only when a count says
+another record exists. At that moment the read-offset test applies in full, and an extent offset equal to
+`adt_len` fails it, correctly. So the rule is: **bound extent offsets with `≤`, then re-test with `<` and
+the record-fits test before any dereference.** Never carry the `<` test back onto the extent computation.
+
+The §7 fixture exercises exactly this: `0x0120` is simultaneously `end_of(child)`, `end_of(root)`, the
+child's first-child position, and `adt_len`. A parser that requires every computed offset to be strictly
+less than the buffer end rejects it, and rejects every real ADT for the same reason.
+
+Additionally: every offset a node or property is **found at** must be **4-byte aligned** (§4.3), which is
+well-defined because §3.1 requires the buffer base to be 4-byte aligned. A misaligned landing offset means
+the walk has desynchronised and must fail closed. The Asahi bootloader checks exactly this.
 
 ### 9.8 Derived-value checks specific to `reg` and `ranges`
 
@@ -763,15 +938,15 @@ this.
 | A `/cpus` child count larger than BraiNIX's compiled-in maximum CPU count | Bound the enumeration by the compiled maximum and reject (not truncate) a tree that exceeds it. |
 | Two `/cpus` children with the same `cpu-id` | Would alias entries in any per-CPU array. Detect and reject. |
 | `cpu-id` greater than or equal to the compiled maximum CPU count | Reject before using it as an array index. |
-| A duplicate property name within one node | The format does not forbid it; a parser that returns "the first match" and one that returns "the last match" then disagree about the same tree. Pick "first match", document it, and reject a node containing a duplicate of any property AS-1 actually reads. |
+| A duplicate property name within one node | The format does not forbid it, and a parser returning "first match" and one returning "last match" then disagree about the same tree. **Two rules, and they apply at different times.** (a) *Lookup semantics, always:* a name lookup returns the **first** matching property in node order, and stops there. This is normative so that two conforming implementations agree. (b) *Duplicate rejection, at the point of use:* when the parser reads one of the properties AS-1 actually depends on — `name`, `compatible`, `reg`, `ranges`, `#address-cells`, `#size-cells`, `cpu-impl-reg`, `chip-id`, `device_type`, `state` — it must scan that node's full property list and **reject the node if the name appears more than once**. Rule (a) makes behaviour deterministic; rule (b) makes the ambiguity non-exploitable where it would matter. A duplicate of a property AS-1 never reads is ignored. |
 
 ---
 
 ## 10. Open questions
 
-Each names what is unknown and what evidence would settle it. **None of OQ-1 through OQ-6 and OQ-8 blocks
-AS-1** — each is either outside what AS-1 reads, or mitigated in the body by a rule that is correct under
-every candidate answer. **OQ-7 does not block implementation, but must be closed before this spec is
+Each names what is unknown and what evidence would settle it. **None of OQ-1 through OQ-6, OQ-8 and OQ-9
+blocks AS-1** — each is either outside what AS-1 reads, or mitigated in the body by a rule that is correct
+under every candidate answer. **OQ-7 does not block implementation, but must be closed before this spec is
 trusted on the target.**
 
 **OQ-1 — `boot_args.cmdline` offset: `0x6C` or `0x70`?**
@@ -827,6 +1002,14 @@ The Asahi SMP page's table gives "M3 Pro/Max: 0x88000"; the bootloader's dispatc
 `T6020` target**, where both sources give `0x28000` — but it is direct evidence that the prose tables and
 the shipped constants are not always in sync, so per-SoC constants in §8.4 must not be extrapolated.
 *Would settle it:* attempting a secondary-core start on an M3 Pro with each value.
+
+**OQ-9 — The `4 × cluster + core` activation bit index assumes at most 4 cores per cluster.**
+§8.4 step 4 uses that composite as a bit index in the register at `cpu_start_base + 0x04`. With 5 or more
+cores in a cluster it would alias onto the next cluster's bits. **It holds for the `T6020` target** (one
+E-cluster of 4, two P-clusters of 4), so AS-1 is unaffected, and the reference implementation uses it
+unconditionally across every SoC it supports. What is not established is whether the register's true
+layout is 4-bits-per-cluster or something that merely coincides with it on the parts tested.
+*Would settle it:* a part with more than 4 cores in one cluster, or Apple documentation of the register.
 
 ---
 
