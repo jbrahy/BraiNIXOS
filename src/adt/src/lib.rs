@@ -36,7 +36,7 @@
 //! The decoder works in **buffer-relative offsets** and takes a `&[u8]` and
 //! nothing else. It never sees a physical address. Deriving the blob's
 //! physical address from `boot_args`, validating `devtree_size`, and producing
-//! the slice are the caller's obligations and belong to the boot-args parser
+//! the slice are the caller's obligations, handled by [`adt_window`]
 //! (AS-0-T4). A tree that ends before the end of the slice is normal —
 //! trailing slack is not an error, and the slice is never extended to fit a
 //! tree that claims more.
@@ -67,11 +67,13 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod boot_args;
 mod error;
 mod node;
 mod property;
 mod raw;
 
+pub use crate::boot_args::{adt_window, AdtWindow, BootArgsError};
 pub use crate::error::AdtError;
 pub use crate::node::{ChildIter, Node, PropertyIter};
 pub use crate::property::{
