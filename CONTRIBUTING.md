@@ -74,5 +74,6 @@ cargo test -p brainix-kernel --target <your-host-target> --lib
 
 ## License
 
-By contributing, you agree that your contributions will be dual licensed under
-[MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at the user's option, without any additional terms.
+By contributing, you agree that your contributions will be licensed under the
+[GNU Affero General Public License, version 3](LICENSE) — the same terms as the project itself — without
+any additional terms.

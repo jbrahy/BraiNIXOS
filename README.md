@@ -9,7 +9,7 @@ Every security property is *structural*. Nothing rests on an attacker not knowin
 [![Site](https://img.shields.io/badge/site-brainix-5af2a8?style=flat-square)](https://jbrahy.github.io/BraiNIXOS/)
 [![Target](https://img.shields.io/badge/target-Apple%20Silicon%20(aarch64)-blue?style=flat-square)](#platform)
 [![Rust](https://img.shields.io/badge/rust-no__std%20nightly-orange?style=flat-square)](rust-toolchain.toml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green?style=flat-square)](#license)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-green?style=flat-square)](#license)
 
 [Website](https://jbrahy.github.io/BraiNIXOS/) · [North star](docs/NORTH_STAR.md) · [Threat model](docs/THREAT_MODEL.md) · [Roadmap](docs/ROADMAP.md) · [Security policy](SECURITY.md)
 
@@ -189,6 +189,24 @@ reporting.
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at
-your option. Unless you explicitly state otherwise, any contribution intentionally submitted for
-inclusion in this project shall be dual licensed as above, without any additional terms or conditions.
+Copyright (C) 2026 John Brahy.
+
+BraiNIX is free software: you may redistribute it and modify it under the terms of the
+**[GNU Affero General Public License, version 3](LICENSE)** as published by the Free Software
+Foundation. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY, without
+even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See
+[`LICENSE`](LICENSE) for the full terms.
+
+AGPL-3.0 is chosen deliberately. BraiNIX exists to be **run as a network service**, and section 13
+carries the copyleft across that boundary: if you modify BraiNIX and let others use it over a network,
+you must offer those users the complete corresponding source of your modified version. Distributing a
+binary carries the same obligation. In every case the copyright and license notices must be preserved.
+
+Release `v0.1.0` was published under `MIT OR Apache-2.0` and remains available under those terms.
+Everything after it is AGPL-3.0-only.
+
+Third-party code vendored under `vendor/` keeps its own licenses (MIT, Apache-2.0, Unicode-3.0), all of
+which are AGPL-3.0 compatible.
+
+Contributions are accepted under the same AGPL-3.0-only terms, without any additional terms or
+conditions.
