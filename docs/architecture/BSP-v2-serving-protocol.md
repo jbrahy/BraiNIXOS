@@ -1532,11 +1532,17 @@ is reachable from a socket, because nothing yet listens on one.
   are specified and not yet written. The record layer's original home
   `src/kernel/src/ssh/transport.rs` still exists — P2-T2 *ported* the construction
   rather than moving it, and P2-T6 deletes the SSH bridge.
-- **No fuzz target and no Kani harness from §13 exists** for either crate, and no
-  Prusti contract and no independent audit report. §13's `(key_material, role,
-  nonces) → (selector, confirms, directional keys)` vectors do not exist either;
-  what exists is RFC known-answer coverage of the primitives, which is a different
-  obligation. Both crates are **Full** tier and both are short of it.
+- ~~**No fuzz target and no Kani harness from §13 exists** for either crate~~ — **landed
+  2026-08-09 (`40e3e1d`).** `src/bsp-verify/` carries 16 Kani proofs and
+  `src/transport-crypto-verify/` carries 10; three libFuzzer targets ship with seeded
+  corpora (89 wire messages, 29 handshake messages, 49 record-open ciphertexts), and
+  CI runs both Kani packages. **Two gaps remain and neither is closed by that commit:**
+  the fuzz targets are *built and never executed* — `.github/workflows/ci.yml` has no
+  `cargo fuzz` job at all (ROADMAP P2-T10) — and there is still no Prusti contract and
+  no independent audit report. §13's `(key_material, role, nonces) → (selector,
+  confirms, directional keys)` vectors do not exist either; what exists is RFC
+  known-answer coverage of the primitives, which is a different obligation. Both
+  crates are **Full** tier and both are still short of it.
 - **The reboot-class `LoadWeights` semantics of §10.4 are unbuilt in every
   part** *(added 2026-08-03)*: there is no admin verb dispatch (P2-T14), no
   teardown sequence, no kernel unseal of a destroyed weight generation (P3-T2),

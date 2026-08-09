@@ -35,9 +35,10 @@ This is **not** a general-purpose OS. The served model gets all available comput
 and **zero authority**. It is a confined tenant, never a trusted component.
 
 > ⚠️ **Status: research-grade, early, actively developed.** The hardened microkernel substrate boots and
-> runs userspace servers today; the secure serving path and in-tree inference engine are in design and
-> early implementation. It does not yet serve inference and is not suitable for production use. See
-> [Status](#status).
+> runs userspace servers today. The serving protocol, its transport cryptography, and every component of
+> the inference engine are implemented and host-tested as standalone crates — but the servers that compose
+> them into a system are not built, and no part of BraiNIX runs on Apple Silicon yet. It does not serve
+> inference and is not suitable for production use. See [Status](#status).
 
 ## Security model
 
@@ -113,15 +114,27 @@ yet:**
 - ✅ Capability model, synchronous IPC, decomposed network stack, and a fixed-pool in-kernel store — with Kani proofs and fuzz targets on the hostile-input paths.
 - ✅ Measured boot via swtpm, with honest runtime TPM-presence gating.
 
-**Designed, not yet implemented:**
-- 📐 BSP v2 serving protocol — [spec landed](docs/architecture/BSP-v2-serving-protocol.md); server not built.
+**Implemented and host-tested as standalone crates. Each is a finished component; none is wired to any
+other, and none of it is reachable from a running system yet:**
+- ✅ **Apple Device Tree parser** ([`src/adt/`](src/adt/)) — `no_std`, zero-allocation, fail-closed, with a [written format spec](docs/platform-specs/apple-device-tree-format.md), a boot-args parser, an ADT/boot-args memory-range cross-check, Kani harnesses, and a 46-input fuzz corpus.
+- ✅ **BSP v2 serving protocol** — [spec](docs/architecture/BSP-v2-serving-protocol.md) plus the fail-closed wire decoder ([`src/bsp/`](src/bsp/)): zero-alloc, bounded, 16 Kani proofs, an 89-input fuzz corpus.
+- ✅ **Transport cryptography** ([`src/transport-crypto/`](src/transport-crypto/)) — PSK handshake FSM, HKDF-SHA256 key schedule, ChaCha20-Poly1305 record layer, HKDF ratchet; 10 Kani proofs, two fuzz corpora.
+- ✅ **Inference engine components** — BXW1 weight [format](docs/architecture/BXW1-weight-format.md) and fail-closed decoder ([`src/bxw1/`](src/bxw1/)), tensor kernels ([`src/tensor/`](src/tensor/): matmul with Q8 dequant, RMSNorm, softmax, RoPE, SiLU/SwiGLU), in-tree BPE tokenizer ([`src/tokenizer/`](src/tokenizer/)), and the transformer forward pass with KV cache and sampling ([`src/transformer/`](src/transformer/)).
+
+**Specified, not built — this is the gap between "components" and "a system":**
+- 📐 `servd` (session manager), `inferd` (confined model tenant), `modeld` (one-shot weight loader), and `tools/bsp-client/`. **None of these directories exists.**
+- 📐 The `Serve`/`Model`/`Gpu`/`Admin` capability types, and the reserved `WEIGHTS_REGION` / `KV_REGION`.
 
 **Cancelled:**
 - ⛔ Multi-arch HAL ([`HAL.md`](docs/architecture/HAL.md), SUPERSEDED) — one platform needs no abstraction layer over one backend. Its proof obligations moved to the aarch64 MMU and the DART backend.
 
 **Not started:**
-- ⬜ Apple Silicon platform (ADT parser — the next piece of code — then boot stub, AIC, DART, RTKit/ANS2, PCIe, Ethernet).
-- ⬜ In-tree CPU inference engine and the confined-model tenant.
+- ⬜ **The entire Apple Silicon platform from the boot stub on** — boot stub, AIC, DART, RTKit/ANS2, PCIe, Ethernet, AGX GPU. There is not one aarch64 source file in the kernel tree. The ADT parser above is the only Apple work that has landed, and it was the only piece testable without the hardware rig.
+- ⬜ Userspace FP/SIMD enablement; the adversarial-prompt confinement suite; fuzz execution in CI (the targets are committed but **CI never runs them** — only the Kani proofs run).
+
+Proof coverage is **62.5%** (5 of 8 invariants, 40 Kani proofs, 11 fuzz targets); INV-AUDIT, INV-GPU, and
+INV-MODEL are uncovered. Run `cargo run --release --manifest-path tools/proof-coverage/Cargo.toml` for the
+current figure.
 
 > ⚠️ BraiNIX does not yet serve inference, and **does not yet run on the platform it targets.** It is
 > research-grade and not suitable for production use.
@@ -161,12 +174,24 @@ kernel chain to your terminal.
 ## Layout
 
 ```
-src/kernel/        the microkernel (no_std)
-src/bootloader/    multiboot2 bootloader + ELF loader
-src/servers/       userspace server libraries (libsyscall, …)
-userland/shell/    the userspace shell
-docs/              north star, threat model, architecture, security invariants
-bin/, docker/      build + live-boot tooling
+src/kernel/            the microkernel (no_std)
+src/bootloader/        multiboot2 bootloader + ELF loader
+src/servers/           userspace server libraries (libsyscall, linkd, ipd, transportd, auditd, …)
+userland/shell/        the userspace shell
+
+src/adt/               Apple Device Tree + boot-args parser (fail-closed)
+src/bsp/               BSP v2 serving-protocol wire decoder (fail-closed)
+src/transport-crypto/  PSK handshake, HKDF-SHA256 schedule, ChaCha20-Poly1305 records
+src/bxw1/              BXW1 weight-blob decoder (fail-closed)
+src/tokenizer/         in-tree BPE tokenizer + vocab parser
+src/tensor/            no_std tensor kernels
+src/transformer/       forward pass, KV cache, decode loop, sampling
+src/*-verify/          Kani proof harnesses (capability, adt, bsp, transport-crypto, bootloader)
+
+fuzz/                  libFuzzer targets + seeded corpora
+tools/proof-coverage/  invariant-to-proof coverage tracker
+docs/                  north star, threat model, architecture, platform specs, security invariants
+bin/, docker/          build + live-boot tooling
 ```
 
 ## Documentation

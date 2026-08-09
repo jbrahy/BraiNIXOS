@@ -94,6 +94,34 @@ Wave 2 item not on the critical path to P3-T9 (decision #19)…~~ — **supersed
 rested on a P3-T9 critical path that no longer exists. AS-0 is now the head of the platform track and the
 only Apple work with a verification loop before the rig exists.
 
+**Wave 3 — AS-0 COMPLETE.** The platform track's host-testable head is done end to end:
+
+| Task | Deliverable | Commit |
+|---|---|---|
+| AS-0-T1 | ADT binary-format spec — [`platform-specs/apple-device-tree-format.md`](platform-specs/apple-device-tree-format.md) | `981f693`, `b3d2dba` |
+| AS-0-T2 | `#![no_std]`, zero-alloc, fail-closed ADT parser — `src/adt/` | `e4c6296`, `f7d8df8` |
+| AS-0-T3 | ADT fuzz target (46-input corpus) + Kani harnesses — `src/adt-verify/` | `5c89031` |
+| AS-0-T4 | boot-args parser + ADT/boot-args memory-range cross-check | `e89bd34` |
+
+**Wave 3 — the architecture-neutral library track has LANDED.** Every P2/P3 component that is a *library*
+rather than a *server* is implemented, host-tested, and committed:
+
+| Task | Deliverable | Commit |
+|---|---|---|
+| P2-T2 | Transport crypto — PSK handshake FSM, HKDF-SHA256 schedule, ChaCha20-Poly1305 record layer, ratchet — `src/transport-crypto/` (+ 10 Kani proofs, 2 fuzz targets) | `1c290ce`, `40e3e1d` |
+| P2-T3 | Fail-closed BSP v2 wire decoder — `src/bsp/` (+ 16 Kani proofs, 89-input fuzz corpus) | `d763089`, `40e3e1d` |
+| P3-T1 | BXW1 weight-format spec | `04868c3`, `88f6b62` |
+| P3-T3 | Fail-closed BXW1 loader (**decoder only**, not `modeld`) — `src/bxw1/` | `3484e7a`, `982f6ea` |
+| P3-T4 | Tensor kernels — matmul (f32 + Q8 dequant), RMSNorm, softmax, RoPE, SiLU/SwiGLU — `src/tensor/` | `ef48866`, `88f6b62` |
+| P3-T5 | In-tree BPE tokenizer + fail-closed vocab parser — `src/tokenizer/` | `821f544`, `edc0bfe` |
+| P3-T6 | Transformer forward pass, KV cache, decode loop, sampling — `src/transformer/` | `aaa1607`, `982f6ea` |
+
+**What that does *not* mean.** Nothing above is wired to anything. **`servd`, `inferd`, `modeld`, and
+`bsp-client` do not exist** — no directory, no crate, no workspace member. The libraries are components
+without a system, and the first thing that composes them is P3-T9a, which cannot start until P2-T5,
+P2-T4, and P3-T7 do. Proof coverage stands at **62.5% (5/8 invariants, 40 Kani proofs, 11 fuzz targets)**;
+INV-AUDIT, INV-GPU, and INV-MODEL are uncovered.
+
 **Terminal criterion (decision #12): the project is done at AS-5** — GPU and CPU at maximum, serving
 inference on the Mac mini M2 Pro. AS-4c is a gate on the way, not the finish line. ~~and P3-T9~~ — that
 gate is unreachable (#27).
@@ -104,6 +132,10 @@ ELF loader with guard-protected stacks; capability model; synchronous IPC; decom
 fixed-pool in-kernel store; inbound SSH server; outbound SSH client (host-tested only, Stage A). **None of
 this runs on Apple Silicon yet**, and that is the honest status: there is no runnable BraiNIX on the only
 supported platform until AS-1 lands.
+
+**The AS-0 and library work above changes none of that.** It is host-tested on `aarch64-apple-darwin`
+and inside the x86-64 reference build; **there is still not one aarch64 source file in the kernel tree**
+(`find src -iname '*aarch64*'` is empty), so AS-1 through AS-5 remain untouched.
 
 ---
 
@@ -148,12 +180,12 @@ with `auditd` observing connect / auth / grant / request / response boundaries.
 |---|---|---|---|
 | **0** | NORTH_STAR / THREAT_MODEL rewrite | — | **DONE** |
 | ~~**1**~~ | ~~HAL extraction — multi-arch becomes possible; x86-64 behavior byte-identical~~ | ~~none~~ | **CANCELLED (#21)** |
-| **AS-0** | Apple Device Tree parser (host-side, fuzz + Kani) | none | **FIRST CODE** (decision #23) |
-| **2** | Secure inbound serving path + capability extensions | ~~P1~~ none | arch-neutral, host-tested (#27) |
-| **3** | In-tree CPU inference — architecture-neutral serving engine | P2 ~~, P1-fpu~~ | arch-neutral, host-tested (#27) |
+| **AS-0** | Apple Device Tree parser (host-side, fuzz + Kani) | none | ~~**FIRST CODE** (decision #23)~~ — **DONE**, all four tasks |
+| **2** | Secure inbound serving path + capability extensions | ~~P1~~ none | **PARTIAL** — T1/T2/T3 done; **no `servd`**, caps not extended |
+| **3** | In-tree CPU inference — architecture-neutral serving engine | P2 ~~, P1-fpu~~ | **PARTIAL** — T1/T3/T4/T5/T6 done; **no `inferd`, no `modeld`**, no regions, no FP |
 | ~~**4**~~ | ~~aarch64 core + QEMU `virt` bring-up harness~~ | ~~P1~~ | **CANCELLED (#22)** |
-| **AS-1..3** | Apple boot stub → AIC → DART on real hardware | ~~P4,~~ AS-0 | **the only platform** |
-| **AS-4** | RTKit + ANS2 NVMe + PCIe + Ethernet → serving on the mini | AS-3 ~~, **P3-T9 (hard gate, #13)**~~ | **long pole** |
+| **AS-1..3** | Apple boot stub → AIC → DART on real hardware | ~~P4,~~ AS-0 | **the only platform** — **NOT STARTED**; AS-0 no longer blocks it |
+| **AS-4** | RTKit + ANS2 NVMe + PCIe + Ethernet → serving on the mini | AS-3 ~~, **P3-T9 (hard gate, #13)**~~ | **long pole** — **NOT STARTED** |
 | **AS-5** | **AGX GPU** — RTKit GPU endpoint, firmware load, command submission, GPU tensor kernels | AS-4, AS-3 DART proven ~~, **P3-T9 (hard gate, #13)**~~ | **largest single effort; terminal criterion (#12)** |
 | ~~**5**~~ | ~~GPU on x86-64 (INV-GPU) — discrete accelerator~~ | ~~P3, P1-iommu~~ | **CANCELLED (#20)** — no x86-64 platform to host a discrete accelerator |
 | **X** | Proof program, CI, crate burn-down | woven throughout | continuous |
@@ -209,23 +241,23 @@ deferral rested on AS-0 being off the critical path to P3-T9; P3-T9 is unreachab
 AS-0 is now the head of the platform track, and with Phase 4's harness cancelled (#22) it is the **only**
 Apple work that can be verified before the hardware rig exists.
 
-- **AS-0-T1** ADT binary-format specification, re-derived from published Asahi documentation. Field widths and flag bits are **not** assumed — anything only documented by source gets specified by one session and implemented by another. **O**. Verify: written spec.
-- **AS-0-T2** `#![no_std]`, zero-allocation, fail-closed ADT parser. Every offset/length/count bounds-checked against its containing region; malformed input denies. **S**. Deps: T1. Verify: host tests.
-- **AS-0-T3** Fuzz target + Kani harness (no-panic, bounds, no allocation driven by ADT-supplied sizes). **S** harness / **O** hardening. Deps: T2. Verify: fuzz soak + Kani green — **INV-MEM**, INV-SERVE discipline.
-- **AS-0-T4** boot-args parser + ADT/boot-args memory-range cross-check (disagreement fails closed). **S**. Deps: T2. Verify: host tests with adversarial fixtures.
+- **AS-0-T1** **DONE (`981f693`, `b3d2dba`)** — ADT binary-format specification, re-derived from published Asahi documentation. Field widths and flag bits are **not** assumed — anything only documented by source gets specified by one session and implemented by another. **O**. Verify: written spec. Deliverable: [`platform-specs/apple-device-tree-format.md`](platform-specs/apple-device-tree-format.md), 1069 lines.
+- **AS-0-T2** **DONE (`e4c6296`, `f7d8df8`)** — `#![no_std]`, zero-allocation, fail-closed ADT parser. Every offset/length/count bounds-checked against its containing region; malformed input denies. **S**. Deps: T1. Verify: host tests. Landed as `src/adt/` with golden and adversarial test suites.
+- **AS-0-T3** **DONE (`5c89031`)** — Fuzz target + Kani harness (no-panic, bounds, no allocation driven by ADT-supplied sizes). **S** harness / **O** hardening. Deps: T2. Verify: fuzz soak + Kani green — **INV-MEM**, INV-SERVE discipline. Landed as `src/adt-verify/` plus a 46-input corpus; the no-allocation harness runs in CI behind the `deny-allocation` feature. *Caveat: the Kani harness runs in CI, the fuzz target does not — see P2-T10.*
+- **AS-0-T4** **DONE (`e89bd34`)** — boot-args parser + ADT/boot-args memory-range cross-check (disagreement fails closed). **S**. Deps: T2. Verify: host tests with adversarial fixtures. Landed as `src/adt/src/boot_args.rs`.
 
 ### Phase 2 — Secure inbound serving path *(architecture-neutral)*
 
 - **P2-T1** **BSP v2 protocol spec — RE-OPENED, and COMPLETE.** ~~BSP v1 protocol spec — DONE (`670e072`)~~ — v1's signature-over-ephemeral-key-agreement handshake is superseded by decision #16's pre-shared-key transport. Deliverable: [`architecture/BSP-v2-serving-protocol.md`](architecture/BSP-v2-serving-protocol.md), covering the PSK handshake, the HKDF-SHA256 key schedule, the retained record layer, the ratchet, and **both session types** (client and admin). **O**. Verify: spec precise enough to drive Kani harnesses and fuzz targets against every parser and every state transition.
-- **P2-T2** Factor `ssh/` primitives into `src/brainix-transport-crypto/` (`no_std`) + server-side handshake. **Shrunk by decision #16**: no curve arithmetic, no key agreement, no signature verification on this path — the deliverable is the **PSK handshake FSM, HKDF-SHA256 derivation, and the ChaCha20-Poly1305 record layer**, over the in-tree primitive set (SHA-256, HKDF, ChaCha20, Poly1305). **O**. Deps: T1. Verify: Kani (no-panic, length-checked), fuzz handshake FSM, test vectors.
-- **P2-T3** Fail-closed BSP request parser (`servd/src/parser.rs`, `no_std`, zero-alloc, bounded). **S**. Deps: T1 — it parses the wire format T1 now redefines. Verify: `fuzz_servd_request_parser` + Kani + audit — **INV-SERVE**.
+- **P2-T2** **DONE (`1c290ce`, proofs `40e3e1d`)** — Factor `ssh/` primitives into `src/transport-crypto/` (`no_std`) + server-side handshake. **Shrunk by decision #16**: no curve arithmetic, no key agreement, no signature verification on this path — the deliverable is the **PSK handshake FSM, HKDF-SHA256 derivation, and the ChaCha20-Poly1305 record layer**, over the in-tree primitive set (SHA-256, HKDF, ChaCha20, Poly1305). **O**. Deps: T1. Verify: Kani (no-panic, length-checked), fuzz handshake FSM, test vectors — 10 Kani proofs in `src/transport-crypto-verify/`, two fuzz targets with 29- and 49-input corpora, four host test suites. **⚠️ Outstanding debt, not a completed claim: `sha2` and `chacha20` are still the *vendored* crates** (`src/transport-crypto/Cargo.toml`). HKDF, HMAC, Poly1305, the schedule, the record layer, and the ratchet are in-tree; the hash and stream cipher are not. Until X-T4 lands, this path **does not satisfy the north star's "dependency closure is itself" rule**, and no doc may describe the primitive set as in-tree.
+- **P2-T3** **DONE (`d763089`, proofs `40e3e1d`)** — Fail-closed BSP request parser, `no_std`, zero-alloc, bounded. **S**. Deps: T1 — it parses the wire format T1 now redefines. Verify: fuzz + Kani + audit — **INV-SERVE**. Landed as `src/bsp/` (message, raw, handshake, record, response, session, admin, error) rather than `servd/src/parser.rs`, because `servd` does not exist yet; it is a standalone decoder crate that `servd` will consume. 16 Kani proofs in `src/bsp-verify/`, an 89-input fuzz corpus, and state-machine/valid/adversarial test suites. `src/bsp/src/admin.rs` defines the admin message **shapes only** — the dispatcher is P2-T14 and is not built.
 - **P2-T4** `servd`: accept via `transportd`, session manager, per-client frozen capability set. **Both session types** (decision #17): a session is a client session holding `CapServe` or an admin session holding `CapAdmin`, decided at accept and frozen there; nothing promotes one into the other. **S**. Deps: T1, T2, T3, T5. Verify: 2-concurrent-session integration; cross-naming denied; a client session cannot reach an admin verb.
 - **P2-T5** Capability extensions `Serve`/`Model`/`Gpu`/**`Admin`** + grant/derive/revoke rules; extend `src/capability-verify/`. `Admin=14` follows `Serve=11, Model=12, Gpu=13` and is a distinct grant, never derivable from `CapServe` (decision #17). **O** — INV-AUTH, Full tier. Verify: Kani green, including no derivation path from `CapServe` to `CapAdmin`.
 - **P2-T6** Delete `boot/ssh_bridge.rs` `static mut` session globals; route inbound via servd + capability IPC only. **S**. Deps: T4. Verify: grep-gate (no `static mut` session state); connect e2e.
 - **P2-T7** Reframe `db/` for the session table + serving log (fixed pools) + cross-session non-interference Kani. **S** build / **O** proof. Deps: T5. Verify: Kani — no session row readable via another session's capability.
 - **P2-T8** `auditd` extension: subscribe to serving events; manifest unchanged. **Admin-session events are in scope** (decision #17): connection accept, selector match or no-match, authentication success or failure, capability grant, **every admin verb**, every denial, and teardown, carrying the credential handle and session id and **never** key material, prompt bytes, or token bytes. Observing an admin verb grants no authority to observe it. **S**. Deps: T4, T14. Verify: manifest diff = zero new capabilities (INV-AUDIT); every verb and every rejection path in T14 produces exactly one attributable event; CTF corpus ≥ 95% TP.
 - **P2-T9** ~~vTPM closure~~ — **DONE** (`c01d0ab`). **x86-64 only, and therefore frozen reference, not scheduled** (#26): the code stays and keeps building, and nothing depends on it, because there is no TPM on the only platform. It has no analogue and no successor (#24).
-- **P2-T10** Fuzz corpus + targets (handshake, parser, session state) into CI. **H** scaffold / **S** corpus. Deps: T2, T3.
+- **P2-T10** **NOT STARTED — and the checked-in corpora must not be read as evidence otherwise.** Fuzz corpus + targets (handshake, parser, session state) into CI. **H** scaffold / **S** corpus. Deps: T2, T3. Eleven fuzz targets and their corpora are committed under `fuzz/`, but **`.github/workflows/ci.yml` contains no `cargo fuzz` invocation at all** — `grep -n "cargo fuzz\|corpus" .github/workflows/ci.yml` returns nothing. The only verification job runs **Kani proofs**, which are a different technique proving different things. Stated plainly: **every fuzz target in this repository is built and never executed.** No task above may cite "fuzz soak" as satisfied until this lands.
 - **P2-T11** Host-side test client `tools/bsp-client/` (std, zero crates), **driving both session types**. Grows the admin verb set of decision #17 — **exactly six verbs**: enroll-key, revoke-key, load-weights, read-audit-log, restart-server, reboot. The set is frozen and compile-time-enumerated; there is **no `rotate` verb** (rotation is enroll-then-revoke), no `set-config`, no file or exec verb, and no verb that adds, removes, or widens a capability. The client exercises every verb and every rejection path against the T14 dispatcher. **H**. Deps: T1, T4, T14.
 - **P2-T12** Runtime key enrollment + HKDF ratchet (decision #18). Extend `src/kernel/src/boot/credential_store.rs` to enroll and revoke client and admin pre-shared keys at runtime, persisting to ANS2 NVMe on Apple Silicon from AS-4a (`src/kernel/src/arch/virtio_blk.rs` is **frozen reference, not scheduled** — #26); **no secret is ever compiled in** — `src/kernel/src/ssh/client_identity.rs:21` (`const CLIENT_KEY_SEED`) is an acknowledged dev seed and is no longer the model. Forward secrecy comes from a symmetric HKDF chain: session key *n* is derived from chain key *n*, the chain advances, and chain key *n* is zeroized — derivation and advance are one operation with no path that does either alone. **The break-glass admin PSK is provisioned over the serial console and authenticates over serial only; the network listener refuses it outright** (decision #17), so a compromised admin session can neither revoke nor replace it. **O**. Deps: T1, T4, T5. Verify: recorded-traffic test — material captured after an advance must not decrypt records sealed before it; enrollment/revocation are attributable audit events; grep-gate on compile-time key material.
 - **P2-T13** Credential store at rest (decisions #18, **#25**) — **there is no sealing task left**. ~~*x86-64:* seal the credential store to the TPM against the measured boot state established by P2-T9…~~ — **CANCELLED with the platform (#20).** The credential store is **plaintext at rest, permanently**. Sealing binds a secret to a measured boot state; the only platform has neither the measurement nor the hardware to bind against, so **no version of this task closes the gap and none is scheduled**. What remains of P2-T13 is documentation and disclosure: the release notes must state the plaintext-at-rest exposure plainly, and a stolen disk yields every client and admin pre-shared key. **O**. Deps: T12. Verify: release notes state the exposure; grep-gate that no code, log line, or protocol field claims the store is sealed. **P2-A passes on the disclosure being correct, not on work having been done** — there is no deliverable here to audit.
@@ -235,13 +267,13 @@ Apple work that can be verified before the hardware rig exists.
 ### Phase 3 — In-tree CPU inference *(architecture-neutral)*
 
 - **P3-T0** **Userspace FP/SIMD enablement**: in-tree target spec for `inferd` + FP state save/restore in the context switch. Kernel stays soft-float. **S** impl / **O** review (context-switch ABI is TCB). Deps: ~~P1~~ none — with the HAL cancelled (#21) this is the aarch64 FP/NEON state path directly. Verify: FP-dirty context-switch test; Kani on save-area bounds. *The x86-64 XSAVE/XRSTOR path is frozen reference, not scheduled (#26).*
-- **P3-T1** Weight format spec "BXW1" (header, tensor table, per-tensor SHA-256, hard size bound; Q8_0 + f32). **S** spec / **O** review. Verify: spec; INV-MODEL mapping.
-- **P3-T2** Reserved regions: extend `memory/virtual_address_layout.rs` + `physical_allocator.rs` with a build-time `WEIGHTS_REGION` (read-only after load, W^X) + per-session `KV_REGION` partitions; no allocator. **S**. Deps: ~~P1~~ none. Verify: Kani (region non-overlap; weights-never-writable-post-seal) — **INV-MEM**. *Sized in **pages**, never bytes: the platform's base page is **16 KiB**. `INV-MEM-009` survives the loss of the second architecture — it is now a rule against hardcoding 16 KiB just as much as 4 KiB, and the frozen 4 KiB reference is the cheapest available second data point.*
-- **P3-T3** Fail-closed BXW1 loader (streaming digest, measured, denies malformed/oversized). **S**. Deps: T1, T2. Verify: fuzz BXW1 header/tensor-table + Kani.
+- **P3-T1** **DONE (`04868c3`, `88f6b62`)** — Weight format spec "BXW1" (header, tensor table, per-tensor SHA-256, hard size bound; Q8_0 + f32). **S** spec / **O** review. Verify: spec; INV-MODEL mapping. Deliverable: [`architecture/BXW1-weight-format.md`](architecture/BXW1-weight-format.md).
+- **P3-T2** **NOT STARTED, and it now blocks more than it did.** `grep -rn "WEIGHTS_REGION\|KV_REGION" src/kernel/src/memory/` returns nothing. **`virtual_address_layout.rs` still hardcodes `PAGE_SIZE_IN_BYTES = 4096`** against a platform whose base page is 16 KiB — that constant is the exact `INV-MEM-009` defect this row's own note warns about, and it must be fixed as part of this task rather than alongside it. Reserved regions: extend `memory/virtual_address_layout.rs` + `physical_allocator.rs` with a build-time `WEIGHTS_REGION` (read-only after load, W^X) + per-session `KV_REGION` partitions; no allocator. **S**. Deps: ~~P1~~ none. Verify: Kani (region non-overlap; weights-never-writable-post-seal) — **INV-MEM**. *Sized in **pages**, never bytes: the platform's base page is **16 KiB**. `INV-MEM-009` survives the loss of the second architecture — it is now a rule against hardcoding 16 KiB just as much as 4 KiB, and the frozen 4 KiB reference is the cheapest available second data point.*
+- **P3-T3** **DONE as the decoder (`3484e7a`, `982f6ea`) — and *only* the decoder.** Fail-closed BXW1 loader (streaming digest, measured, denies malformed/oversized). **S**. Deps: T1, T2. Verify: fuzz BXW1 header/tensor-table + Kani. Landed as `src/bxw1/` with valid and adversarial test suites. **It touches no `WEIGHTS_REGION` and holds no capability**, because neither exists: the region is P3-T2 (not started) and the host that runs this parser is `modeld`, P3-T3a (not started). Reading this row as "the weight loader is done" is wrong — what is done is the *parsing*, not the *loading*.
 - **P3-T3a** **`modeld` — the one-shot weight loader server** *(added 2026-08-03 by owner decision; it closes BXW1 open question 6, which observed that the loader's host was named nowhere in this roadmap).* Hosts the P3-T3 parser in `src/servers/modeld/`. Manifest is **exactly three capabilities** — `CapEndpoint`→`devd-ans2` (read the blob and the vocab blob), writable `CapMemory` over `WEIGHTS_REGION` (populate, then request the seal), `CapEndpoint`→`auditd` (one event per load attempt) — and **no** `CapServe`, `CapModel`, `CapAdmin`, network, or spawn. It runs to completion **before `inferd` launches** and **exits**, so no running process holds storage authority or a writable weights capability while the system serves. The rejected alternative was a **fourth capability on `inferd`**: that degrades `INV-MODEL-001` (written sign-off required) and widens the long-lived, remotely reachable, adversarially prompted component instead of a short-lived one. **Full tier** — it parses a hostile blob; the assignment lives in [`security/SECURITY_INVARIANTS.md`](security/SECURITY_INVARIANTS.md) §16, which is the only tier table. **O**. Deps: T2 (the region and its seal), T3 (the parser), T5 (the vocab parser it invokes at S9), P2-T14 (which orders the reboot-class reload). Verify: manifest audit — the diff shows exactly the three capabilities and `inferd`'s manifest is unchanged at three; launch-ordering test — `inferd` cannot start until `modeld` has exited and the region is sealed; a Kani obligation shared with T2 that no capability naming `WEIGHTS_REGION` writable outlives `modeld`; grep-gate that no server manifest other than `modeld`'s names a storage endpoint. Deliverable spec: [`architecture/BXW1-weight-format.md`](architecture/BXW1-weight-format.md) §10.0.
-- **P3-T4** Tensor kernels (`no_std`, fixed scratch): matmul (f32 + Q8 dequant), RMSNorm, softmax, RoPE, SiLU/SwiGLU. **S**. Deps: T0. Verify: property tests vs reference; no-alloc grep-gate.
-- **P3-T5** In-tree BPE tokenizer; the vocab blob is hostile input → fail-closed. **S**. Deps: T1. Verify: fuzz + Kani vocab parser; round-trip tests.
-- **P3-T6** Transformer forward pass + KV cache in per-session slices; decode loop + sampling (CSPRNG from `hardware_security/csprng.rs`). **S**. Deps: T4, T5, T2. Verify: logits parity vs a host f32 reference on a tiny model.
+- **P3-T4** **DONE (`ef48866`, `88f6b62`)** — Tensor kernels (`no_std`, fixed scratch): matmul (f32 + Q8 dequant), RMSNorm, softmax, RoPE, SiLU/SwiGLU. **S**. ~~Deps: T0~~ — landed **ahead of** T0, which is still not started; the kernels are scalar and soft-float today, so enabling userspace FP/SIMD is a later speed-up, not a prerequisite. Verify: property tests vs reference; no-alloc grep-gate. Landed as `src/tensor/`.
+- **P3-T5** **DONE (`821f544`, `edc0bfe`)** — In-tree BPE tokenizer; the vocab blob is hostile input → fail-closed. **S**. Deps: T1. Verify: fuzz + Kani vocab parser; round-trip tests. Landed as `src/tokenizer/` with pretokenize, adversarial, roundtrip, merge-order, and bounded-work suites. *Caveat: no vocab fuzz target exists yet, and per P2-T10 no fuzz target runs in CI regardless.*
+- **P3-T6** **DONE (`aaa1607`, `982f6ea`)** — Transformer forward pass + KV cache in per-session slices; decode loop + sampling (CSPRNG from `hardware_security/csprng.rs`). **S**. Deps: T4, T5, T2. Verify: logits parity vs a host f32 reference on a tiny model. Landed as `src/transformer/` with parity, bounds, decode, and sampling suites. **The "per-session slices" are a library abstraction only** — `KV_REGION` does not exist (T2 not started), so nothing enforces the partitioning at the memory level yet.
 - **P3-T7** `inferd`: confined-tenant manifest (capabilities = {Model, serving endpoint, own KV slice}; no Spawn, no net, no cross-session); wired to servd over synchronous IPC. **S**. Deps: T6, P2-T4. Verify: manifest audit — the model *cannot name* forbidden capabilities — **INV-MODEL**.
 - **P3-T8** Confinement suite: adversarial-prompt harness (injection corpus) — zero escalation under any input. **O**. Deps: T7. Verify: suite green = CI regression bar.
 - **P3-T9** ~~e2e: `bsp-client` → QEMU x86-64 → auth → prompt → streamed tokens; 2 isolated clients. **H** scaffold. Deps: T7, P2-A. Verify: **datapath exit criterion — and the hard gate of decision #13.**~~ — **UNREACHABLE, replaced by #27.** The criterion named a QEMU x86-64 run, and x86-64 is not a platform. **It is not restated against Apple Silicon**, because on Apple Silicon the equivalent run *is* AS-4c, which is hardware-gated and sits at the end of the driver chain. Say it plainly: **the serving stack has no integration test until AS-4c.** What replaces P3-T9 as the Phase 3 exit is the per-component host-test set below, run on `aarch64-apple-darwin`, plus the honest note that passing all of it proves the components and not the system.
@@ -415,19 +447,37 @@ model, not a proof of absolute security.
 - `src/kernel/src/boot/ssh_bridge.rs` — inbound seed to replace with servd; `static mut` session state to delete.
 - `src/kernel/src/capability/capability_type.rs` — `Serve`/`Model`/`Gpu`/`Admin` extension point (ends at `Frame=10`).
 - `src/kernel/src/boot/credential_store.rs` — runtime key enrollment and the ratchet's persisted chain state (P2-T12); today it persists to virtio-blk and seals nothing, and **sealing is not coming** (#25).
-- `src/kernel/src/memory/virtual_address_layout.rs` — fixed reserved WEIGHTS/KV regions (INV-MEM).
-- `src/capability-verify/src/lib.rs` — the existing Kani proof pattern to extend across the new `*-verify` crates.
+- `src/kernel/src/memory/virtual_address_layout.rs` — fixed reserved WEIGHTS/KV regions (INV-MEM); today it defines neither, and hardcodes a 4 KiB page against a 16 KiB platform.
+- `src/capability-verify/src/lib.rs` — the existing Kani proof pattern, now extended across `src/adt-verify/`, `src/bsp-verify/`, and `src/transport-crypto-verify/`.
+- `.github/workflows/ci.yml` — runs four Kani packages and **zero fuzz targets**; P2-T10's entire scope.
 
 ## Immediate next step
 
-Close this single-platform documentation gate first — **it is Wave 2** (#27). Then, sharing no code:
+~~Close this single-platform documentation gate first — **it is Wave 2** (#27). Then, sharing no code:~~
+~~1. **AS-0-T1/T2** — the ADT binary-format spec and the `no_std`, zero-allocation, fail-closed parser. **This is the first code** (#23)…~~
+~~2. **P2-T2 onward** — the serving path…~~ — **both superseded: the documentation gate closed, AS-0
+landed in full, and P2-T2/T3 landed with them.**
 
-1. **AS-0-T1/T2** — the ADT binary-format spec and the `no_std`, zero-allocation, fail-closed parser. **This is the first code** (#23): host-side, host-testable, no hardware, no HAL, and it gates AS-1.
-2. **P2-T2 onward** — the serving path, architecture-neutral and host-tested on `aarch64-apple-darwin`, blocked by no Apple work (#27). P2-T1's spec is done.
+**The next step is P2-T5, and it is small.** `src/kernel/src/capability/capability_type.rs:37` still ends
+at `Frame = 10`. Adding `Serve = 11, Model = 12, Gpu = 13, Admin = 14` plus their grant/derive/revoke rules
+and the `src/capability-verify/` proof that **no derivation path leads from `CapServe` to `CapAdmin`**
+(decision #17) is the **sole unmet dependency of P2-T4** — `servd`'s other three deps (T1, T2, T3) are done.
+It needs no hardware and no new crate.
 
-~~**P1-T2** — move `arch/*` → `arch/x86_64/` behind the HAL traits~~ — **cancelled (#21).** The x86-64 tree
-stays where it is, keeps building, and nothing is scheduled against it (#26).
+Then, in dependency order, the four things that turn seven finished libraries into a system:
+
+1. **P2-T4** `src/servers/servd/` — accept via `transportd`, session manager, per-client frozen capability set, both session types. Deps: T1, T2, T3 (done), T5.
+2. **P3-T2** the `WEIGHTS_REGION` / `KV_REGION` reserved regions, and the 4 KiB → 16 KiB page fix.
+3. **P3-T3a** `src/servers/modeld/` — the one-shot loader that hosts the finished `src/bxw1/` parser, then exits.
+4. **P3-T7** `src/servers/inferd/` — the confined tenant wrapping the finished `src/transformer/`.
+
+**P3-T9a is the first point at which BraiNIX serves inference at all**, and it needs all four plus
+`tools/bsp-client/` (P2-T11). None of the five directories named above exists today.
+
+Separately and in parallel, **P2-T10** is worth closing early: the fuzz targets already exist and CI simply
+never runs them, so the cost is a CI job, not a corpus.
 
 Before AS-1 can begin, the hardware rig must exist: the Mac mini M2 Pro in Permissive Security, a debug UART
-cable, and m1n1 installed as a lab instrument. Until it does, AS-0 and the P2/P3 host tracks are the whole
-of the runnable work.
+cable, and m1n1 installed as a lab instrument. Until it does, ~~AS-0 and~~ the P2/P3 host tracks are the whole
+of the runnable work — AS-0 is finished, so **there is no host-testable Apple work left**: everything
+remaining on the platform track needs the rig.
