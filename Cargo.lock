@@ -60,6 +60,13 @@ name = "brainix-bsp"
 version = "0.1.0"
 
 [[package]]
+name = "brainix-bsp-verify"
+version = "0.1.0"
+dependencies = [
+ "brainix-bsp",
+]
+
+[[package]]
 name = "brainix-bxw1"
 version = "0.1.0"
 dependencies = [
@@ -164,6 +171,14 @@ dependencies = [
  "chacha20",
  "sha2",
  "subtle",
+]
+
+[[package]]
+name = "brainix-transport-crypto-verify"
+version = "0.1.0"
+dependencies = [
+ "brainix-bsp",
+ "brainix-transport-crypto",
 ]
 
 [[package]]

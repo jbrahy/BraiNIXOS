@@ -257,6 +257,38 @@ fn infer_invariant_from_proof(proof_name: &str) -> Option<String> {
         return Some("INV-SERVE".to_string());
     }
 
+    // The two BSP v2 network-facing crates: the wire decoder (brainix-bsp) and
+    // the key schedule plus record layer (brainix-transport-crypto). Both are
+    // hostile-input parsers, so §15's INV-PARSE-001..004 roll up under INV-SERVE
+    // per the mapping table at SECURITY_INVARIANTS.md line 33. Two families of
+    // proof belong elsewhere and are routed before that default:
+    //
+    //   - buffer, bound, overflow and zeroization proofs are what INV-MEM
+    //     asserts about every parser and about every secret;
+    //   - the capability grant of §7.2 and the enumerated authority bytes of
+    //     row A1 are INV-AUTH-009's, not INV-SERVE's.
+    //
+    // No new identifier is introduced: all three are existing NORTH_STAR
+    // headline invariants.
+    if lower.starts_with("bsp_") || lower.starts_with("transport_crypto_") {
+        if lower.contains("buffer")
+            || lower.contains("bounds")
+            || lower.contains("overflow")
+            || lower.contains("stream")
+            || lower.contains("zeroiz")
+            || lower.contains("erases")
+        {
+            return Some("INV-MEM".to_string());
+        }
+        if lower.contains("authority")
+            || lower.contains("capability")
+            || lower.contains("illegal_state")
+        {
+            return Some("INV-AUTH".to_string());
+        }
+        return Some("INV-SERVE".to_string());
+    }
+
     if lower.contains("rights") || lower.contains("authority") || lower.contains("revocation") || lower.contains("capability") || lower.contains("derivation") {
         Some("INV-AUTH".to_string())
     } else if lower.contains("memory") || lower.contains("out_of_bounds") || lower.contains("cslot") || lower.contains("budget") {
@@ -274,6 +306,14 @@ fn infer_invariant_from_fuzz_target(target_name: &str) -> Option<String> {
     // Check the ADT first: its target name mentions firmware device trees, and
     // §15's INV-PARSE-001..004 roll up under INV-SERVE.
     if lower.contains("adt") || lower.contains("device_tree") {
+        return Some("INV-SERVE".to_string());
+    }
+
+    // The BSP v2 network-facing targets, named before the generic rules below
+    // so the mapping is deliberate rather than an accident of substring order:
+    // "transport" would otherwise catch the two transport-crypto targets by way
+    // of the transportd rule, which is a different component.
+    if lower.contains("bsp_decoder") || lower.contains("transport_crypto") {
         return Some("INV-SERVE".to_string());
     }
 

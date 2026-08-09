@@ -171,6 +171,20 @@ jobs:
             --package brainix-adt-verify
             --features deny-allocation
             --harness adt_decoder_performs_no_allocation
+      # The two network-facing crates: the BSP v2 wire decoder and the PSK key
+      # schedule plus AEAD record layer. Both are Full tier under
+      # SECURITY_INVARIANTS.md §16 and are the outermost attack surface in the
+      # system.
+      - name: Kani — BSP v2 wire decoder (P2-T3)
+        uses: model-checking/kani-github-action@v1
+        with:
+          working-directory: .
+          args: --package brainix-bsp-verify
+      - name: Kani — BSP v2 transport cryptography (P2-T2)
+        uses: model-checking/kani-github-action@v1
+        with:
+          working-directory: .
+          args: --package brainix-transport-crypto-verify
 
   # ---------------------------------------------------------------------------
   # 5a. Formal verification — Prusti on brainix-ipc-core shim crate (D-07, D-08)

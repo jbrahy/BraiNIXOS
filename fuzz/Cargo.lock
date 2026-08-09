@@ -41,6 +41,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-bsp"
+version = "0.1.0"
+
+[[package]]
 name = "brainix-devd-nic"
 version = "0.1.0"
 
@@ -50,10 +54,12 @@ version = "0.0.0"
 dependencies = [
  "brainix-adt",
  "brainix-bootloader-verify",
+ "brainix-bsp",
  "brainix-devd-nic",
  "brainix-ipd",
  "brainix-kernel",
  "brainix-linkd",
+ "brainix-transport-crypto",
  "brainix-transportd",
  "libfuzzer-sys",
 ]
@@ -71,6 +77,7 @@ version = "0.1.0"
 dependencies = [
  "brainix-libsyscall",
  "chacha20",
+ "curve25519-dalek",
  "ed25519-dalek",
  "multiboot2",
  "sha2",
@@ -86,6 +93,16 @@ name = "brainix-linkd"
 version = "0.1.0"
 dependencies = [
  "brainix-libsyscall",
+]
+
+[[package]]
+name = "brainix-transport-crypto"
+version = "0.1.0"
+dependencies = [
+ "brainix-bsp",
+ "chacha20",
+ "sha2",
+ "subtle",
 ]
 
 [[package]]
