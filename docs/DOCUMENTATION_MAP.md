@@ -99,6 +99,7 @@ list is drift.
 | [`architecture/CAPABILITY_MODEL.md`](architecture/CAPABILITY_MODEL.md) | CURRENT | Capability types, grant/derive/revoke rules, unforgeability argument. **The only normative home of the capability numbering** — `Serve=11, Model=12, Gpu=13, Admin=14` — and of the frozen six-verb admin set. `NORTH_STAR.md` deliberately carries no discriminants. |
 | [`architecture/IPC_SPEC.md`](architecture/IPC_SPEC.md) | CURRENT | Synchronous rendezvous IPC: message format, blocking semantics, proof obligations. |
 | [`architecture/MEMORY_MODEL.md`](architecture/MEMORY_MODEL.md) | CURRENT | Address-space layout, fixed-pool allocation, W^X enforcement, reserved weight/KV regions, page-size parametricity. |
+| [`architecture/AS-1a-first-light-boot-stub.md`](architecture/AS-1a-first-light-boot-stub.md) | CURRENT | Design for **AS-1a**, the first slice of AS-1: the smallest Apple Silicon payload that proves the delivery chain, exiting on the ROADMAP's own AS-1 criterion (banner over serial on the M2 Pro mini). Records four decisions with their costs — m1n1 chainload over direct `kmutil`, a standalone `src/boot-stub-apple/` crate rather than `arch/aarch64/`, no custom target spec, and the two-stage console that makes a fail-closed ADT parse reportable. Approved 2026-08-10, unbuilt. |
 
 ## Operations
 
