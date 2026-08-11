@@ -109,6 +109,7 @@ list is drift.
 | [`operations/ATTESTATION_MODEL.md`](operations/ATTESTATION_MODEL.md) | CURRENT | Measured boot and attestation — including exactly what is unavailable on Apple Silicon. |
 | [`operations/DEVICE_ISOLATION_POLICY.md`](operations/DEVICE_ISOLATION_POLICY.md) | CURRENT | DMA confinement policy across VT-d and DART. |
 | [`operations/RELEASE_AND_SIGNING_POLICY.md`](operations/RELEASE_AND_SIGNING_POLICY.md) | CURRENT | Reproducible build, Ed25519 signing, and per-platform payload delivery. |
+| [`operations/APPLE_SILICON_BRINGUP_RIG.md`](operations/APPLE_SILICON_BRINGUP_RIG.md) | CURRENT | Provisioning runbook for the Mac mini M2 Pro bring-up rig: 1TR `bputil` downgrade, debug UART, m1n1 install, and the acceptance test that gates all AS-1 hardware work. Physical presence required; **AS-1a's exit criterion is unreachable until this is done**. |
 
 ## Platform specs — the clean-room fact tables
 
