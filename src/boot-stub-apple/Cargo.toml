@@ -1,0 +1,37 @@
+[package]
+name = "brainix-boot-stub-apple"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "AS-1a first-light boot stub for Apple Silicon: bring up the s5l UART and print the invariant banner"
+publish = false
+
+# The library is `no_std` but builds and tests on the host, because every unit of
+# logic in it is written against the `Mmio` trait rather than against real
+# hardware. The binary is the only part that cannot run on a host, and it is
+# gated behind `bare-metal` so `cargo test` never attempts to build it.
+[lib]
+name = "brainix_boot_stub_apple"
+path = "src/lib.rs"
+
+[[bin]]
+name = "brainix-boot-stub-apple"
+path = "src/main.rs"
+required-features = ["bare-metal"]
+
+[features]
+default = []
+bare-metal = []
+
+[dependencies]
+brainix-adt = { path = "../adt" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = true
+
+[profile.dev]
+panic = "abort"

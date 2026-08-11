@@ -1,4 +1,12 @@
 [toolchain]
 channel = "nightly-2025-12-01"
 components = ["rust-src", "rustfmt", "clippy", "llvm-tools-preview"]
-targets = ["x86_64-unknown-none"]
+targets = [
+    # The frozen x86-64 reference build (ROADMAP #26).
+    "x86_64-unknown-none",
+    # AS-1a first-light boot stub, src/boot-stub-apple/. A built-in target: the
+    # ROADMAP AS-1 row and README previously said Apple Silicon "needs a custom
+    # in-tree aarch64 target spec", which is not true for a soft-float no_std
+    # payload. A custom spec is only needed once PAC-BTI or M2 CPU tuning is.
+    "aarch64-unknown-none-softfloat",
+]

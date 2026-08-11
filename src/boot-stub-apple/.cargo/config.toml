@@ -1,0 +1,13 @@
+# The repository root's `.cargo/config.toml` pins `build.target` to
+# `x86_64-unknown-none` for the frozen x86-64 reference. Cargo merges configs
+# from the crate directory upward, so without this file every command in this
+# crate — including `cargo test` — would target a bare-metal x86-64 machine.
+#
+# Pinning the host triple here makes `cargo test` work by default. The payload
+# is built by naming its target explicitly:
+#
+#   cargo build --target aarch64-unknown-none-softfloat --features bare-metal --release
+#
+# See docs/architecture/AS-1a-first-light-boot-stub.md §6.
+[build]
+target = "aarch64-apple-darwin"
