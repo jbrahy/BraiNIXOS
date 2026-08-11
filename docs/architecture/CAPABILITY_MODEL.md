@@ -34,13 +34,16 @@ Every capability has exactly one type. The type determines which kernel object t
 | **CapSpawn** | Authority to create new processes from a compile-time whitelist | Spawn a process of a permitted type with an explicit initial capability set. The whitelist is compiled into the holder. |
 | **CapAuditRead** | Authority to read (but not write) the kernel audit log | Read audit entries from the kernel ring buffer. No write authority. No authority to modify or delete entries. |
 
-#### Serving-era types *(planned — P2-T5)*
+#### Serving-era types *(P2-T5 — **IMPLEMENTED**)*
 
-*(Added 2026-08-02 with the serving pivot. The `CapabilityType` enum currently ends at `Frame = 10`;
-these extend it to `Serve=11, Model=12, Gpu=13, Admin=14`. **This document is the only normative home of
-those discriminants** — `NORTH_STAR.md` deliberately carries no numeric capability IDs. They are
-**specified but not yet implemented** — the change that adds them must extend the proofs in
-`src/capability-verify/` in the same commit, not afterward.)*
+*(Added 2026-08-02 with the serving pivot; implemented 2026-08-11. ~~The `CapabilityType` enum currently
+ends at `Frame = 10`~~ — it now carries `Serve=11, Model=12, Gpu=13, Admin=14`. **This document remains
+the only normative home of those discriminants** — `NORTH_STAR.md` deliberately carries no numeric
+capability IDs, so this table and `capability_type.rs` are the only pair that can disagree, and a proof
+now asserts they do not.*
+
+*The requirement that the change "must extend the proofs in `src/capability-verify/` in the same commit,
+not afterward" was met: five harnesses landed with the enum, all verifying.)*
 
 | Type | Discriminant | Purpose | Authorized Operations |
 |---|---|---|---|
@@ -75,7 +78,22 @@ target's *existing* manifest rather than composing a new capability set.
 The **break-glass admin pre-shared key authenticates over the serial transport and nowhere else** — the
 network listener refuses it outright — so a compromised admin session can neither revoke nor replace it.
 
-Four properties of these types are load-bearing and must survive implementation:
+Four properties of these types are load-bearing and must survive implementation. **Two are statements
+about the kernel's derivation machinery and are now proven** in `src/capability-verify/`; **two are
+obligations on `servd`, which does not exist yet (P2-T4), and are not claimed:**
+
+| Property | Status |
+|---|---|
+| 1. CapServe is per-session, not per-client-class | ⬜ `servd`'s obligation (P2-T4) — the kernel cannot enforce grant granularity |
+| 2. CapModel confers compute, not authority | ✅ `a_derived_model_capability_never_becomes_an_escalation_type` — no derivation turns it into `Spawn`, `CNode`, `Untyped`, or `Admin` |
+| 3. Neither is derivable into something broader | ✅ `derivation_never_changes_a_capabilitys_type`, over **every** type, plus the existing rights-monotonicity proof |
+| 4. CapAdmin is a separate grant, not a stronger CapServe | ✅ `no_derivation_path_leads_between_serve_and_admin`, symbolic over both directions |
+
+*Property 4's proof establishes that **the kernel offers no such path**. "A session's type is decided at
+accept and frozen there" is `servd`'s half and remains unproven until `servd` exists. The distinction is
+kept because claiming otherwise would be exactly the unfalsifiable assertion the north star forbids.*
+
+The properties in full:
 
 1. **CapServe is per-session, not per-client-class.** One capability, one session. A capability that
    covered "all sessions of this client" would reintroduce exactly the cross-naming path INV-SERVE exists
