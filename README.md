@@ -120,6 +120,7 @@ other, and none of it is reachable from a running system yet:**
 - ✅ **BSP v2 serving protocol** — [spec](docs/architecture/BSP-v2-serving-protocol.md) plus the fail-closed wire decoder ([`src/bsp/`](src/bsp/)): zero-alloc, bounded, 16 Kani proofs, an 89-input fuzz corpus.
 - ✅ **Transport cryptography** ([`src/transport-crypto/`](src/transport-crypto/)) — PSK handshake FSM, HKDF-SHA256 key schedule, ChaCha20-Poly1305 record layer, HKDF ratchet; 10 Kani proofs, two fuzz corpora.
 - ✅ **Inference engine components** — BXW1 weight [format](docs/architecture/BXW1-weight-format.md) and fail-closed decoder ([`src/bxw1/`](src/bxw1/)), tensor kernels ([`src/tensor/`](src/tensor/): matmul with Q8 dequant, RMSNorm, softmax, RoPE, SiLU/SwiGLU), in-tree BPE tokenizer ([`src/tokenizer/`](src/tokenizer/)), and the transformer forward pass with KV cache and sampling ([`src/transformer/`](src/transformer/)).
+- ✅ **AS-1a first-light boot stub** ([`src/boot-stub-apple/`](src/boot-stub-apple/)) — the first Apple Silicon payload: entry assembly, s5l UART transmit, ADT-derived UART discovery, banner. Links for `aarch64-unknown-none-softfloat` into a single-segment, relocation-free raw image. **Complete to the hardware gate** — see [its design](docs/architecture/AS-1a-first-light-boot-stub.md) and [the UART fact table](docs/platform-specs/apple-s5l-uart.md). **It has never run**: that needs the bring-up rig.
 
 **Specified, not built — this is the gap between "components" and "a system":**
 - 📐 `servd` (session manager), `inferd` (confined model tenant), `modeld` (one-shot weight loader), and `tools/bsp-client/`. **None of these directories exists.**
@@ -129,7 +130,7 @@ other, and none of it is reachable from a running system yet:**
 - ⛔ Multi-arch HAL ([`HAL.md`](docs/architecture/HAL.md), SUPERSEDED) — one platform needs no abstraction layer over one backend. Its proof obligations moved to the aarch64 MMU and the DART backend.
 
 **Not started:**
-- ⬜ **The entire Apple Silicon platform from the boot stub on** — boot stub, AIC, DART, RTKit/ANS2, PCIe, Ethernet, AGX GPU. There is not one aarch64 source file in the kernel tree. The ADT parser above is the only Apple work that has landed, and it was the only piece testable without the hardware rig.
+- ⬜ **The Apple Silicon platform from AS-1b on** — EL2→EL1, MMU, exception vectors, timer, SVC entry, PAC-BTI, then AIC, DART, RTKit/ANS2, PCIe, Ethernet, AGX GPU. There is still not one aarch64 source file in the *kernel* tree.
 - ⬜ Userspace FP/SIMD enablement; the adversarial-prompt confinement suite; fuzz execution in CI (the targets are committed but **CI never runs them** — only the Kani proofs run).
 
 Proof coverage is **62.5%** (5 of 8 invariants, 40 Kani proofs, 11 fuzz targets); INV-AUDIT, INV-GPU, and
@@ -143,8 +144,11 @@ current figure.
 
 - A nightly Rust toolchain (pinned in [`rust-toolchain.toml`](rust-toolchain.toml)) with the
   `rust-src`, `rustfmt`, `clippy`, and `llvm-tools-preview` components.
-- Bare-metal target `x86_64-unknown-none` today — that is the **frozen reference** build, kept green. The
-  Apple Silicon boot stub needs a custom in-tree aarch64 target spec, which lands with it.
+- Bare-metal targets `x86_64-unknown-none` (the **frozen reference** build, kept green) and
+  `aarch64-unknown-none-softfloat` (the AS-1a boot stub). Both are **built-in** rustc targets and are
+  pinned in [`rust-toolchain.toml`](rust-toolchain.toml). ~~The Apple Silicon boot stub needs a custom
+  in-tree aarch64 target spec~~ — it does not; a custom spec is needed only once PAC-BTI or M2-specific
+  CPU tuning is.
 - For Apple Silicon bring-up (not yet started): a Mac mini M2 Pro in Permissive Security, a debug UART cable,
   and a macOS stub install that must remain on disk. Provisioning requires physical presence.
 - For the live boot: Docker (the dev container ships QEMU, GRUB, `xorriso`, and `swtpm`).
@@ -187,6 +191,7 @@ src/tokenizer/         in-tree BPE tokenizer + vocab parser
 src/tensor/            no_std tensor kernels
 src/transformer/       forward pass, KV cache, decode loop, sampling
 src/*-verify/          Kani proof harnesses (capability, adt, bsp, transport-crypto, bootloader)
+src/boot-stub-apple/   AS-1a first-light payload (aarch64, outside the workspace)
 
 fuzz/                  libFuzzer targets + seeded corpora
 tools/proof-coverage/  invariant-to-proof coverage tracker

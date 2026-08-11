@@ -1,8 +1,12 @@
 # AS-1a — First Light: the Apple Silicon boot stub prints
 
-**Status:** design, approved 2026-08-10
+**Status:** **implemented to the hardware gate** (`e90ea1e`, 2026-08-10). Design approved 2026-08-10.
 **Phase:** AS-1, first slice
 **Machine:** Mac mini M2 Pro (`Mac14,12`, SoC `T6020`)
+
+> **What changed during implementation.** Three assumptions in the design below were found wrong before
+> they shipped, and two refinements were adopted. All five are recorded in §9 rather than edited silently
+> into the body, so the design and what was built can be compared.
 
 ---
 
@@ -195,7 +199,67 @@ Physical work, John's, parallel to all implementation above:
 
 Step 4 is the gate. Do not chainload BraiNIX before m1n1's own console works.
 
-## 8. Definition of done
+## 9. What implementation changed
+
+### 9.1 Corrections — assumptions that were wrong
+
+**C-1. The ADT `compatible` is `uart-1,samsung`, not `apple,s5l-uart`.** §4.1 above planned to match the
+Linux FDT binding name. The AS-0 fact table's §8.6 already recorded, from direct hardware observation,
+that the **ADT** uses a different namespace. Matching the Linux name would have found nothing on every
+real machine, and the failure would have presented as a broken ADT parser rather than a wrong constant.
+`tests/discover.rs` now asserts that the Linux name is **rejected**.
+
+**C-2. `translated_reg` returning a value is not evidence that translation happened.**
+`NodePath::translated_reg` documents that the *absence* of `ranges` on an ancestor **terminates**
+translation rather than failing it — "it does not mean identity and it does not mean error" — so it
+returns the raw address successfully. That is right in general, because a missing `ranges` marks an
+address-space boundary. It is wrong for `/arm-io`, whose children's `reg` values point nowhere
+untranslated (§8.5, §8.6). Discovery accepted `0x79200000` and would have handed it to MMIO. A test drove
+this out; `DiscoverError::TranslationUnavailable` closes it.
+
+**C-3. No custom aarch64 target spec is needed.** §3.3 predicted this and implementation confirmed it:
+`aarch64-unknown-none-softfloat` is built in and links the payload correctly. A custom spec waits for
+PAC-BTI.
+
+### 9.2 Refinements — better than what was designed
+
+**R-1. ADT first, fallback constant second** — inverting §3.4's stage ordering. The constant is the value
+that could *not* be confirmed for the target, while the ADT base comes from AS-0's Kani-proven,
+fail-closed parser. So the payload emits a one-byte-cheap **liveness marker** on the fallback, then
+resolves through the ADT and sends everything else to the ADT base. The fallback is used for real output
+only to report that ADT resolution failed. Silence now requires **two independent failures** instead of
+one. Disagreement still prints both values and prefers neither.
+
+**R-2. Position-independent entry.** §4.2's linker base was an unconfirmed input. `_start` uses only
+PC-relative addressing, so the link base does not have to be right for the payload to reach first output.
+Verified: **zero absolute relocations** in the linked image, `adr` throughout the disassembly. This
+removes the largest unknown from the critical path entirely.
+
+**R-3. Bounded transmit polling.** The `UTRSTAT` ready bit is unconfirmed (fact table OQ-1). The driver
+polls a bounded number of times and then transmits **anyway**, reporting which happened. A wrong mask
+therefore degrades to possibly-garbled output — which identifies the fault — instead of a silent hang,
+which identifies nothing. On a machine with no debugger this is the difference between a diagnosable
+first run and an opaque one.
+
+### 9.3 As-built results
+
+| Check | Result |
+|---|---|
+| Host tests | **32 pass** — 9 uart, 14 discover, 9 console |
+| Target | `aarch64-unknown-none-softfloat`, built in |
+| Image | 7,715-byte raw binary |
+| Loadable segments | exactly 1 (`PHDRS` used; lld defaults to 3, split by permission) |
+| Entry | `0x0`, and `_start` is the first byte |
+| Dynamic loader | none — no `PT_DYNAMIC`, no `PT_INTERP` |
+| Absolute relocations | **0** |
+
+**Environment note.** Homebrew's `cargo` shadows rustup's on the development workstation and ignores
+`rust-toolchain.toml`, so `bin/as-boot.sh` invokes the pinned toolchain by absolute path. Cargo also
+discovers `.cargo/config.toml` from the **working directory**, not from `--manifest-path`, so the script
+`cd`s into the crate rather than passing a manifest path — otherwise the repo root's
+`build.target = "x86_64-unknown-none"` captures the host test build.
+
+## 10. Definition of done
 
 - The banner appears on a serial terminal attached to the M2 Pro mini, loaded via m1n1.
 - Stage 2 reports agreement between the ADT-derived UART base and the bootstrap constant.
