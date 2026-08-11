@@ -1,6 +1,19 @@
-# SSH_AUTH_POLICY.md
+> # 📋 UNSCHEDULED — governs a subsystem scheduled for deletion
+>
+> **Reviewed 2026-08-02.** This policy governs the inbound SSH server, which **is scheduled for deletion**
+> at task P2-T6 and replaced by the capability-gated BSP serving path.
+>
+> `boot/ssh_bridge.rs` holds `static mut` session state on a single-core cooperative path — exactly what
+> the threat model forbids at scale, and currently the weakest point in the tree. Per
+> [`../../PROJECT_RULES.md`](../../PROJECT_RULES.md) Rule 24.6 it **must not be extended, hardened in
+> place, or built upon**.
+>
+> Current inbound design: [`../architecture/BSP-v2-serving-protocol.md`](../architecture/BSP-v2-serving-protocol.md).
+> Status: [`../ROADMAP.md`](../ROADMAP.md).
 
-# BraiNIX SSH Authentication Policy
+---
+
+# BraiNIX SSH Authentication Policy *(unscheduled — subsystem pending deletion)*
 ## Minimal, High-Assurance Remote Access Policy
 
 Version: 1.0  

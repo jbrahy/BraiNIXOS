@@ -89,9 +89,15 @@ iso/boot/shell.elf
 
 # Nested cargo target dirs (fuzz/, etc.) — top-level /target/ already ignored
 fuzz/target/
+# Excluded-from-workspace crates build into their own target dirs.
+src/boot-stub-apple/target/
+tools/*/target/
 
 # the build toolchain session data
 .assistant/
+
+# code-review-graph local index
+.code-review-graph/
 
 # GSD internal state
 .planning/.next-call-count

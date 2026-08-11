@@ -34,6 +34,80 @@ Every capability has exactly one type. The type determines which kernel object t
 | **CapSpawn** | Authority to create new processes from a compile-time whitelist | Spawn a process of a permitted type with an explicit initial capability set. The whitelist is compiled into the holder. |
 | **CapAuditRead** | Authority to read (but not write) the kernel audit log | Read audit entries from the kernel ring buffer. No write authority. No authority to modify or delete entries. |
 
+#### Serving-era types *(P2-T5 — **IMPLEMENTED**)*
+
+*(Added 2026-08-02 with the serving pivot; implemented 2026-08-11. ~~The `CapabilityType` enum currently
+ends at `Frame = 10`~~ — it now carries `Serve=11, Model=12, Gpu=13, Admin=14`. **This document remains
+the only normative home of those discriminants** — `NORTH_STAR.md` deliberately carries no numeric
+capability IDs, so this table and `capability_type.rs` are the only pair that can disagree, and a proof
+now asserts they do not.*
+
+*The requirement that the change "must extend the proofs in `src/capability-verify/` in the same commit,
+not afterward" was met: five harnesses landed with the enum, all verifying.)*
+
+| Type | Discriminant | Purpose | Authorized Operations |
+|---|---|---|---|
+| **CapServe** | `11` | Authority over **one client session** on the serving path | Read and write that session's request/response stream; reference that session's KV partition. **Cannot name any other session** — this is the structural basis of `INV-SERVE-001`. Granted per-connection by `servd`, frozen at grant, revoked at teardown. |
+| **CapModel** | `12` | Authority to invoke the served model within a session | Submit a confined inference request against the read-only weights view and the caller's own KV slice. Confers **no** authority to spawn, mutate the kernel, reach the network, or read another session (`INV-MODEL-001`). |
+| **CapGpu** | `13` | Authority over an accelerator's bounded MMIO and DMA windows | **In scope on the primary platform (AS-5).** Access device registers within the granted window; submit command buffers. **Cannot widen its own DMA window** (`INV-DEV-006`) — this is the control that makes running Apple's opaque, DMA-capable GPU firmware survivable, and it must be proven before that firmware is ever loaded. |
+| **CapAdmin** | `14` | Authority over **one admin session** on the same serving transport | Invoke the six frozen administrative verbs below, and nothing else. Granted per-connection by `servd`, decided at accept and frozen there. **Not derivable from `CapServe`, and `CapServe` is not derivable from it** — the two session types are distinguished by capability and by nothing else. |
+
+#### The admin verb set — frozen at six
+
+Administration is a second session *type* on the single authenticated, capability-gated transport, not a
+shell (owner decision 2026-08-02; `NORTH_STAR.md` §*Non-goals*). The verbs are compile-time enumerated and
+the set is closed:
+
+| Verb | What it may do |
+|---|---|
+| `enroll-key` | Add a client or admin pre-shared key to the credential store. Refuses the break-glass handle unconditionally. |
+| `revoke-key` | Remove one. Refuses the break-glass handle unconditionally. |
+| `load-weights` | Activate a weight blob by **measured digest** — never a path and never a byte stream. |
+| `read-audit-log` | Bounded, read-only cursor over the serving log. Reading grants no authority. |
+| `restart-server` | Relaunch an **enumerated** server identity with its existing frozen manifest. Mints nothing. |
+| `reboot` | Tear down the admin session, then reboot. |
+
+**There is no `rotate` verb.** Rotation is `enroll-key` followed by `revoke-key` — two attributable
+operations against the credential store, not one primitive that does both.
+
+**No verb may add, remove, or widen a capability.** A verb that could would be a derivation path outside
+the rights-monotonicity rule of §5, which is the same thing as ambient authority with a nicer name. The
+handler table therefore contains exactly six entries, and `restart-server` relaunches against the
+target's *existing* manifest rather than composing a new capability set.
+
+The **break-glass admin pre-shared key authenticates over the serial transport and nowhere else** — the
+network listener refuses it outright — so a compromised admin session can neither revoke nor replace it.
+
+Four properties of these types are load-bearing and must survive implementation. **Two are statements
+about the kernel's derivation machinery and are now proven** in `src/capability-verify/`; **two are
+obligations on `servd`, which does not exist yet (P2-T4), and are not claimed:**
+
+| Property | Status |
+|---|---|
+| 1. CapServe is per-session, not per-client-class | ⬜ `servd`'s obligation (P2-T4) — the kernel cannot enforce grant granularity |
+| 2. CapModel confers compute, not authority | ✅ `a_derived_model_capability_never_becomes_an_escalation_type` — no derivation turns it into `Spawn`, `CNode`, `Untyped`, or `Admin` |
+| 3. Neither is derivable into something broader | ✅ `derivation_never_changes_a_capabilitys_type`, over **every** type, plus the existing rights-monotonicity proof |
+| 4. CapAdmin is a separate grant, not a stronger CapServe | ✅ `no_derivation_path_leads_between_serve_and_admin`, symbolic over both directions |
+
+*Property 4's proof establishes that **the kernel offers no such path**. "A session's type is decided at
+accept and frozen there" is `servd`'s half and remains unproven until `servd` exists. The distinction is
+kept because claiming otherwise would be exactly the unfalsifiable assertion the north star forbids.*
+
+The properties in full:
+
+1. **CapServe is per-session, not per-client-class.** One capability, one session. A capability that
+   covered "all sessions of this client" would reintroduce exactly the cross-naming path INV-SERVE exists
+   to eliminate.
+2. **CapModel confers compute, not authority.** The served model is a confined tenant. It receives all
+   available compute and reserved memory and **zero** authority — that asymmetry is the entire INV-MODEL
+   design, and it is what makes prompt injection a bounded problem rather than an escalation path.
+3. **Neither is derivable into something broader.** Rights monotonicity (§5) applies with no exception:
+   there is no derivation from CapServe or CapModel that yields authority over another session.
+4. **CapAdmin is a separate grant, not a stronger CapServe.** There is no derivation path from CapServe
+   to CapAdmin, and none the other way. A session's type is decided at accept and frozen there; nothing
+   promotes one into the other. This is what makes "one transport, two capability grants" hold rather
+   than merely be asserted.
+
 ### Type Safety
 
 Capability types are represented as a Rust enum. The type tag is checked on every capability invocation. Attempting to invoke a CapMemory as if it were a CapEndpoint returns `CapabilityError::TypeMismatch`. There is no raw integer type field that could be confused or reinterpreted.

@@ -8,6 +8,60 @@ This is an authoritative specification. If code or configuration diverges from t
 
 ---
 
+## 0. Delivery and what survives
+
+*(Added 2026-08-02 with the Apple-primary platform decision; restated 2026-08-03 when x86-64 was dropped
+and Apple Silicon became the only platform.)*
+
+**Our signing policy is unchanged.** Reproducible build and Ed25519 release signing are
+properties of the **artifact**, not the platform, and they hold on Apple Silicon exactly as written below.
+What changed is everything the *machine's* boot chain contributed: there is no TPM, so **no PCR is
+predicted, published, or matched, and there is no monotonic counter**.
+
+| | ~~x86-64~~ *(dropped 2026-08-03; frozen reference only)* | Apple Silicon (**the only platform**) |
+|---|---|---|
+| Artifact | ~~GRUB2 ISO / kernel image~~ | **Image4 (IMG4) payload** |
+| Delivery | ~~Standard boot media~~ | `kmutil configure-boot -c <payload> -v <volume>` |
+| Our signature | ~~Ed25519, HSM-held key~~ | Ed25519, HSM-held key (§§1–4) — **unchanged** |
+| Reproducible build | ~~✅~~ | ✅ (§8) **unchanged** |
+| Platform boot verification | ~~UEFI Secure Boot~~ | **iBoot2 vs. Secure-Enclave-held device-local policy** |
+| Predicted PCRs published | ~~✅ before ship~~ | ❌ **nothing to predict, and no step that would publish one** |
+| Monotonic-counter rollback protection (§7) | ~~✅ TPM NV counter~~ | ❌ **no TPM counter available** |
+
+### Delivery flow
+
+1. The target volume is downgraded to **Permissive Security** with `bputil` from One True Recovery.
+   Requires local admin credentials and **physical presence**, once per machine.
+2. `kmutil configure-boot` installs the payload, wrapping it as an Image4 object under the machine's
+   **device-local** policy. The Secure Enclave holds the signing key for that policy.
+3. iBoot2 verifies the payload's digest against that local policy at **every** boot.
+
+**Two things this is not.** It is not our trust root — it is Apple's, and the key is per-machine, not our
+release key. And it is not attestation — it protects the payload at rest and proves nothing to any remote
+party. Release notes must describe it precisely and must not let it stand in for measured boot.
+
+### Rollback protection without a monotonic counter
+
+§7's TPM NV monotonic counter has no equivalent on the platform, and with x86-64 dropped there is no
+platform on which §7 applies at all. Rollback to a previously valid, signed
+BraiNIX payload therefore **cannot be prevented** by the mechanism this document
+specifies. Apple's local policy will happily boot any payload we validly installed.
+
+What remains: revoking a compromised release's signature and re-provisioning affected machines — an
+operational control requiring physical or administrative access to each unit, not a structural one. Treat
+this as a permanent limitation and state it in release notes rather than implying §7
+coverage. Tracked with the boot-posture consequences in [`ATTESTATION_MODEL.md`](ATTESTATION_MODEL.md) §0.
+
+### Release-note requirement
+
+Every release note must state plainly that the build provides **no remote attestation, no
+sealing, and no hardware-anchored measurement**, and that the credential store is **plaintext at rest**
+(`INV-BOOT-AS-001`, `PROJECT_RULES.md` Rule 13.0 and Rule 4.5 — no marketing claims beyond proof scope).
+~~…and that deployments requiring either must fall back to x86-64.~~ — **deleted 2026-08-03 with the
+platform.** A release note must not offer an alternative target, because there is none.
+
+---
+
 ## 1. Signing Algorithm
 
 BraiNIX uses **Ed25519** exclusively for all binary signing operations.
@@ -97,21 +151,33 @@ This upholds INV-BOOT-003 (dev and prod cryptographic material remain separate).
 
 The binary signing process follows these steps in order. Each step must complete successfully before the next begins.
 
+> **Target note (2026-08-03).** The commands in Steps 1 and 2 name `x86_64-unknown-none`. That is the
+> **frozen reference** build target — the only bare-metal target that exists today — and it is shown here
+> because it is the working command, **not because x86-64 is a release platform.** It is not: x86-64 was
+> dropped on 2026-08-03 (§0), and no artifact built from it is shipped, signed for deployment, or
+> delivered to any machine. **The release artifact is the Image4 payload for Apple Silicon** (§0), built
+> against the in-tree aarch64 target spec that lands with the boot stub at AS-1. Steps 3–8 below are
+> target-independent — they operate on a hash, not on a triple — and apply unchanged to that artifact.
+> These two commands are replaced, not supplemented, when the aarch64 target exists.
+
 ### Step 1: Reproducible Build
 
 Build the kernel binary using the pinned toolchain and vendored dependencies:
 
 ```
+# Frozen reference target — see the target note above. The release artifact is the
+# Apple Silicon Image4 payload; this command is replaced when the aarch64 target lands (AS-1).
 cargo build --release --offline --target x86_64-unknown-none
 ```
 
-The build is reproducible: identical source, toolchain, and dependencies produce an identical binary hash. The build environment is a deterministic Docker container with pinned base image.
+The build is reproducible: identical source, toolchain, and dependencies produce an identical binary hash. The build environment is a deterministic Docker container with pinned base image. **Reproducibility is a property of the artifact and carries to the aarch64 build unchanged** (§0).
 
 ### Step 2: Hash Binary
 
 Compute the SHA-256 hash of the output binary:
 
 ```
+# Frozen reference path — see the target note above.
 sha256sum target/x86_64-unknown-none/release/brainix-kernel > brainix-kernel.sha256
 ```
 
@@ -297,5 +363,73 @@ Development key compromise does not affect production security (keys are structu
 
 ---
 
-*Last updated: 2026-04-11*
+## 11. The weights artifact — a second signed artifact
+
+*(Added 2026-08-03 by owner decision, resolving open question 1 of
+[`../architecture/BXW1-weight-format.md`](../architecture/BXW1-weight-format.md). **Specification only.**
+No weight blob has ever been signed, no weights-signing key exists, and no code verifies such a signature.
+The BXW1 loader that would perform the check does not exist either — see that document's §11.)*
+
+BraiNIX is to ship **two independently signed artifacts**, not one:
+
+| | Release artifact | Weights artifact |
+|---|---|---|
+| What it is | The Image4 payload — kernel and servers (§0) | One BXW1 weight blob (`BXW1-weight-format.md` §3) |
+| What is signed | SHA-256 of the binary (§5 Step 3) | The 32-byte whole-blob SHA-256 |
+| Signature form | Ed25519, detached sidecar `.sig` (§5 Step 4) | Ed25519, detached sidecar beside the blob on storage |
+| Signing key | Production key in the HSM (§§2–4) | A **distinct** production Ed25519 key in the HSM, under the same multi-party authorization and audit-log requirements |
+| Verified by | The release verification of §8, and at boot by iBoot2 against the machine's device-local policy (§0) | `modeld`, at load time, before the weights region is sealed and before `inferd` exists (`BXW1-weight-format.md` §9.2, stage S8, rule C9) |
+| Reproducible | ✅ (§8) | ❌ — a model checkpoint is not a build output; what is reproducible is the conversion from a named checkpoint to a BXW1 blob |
+
+### Why the weights are not folded into the release signature
+
+The rejected alternative was to embed the expected weight digest in the signed payload at build time,
+putting the weights under the release signature transitively. **It was rejected because it makes the
+published kernel image model-specific**: one image per model, and swapping models becomes a rebuild and a
+re-signature of the kernel. That directly weakens INV-BOOT's **reproducible-build clause** — a third party
+rebuilding the published payload bit-for-bit — which is the one clause of INV-BOOT that still holds in
+full on the only supported platform ([`../NORTH_STAR.md`](../NORTH_STAR.md), *INV-BOOT is the Apple boot
+posture*; §0 above). Remote attestation, sealing, and runtime-chain measurement are already permanently
+gone. Spending the last undegraded clause to obtain coverage that a second signature provides directly is
+not a trade worth making.
+
+**The kernel image therefore stays reproducible and model-independent.** The same signed payload serves
+any model whose blob verifies. Nothing about which model is loaded appears in, or changes, the release
+artifact.
+
+### The two signatures are independent
+
+They cover different bytes, are produced under different keys, and are verified at different times by
+different components. **Compromise of one does not imply compromise of the other**, and neither may be
+described as covering the other:
+
+- A forged **weights** signature yields a wrong model running on a genuine, verified kernel. The
+  confinement of `INV-MODEL-001` still holds; what is lost is any assurance about *which* model answers.
+- A forged **release** signature yields a compromised kernel, which can then ignore weight verification
+  entirely. This is the strictly worse case, and it is why the weights key being separate does not reduce
+  the release key's importance.
+
+Key rotation (§9), retirement, and the emergency procedures of §10 apply to the weights key with one
+difference stated plainly: **§7's monotonic counter does not apply to the weights artifact**, and there
+is no platform on which it applies to anything (§0). A revoked weights key invalidates nothing already on
+disk; recovering from a compromised weights key means re-signing the blobs that should still be served and
+re-provisioning the machines that hold the others, exactly as §0's rollback discussion describes for the
+payload.
+
+### Verification path
+
+The weights signature is verified by the **same verify-only Ed25519 stack** the release signature uses —
+`ed25519-dalek`, `curve25519-dalek`, `fiat-crypto`, `subtle`, permanently vendored under the named crypto
+exception in [`../NORTH_STAR.md`](../NORTH_STAR.md). **No new dependency, no new primitive, and no signing
+capability enters the tree**: nothing in BraiNIX signs a weight blob, exactly as nothing in BraiNIX signs a
+release. Both signatures are produced outside the machine, by the HSM flow of §5.
+
+A blob whose signature is absent, malformed, or fails to verify is **denied**, with the uniform fail-closed
+action of `BXW1-weight-format.md` §7.1. There is no unsigned-weights mode, no override flag, and no
+development bypass beyond the `DEV_BUILD` key-set separation of §§3 and 6, which applies to the weights key
+set exactly as it applies to the release key set.
+
+---
+
+*Last updated: 2026-08-03*
 *This document is the authoritative specification for BraiNIX release signing.*

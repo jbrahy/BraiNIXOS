@@ -8,6 +8,66 @@ This is an authoritative specification. If code or configuration diverges from t
 
 ---
 
+## 0. Platform scope — read this first
+
+**BraiNIX has no attestation model. Everything below §0 describes a platform that was dropped.**
+
+As of the owner decision of 2026-08-02 the **primary** platform was Apple Silicon (Mac mini M2 Pro,
+`T6020`); as of **2026-08-03 it is the only platform** — x86-64 was dropped, and the x86-64 code remains in
+tree solely as a frozen reference implementation nothing is deployed from. On the platform BraiNIX
+actually runs on **there is no attestation model at all**. This is not an unimplemented feature. It is
+structural: Apple Silicon has no TPM, none can be added (no LPC/SPI header, and a USB TPM is not a root of
+trust), and the Secure Enclave exposes no PCR-style extend/quote/seal interface to third-party software.
+
+**§§1–8 below are retained as a historical record of the measured-boot design and of what P2-T9's swtpm
+work implemented on the frozen reference.** Nothing in them is a supported capability, a roadmap item, or
+a claim BraiNIX may make. There is no successor document, because there is nothing to succeed them with.
+
+| Capability | ~~x86-64~~ *(dropped 2026-08-03; frozen reference only)* | Apple Silicon (**the only platform**) |
+|---|---|---|
+| PCR measurement (§1, §2) | ~~✅~~ | ❌ structurally unavailable |
+| TPM quote (§3) | ~~✅~~ | ❌ structurally unavailable |
+| Attestation gate (§4) | ~~✅~~ | ❌ nothing to gate on |
+| Rollback protection via monotonic counter (§7) | ~~✅~~ | ❌ no TPM counter |
+| Sealing secrets to boot state | ~~✅~~ | ❌ structurally unavailable — the credential store is plaintext at rest |
+| Reproducible build | ✅ | ✅ unchanged |
+| Ed25519 release signature | ✅ | ✅ unchanged |
+| Payload integrity at rest | ~~✅ UEFI Secure Boot~~ | ✅ iBoot2 vs. device-local SEP policy — *Apple's* root, not ours |
+
+### What the platform has instead
+
+**iBoot2 verifies the Image4-wrapped payload against a Secure-Enclave-held, device-local policy at every
+boot.** A tampered on-disk payload does not boot. This is real, hardware-rooted tamper-resistance **for
+the payload at rest** — and it must not be described as attestation. The root is Apple's, the key is
+device-local, and it proves nothing to any remote party.
+
+**A software-only measurement log.** The kernel may hash what it loads and record the log. It is
+**self-reported**: a kernel compromised early can produce any log it likes. Permitted uses are operational
+debugging and accidental-corruption detection. It may **not** be exported as an attestation, presented as
+evidence against an attacker, or called a measurement (`INV-BOOT-AS-002`).
+
+### What is permanently lost
+
+- **Remote attestation.** A client cannot distinguish a genuine BraiNIX boot from a compromised one.
+- **Sealing.** No secrets bound to boot state; data at rest is protected only by runtime behavior.
+- **Runtime-chain measurement.** Detection of a divergent boot chain — the exact property this document's
+  §7 and §8 exist to provide — is gone.
+
+### The rule this creates
+
+**No BraiNIX component, protocol field, log line, release note, or document may assert attestation,
+sealing, or hardware-anchored measurement** (`INV-BOOT-AS-001`, `PROJECT_RULES.md` Rule
+13.0). In particular, the BSP serving protocol must not define an attestation field the platform
+cannot populate honestly — an unfillable field invites a dishonest filling.
+
+~~**Deployments requiring attestation must run on the x86-64 target.**~~ — **deleted 2026-08-03 with the platform.**
+There is nowhere to send such a deployment: **BraiNIX cannot prove its boot state to a remote party, and
+never will.** Recorded in [`../NORTH_STAR.md`](../NORTH_STAR.md) as the boot posture — formerly the signed
+exception INV-BOOT/AS, now the rule; consequences in
+[`../THREAT_MODEL.md`](../THREAT_MODEL.md) and [`PLATFORM_SUPPORT_MATRIX.md`](PLATFORM_SUPPORT_MATRIX.md).
+
+---
+
 ## 1. PCR Layout
 
 BraiNIX uses four TPM 2.0 Platform Configuration Registers (PCRs) to record the measurement chain from firmware to userspace servers. Each PCR is a SHA-256 digest (32 bytes) that is extended (not overwritten) with each new measurement.
@@ -68,7 +128,7 @@ A remote attester reading PCR[5]:
 - **All-zero:** no userspace-ELF-load failure occurred during this boot.
 - **Non-zero:** the system attempted boot and a load failure occurred. The exact tuple cannot be recovered from the PCR alone; the attester correlates the value against a precomputed table of `(ProcessType, ElfLoadError, module_hash)` failure records to identify the specific cause.
 
-Claimed by the spec at `docs/superpowers/specs/2026-05-31-userspace-elf-loading-design.md` (Phase 16-A) and implemented in `src/kernel/src/process/elf_load_failure.rs`.
+Claimed by the spec at `docs/superpowers/specs/2026-05-31-userspace-elf-loading-design.md` (Phase 16-A) — **local only**, that path is git-excluded and is not in a fresh clone — and implemented in `src/kernel/src/process/elf_load_failure.rs`.
 
 ---
 

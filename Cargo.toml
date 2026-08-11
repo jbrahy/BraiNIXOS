@@ -1,5 +1,15 @@
 [workspace]
 members = [
+    "src/adt",
+    "src/adt-verify",
+    "src/bsp",
+    "src/bsp-verify",
+    "src/transport-crypto",
+    "src/transport-crypto-verify",
+    "src/bxw1",
+    "src/tensor",
+    "src/transformer",
+    "src/tokenizer",
     "src/kernel",
     "src/bootloader",
     "src/bootloader-verify",
@@ -10,12 +20,19 @@ members = [
 ]
 exclude = [
     "tools/proof-coverage",
+    "tools/bxw1-convert",
+    "tools/bxw1-run",
+    # AS-1a first-light boot stub. Excluded rather than a member because it
+    # builds for aarch64 while this workspace's default target is the frozen
+    # x86-64 reference, and nothing here may put that build at risk (#26).
+    # See docs/architecture/AS-1a-first-light-boot-stub.md §3.2.
+    "src/boot-stub-apple",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "AGPL-3.0-only"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

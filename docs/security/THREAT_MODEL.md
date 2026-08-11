@@ -1,4 +1,26 @@
-# BraiNIX Threat Model
+> # ⛔ SUPERSEDED — do not use as guidance
+>
+> **Superseded by [`../THREAT_MODEL.md`](../THREAT_MODEL.md) on 2026-08-02.**
+>
+> This file was written 2026-04-14, when BraiNIX was an internal-only hardened microkernel with an
+> outbound-only network posture, x86-64 as its sole target, and a TPM-rooted measured boot. All three
+> premises are now false:
+>
+> - BraiNIX **serves LLM inference to remote network clients** (pivot, 2026-07-07). Inbound is now the
+>   largest attack surface; this document does not model it.
+> - The **primary platform is Apple Silicon** (owner decision, 2026-08-02). This document does not
+>   contain the TCB-AS entries (SecureROM, iBoot1, iBoot2, sepOS) that platform forces into the trusted
+>   set, and does not model firmware-supplied data as hostile input.
+> - **Remote attestation is unavailable on the primary platform** (INV-BOOT/AS). This document assumes
+>   a TPM that platform does not have.
+>
+> It is retained unedited as the historical record of the pre-pivot threat model. Its asset inventory,
+> attacker classes, and mitigation catalogue may still be useful background, but **where it disagrees
+> with `../THREAT_MODEL.md`, it is wrong.** See [`../DOCUMENTATION_MAP.md`](../DOCUMENTATION_MAP.md).
+
+---
+
+# BraiNIX Threat Model *(historical — superseded)*
 
 ## Purpose
 

@@ -9,8 +9,14 @@ The memory model is designed around three core principles:
 1. **Every page has exactly one type at any time.** There is no ambiguous ownership, no shared-state page, and no page that exists in two categories simultaneously.
 2. **The kernel is not mapped in user page tables.** Kernel Page Table Isolation (KPTI) ensures that userspace cannot address kernel memory, even speculatively.
 3. **No page is simultaneously writable and executable.** W^X is enforced globally with no exceptions.
+4. **Page size is a platform parameter, never a constant.** *(Added 2026-08-02; restated 2026-08-03.)* Apple Silicon — the only platform — uses **16 KiB** base pages; the frozen x86-64 reference uses 4 KiB. Every size, alignment, and bound in this document is expressed in **pages**, and any byte-valued constant derives from the platform's page-size constant. See §12.
 
-These three properties -- typed ownership, KPTI, and W^X -- form the foundation of BraiNIX's memory security. They are structural guarantees, not optional hardening flags.
+These four properties -- typed ownership, KPTI, W^X, and page-size parametricity -- form the foundation of BraiNIX's memory security. They are structural guarantees, not optional hardening flags.
+
+> **Reconciled 2026-08-02, restated 2026-08-03.** Sections 12 and 13 were added for the Apple-primary
+> platform decision and the serving pivot. Byte-valued constants elsewhere in this document (`4096`, "one
+> page") are **illustrations from the frozen x86-64 reference**, not portable values and not the platform's
+> page size — read them as "one page" and see §12.
 
 ---
 
@@ -409,7 +415,92 @@ The total kernel memory footprint is fixed at boot. The kernel cannot allocate m
 
 ---
 
-## 12. Security Invariants
+## 12. Page Size Parametricity
+
+*(Added 2026-08-02 with the Apple-primary platform decision; restated 2026-08-03 for a single platform.
+Enforces `INV-MEM-009`.)*
+
+### The page size, and the one left to compare against
+
+| Platform | Base page | Role |
+|---|---|---|
+| Apple Silicon (`T6020`) | **16 KiB** | **The platform** — the serving deployment, and the only one |
+| ~~x86-64~~ | 4 KiB | **Frozen reference, not a platform** — kept building, and now the only place a 4 KiB assumption is still exercised |
+| ~~QEMU `virt` aarch64~~ | ~~4 KiB~~ | ~~Bring-up harness~~ — **cancelled 2026-08-03 with Phase 4** |
+
+**The trap inverted; it did not go away.** It used to be that aarch64 code could pass at 4 KiB in QEMU and
+be wrong at 16 KiB on the machine. Now there is no aarch64 harness at all, so a hardcoded **16 KiB** is the
+likelier defect and **nothing in the aarch64 build disagrees with it.** The frozen x86-64 reference is the
+only remaining automatic cross-check, and it only catches assumptions that reach shared code. Review is the
+primary control.
+
+### Rules
+
+1. **No bare page-size literal outside `arch/`.** Page size is exposed once, from the aarch64 MMU module
+   (~~`hal/mmu.rs`~~ — the HAL is cancelled). A `4096` **or a `16384`** in architecture-neutral memory code
+   is a defect, enforced by grep-gate; the second literal now matters as much as the first.
+2. **Sizes and bounds are expressed in pages.** Pool capacities, region sizes, and stack sizes are page
+   counts multiplied by that constant — never byte constants that happen to be page multiples.
+3. **Alignment derives from that constant.** Region base addresses, guard-page placement, and
+   direct-map offsets align to the platform page size, not to a hardcoded boundary.
+4. **W^X granularity follows page size.** A 16 KiB granule makes permission boundaries coarser. Code and
+   data that must differ in permissions must be separated at **16 KiB** granularity, or the separation
+   silently fails on the machine.
+
+### Why this is a security rule, not a portability rule
+
+A hardcoded 4 KiB does not produce a clean failure on a 16 KiB platform. It produces **misaligned reserved
+regions** (weights and KV partitions overlapping their intended bounds), **misplaced guard pages** (a
+guard that no longer sits between the stack and its neighbor), and **coarser-than-intended W^X boundaries**
+(a page carrying both code and writable data because the split was computed at the wrong granularity).
+Each of those is an isolation failure wearing the costume of an arithmetic bug.
+
+---
+
+## 13. Reserved Regions: Weights and KV Cache
+
+*(Added 2026-08-02 with the serving pivot. Enforces `INV-MEM` and `INV-SERVE-001`, `INV-SERVE-004`.)*
+
+The served model needs a large amount of memory. The north-star's answer is explicit: **"give all
+resources to the LLM" is satisfied by large fixed reserved regions, never by adding an allocator.** The no
+-dynamic-kernel-heap rule (§11) is not relaxed for the inference engine — it is the reason the inference
+engine gets regions instead of a heap.
+
+### WEIGHTS_REGION
+
+- Sized at **build time**, in pages, from the model the image is built to serve.
+- Populated once by the BXW1 loader, which streams and digests as it writes.
+- **Sealed read-only after load.** After sealing there is no code path that can make a weights page
+  writable again. This is the "weights-never-writable-post-seal" Kani obligation.
+- Never executable. Weights are data; W^X applies with no exception.
+
+### KV_REGION
+
+- Partitioned into **per-session slices**, disjoint by construction rather than by bookkeeping.
+- A session's slice is reachable only through that session's capability. No client can name another
+  client's slice — the isolation is structural, not checked at access time (`INV-SERVE-001`).
+- **Zeroized on session teardown**, before the partition can be reused (`INV-SERVE-004`, §6). Residue
+  visible to the next occupant would be a cross-tenant leak that never technically violated the naming
+  rule.
+- Fixed partition count. Session admission fails closed when partitions are exhausted; it never grows the
+  region.
+
+### The availability trade, stated
+
+Fixed regions convert a client-driven **memory-exhaustion** attack into **capacity exhaustion**. That is
+the correct security trade — a denied connection is better than a corrupted allocator — but it is a real
+availability cost, and it is why per-client admission limits in `servd` are a security control rather than
+tuning (`INV-SERVE-003`).
+
+### Non-overlap
+
+`WEIGHTS_REGION`, each `KV_REGION` partition, kernel pools, and the direct map must be provably
+non-overlapping. This is a Kani obligation (P3-T2), and it is the obligation most sensitive to §12: the
+proof must hold at both page sizes.
+
+---
+
+## 14. Security Invariants
 
 The memory model must uphold the following invariants from `docs/security/SECURITY_INVARIANTS.md`:
 

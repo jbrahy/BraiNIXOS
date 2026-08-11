@@ -153,7 +153,11 @@ fn extract_invariants(repo_root: &Path) -> Vec<Invariant> {
                 // Parse invariants from the section
                 for j in (i+1)..std::cmp::min(i+50, lines.len()) {
                     let line = lines[j].trim();
-                    if line.starts_with("- INV-") {
+                    // NORTH_STAR.md emboldens the identifier: "- **INV-MEM**: ...".
+                    // Matching only the unemboldened form silently found nothing,
+                    // which reported every invariant as absent rather than as
+                    // uncovered.
+                    if line.starts_with("- INV-") || line.starts_with("- **INV-") {
                         if let Some((id, desc)) = parse_invariant_line(line) {
                             invariants.push(Invariant { id, description: desc });
                         }
@@ -173,7 +177,15 @@ fn extract_invariants(repo_root: &Path) -> Vec<Invariant> {
 fn parse_invariant_line(line: &str) -> Option<(String, String)> {
     let line = line.trim_start_matches("- ");
     if let Some(colon_pos) = line.find(':') {
-        let id = line[..colon_pos].trim().to_string();
+        // The identifier is the leading INV-… token; NORTH_STAR.md wraps it in
+        // bold markers and may append a parenthetical, neither of which is part
+        // of the name.
+        let id: String = line[..colon_pos]
+            .trim()
+            .trim_start_matches('*')
+            .chars()
+            .take_while(|character| character.is_ascii_alphanumeric() || *character == '-')
+            .collect();
         let description = line[colon_pos+1..].trim().to_string();
         return Some((id, description));
     }
@@ -235,6 +247,48 @@ fn map_proofs_to_invariants(
 fn infer_invariant_from_proof(proof_name: &str) -> Option<String> {
     let lower = proof_name.to_lowercase();
 
+    // Hostile-input parser proofs. SECURITY_INVARIANTS.md §15's INV-PARSE-001..004
+    // roll up under INV-SERVE, so an ADT proof lands there — except the bounds
+    // and allocation proofs, which are what INV-MEM asserts about every parser.
+    if lower.contains("adt") || lower.contains("device_tree") {
+        if lower.contains("buffer") || lower.contains("bounds") || lower.contains("allocation") {
+            return Some("INV-MEM".to_string());
+        }
+        return Some("INV-SERVE".to_string());
+    }
+
+    // The two BSP v2 network-facing crates: the wire decoder (brainix-bsp) and
+    // the key schedule plus record layer (brainix-transport-crypto). Both are
+    // hostile-input parsers, so §15's INV-PARSE-001..004 roll up under INV-SERVE
+    // per the mapping table at SECURITY_INVARIANTS.md line 33. Two families of
+    // proof belong elsewhere and are routed before that default:
+    //
+    //   - buffer, bound, overflow and zeroization proofs are what INV-MEM
+    //     asserts about every parser and about every secret;
+    //   - the capability grant of §7.2 and the enumerated authority bytes of
+    //     row A1 are INV-AUTH-009's, not INV-SERVE's.
+    //
+    // No new identifier is introduced: all three are existing NORTH_STAR
+    // headline invariants.
+    if lower.starts_with("bsp_") || lower.starts_with("transport_crypto_") {
+        if lower.contains("buffer")
+            || lower.contains("bounds")
+            || lower.contains("overflow")
+            || lower.contains("stream")
+            || lower.contains("zeroiz")
+            || lower.contains("erases")
+        {
+            return Some("INV-MEM".to_string());
+        }
+        if lower.contains("authority")
+            || lower.contains("capability")
+            || lower.contains("illegal_state")
+        {
+            return Some("INV-AUTH".to_string());
+        }
+        return Some("INV-SERVE".to_string());
+    }
+
     if lower.contains("rights") || lower.contains("authority") || lower.contains("revocation") || lower.contains("capability") || lower.contains("derivation") {
         Some("INV-AUTH".to_string())
     } else if lower.contains("memory") || lower.contains("out_of_bounds") || lower.contains("cslot") || lower.contains("budget") {
@@ -248,6 +302,20 @@ fn infer_invariant_from_proof(proof_name: &str) -> Option<String> {
 
 fn infer_invariant_from_fuzz_target(target_name: &str) -> Option<String> {
     let lower = target_name.to_lowercase();
+
+    // Check the ADT first: its target name mentions firmware device trees, and
+    // §15's INV-PARSE-001..004 roll up under INV-SERVE.
+    if lower.contains("adt") || lower.contains("device_tree") {
+        return Some("INV-SERVE".to_string());
+    }
+
+    // The BSP v2 network-facing targets, named before the generic rules below
+    // so the mapping is deliberate rather than an accident of substring order:
+    // "transport" would otherwise catch the two transport-crypto targets by way
+    // of the transportd rule, which is a different component.
+    if lower.contains("bsp_decoder") || lower.contains("transport_crypto") {
+        return Some("INV-SERVE".to_string());
+    }
 
     // Check for IPC first, since "ipc_boundary" should map to IPC not Memory
     if lower.contains("ipc_boundary") {
@@ -264,6 +332,20 @@ fn infer_invariant_from_fuzz_target(target_name: &str) -> Option<String> {
         Some("INV-SERVE".to_string())
     } else {
         None
+    }
+}
+
+/// Labels a proof by the crate that holds it, not by its file name alone.
+///
+/// Every verify crate names its harness file `lib.rs`, so the bare file name
+/// cannot tell `capability-verify` from `adt-verify` and a reader cannot see
+/// which component a proof belongs to.
+fn component_label(path: &str) -> String {
+    let parts: Vec<&str> = path.split('/').collect();
+    let file = parts.last().copied().unwrap_or(path);
+    match parts.len().checked_sub(3).and_then(|at| parts.get(at)) {
+        Some(crate_dir) => format!("{}/{}", crate_dir, file),
+        None => file.to_string(),
     }
 }
 
@@ -284,7 +366,7 @@ fn print_report(
     println!("- **Covered Invariants**: {} / {}", covered_invariants, total_invariants);
     println!("- **Coverage Percentage**: {:.1}%", coverage_percentage);
     println!("- **Target (80% bar)**: Need {} more invariants covered\n",
-             std::cmp::max(0, ((total_invariants as f64 * 0.8) as usize) - covered_invariants));
+             ((total_invariants as f64 * 0.8) as usize).saturating_sub(covered_invariants));
 
     println!("- **Kani Proofs**: {}", kani_proofs.len());
     println!("- **Fuzz Targets**: {}\n", fuzz_targets.len());
@@ -304,7 +386,7 @@ fn print_report(
         if !proofs.is_empty() {
             println!("  **Kani Proofs** ({}):", proofs.len());
             for proof in proofs {
-                println!("    - `{}` ({})", proof.name, proof.file.split('/').last().unwrap_or(&proof.file));
+                println!("    - `{}` ({})", proof.name, component_label(&proof.file));
             }
         }
 
@@ -325,7 +407,7 @@ fn print_report(
 
     println!("### Kani Proofs ({})\n", kani_proofs.len());
     for proof in kani_proofs {
-        println!("- `{}` ({})", proof.name, proof.file.split('/').last().unwrap_or(&proof.file));
+        println!("- `{}` ({})", proof.name, component_label(&proof.file));
     }
     println!();
 

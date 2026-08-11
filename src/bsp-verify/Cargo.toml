@@ -1,0 +1,12 @@
+[package]
+name = "brainix-bsp-verify"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Kani proof harnesses for the BSP v2 wire decoder (P2-T3)"
+
+[dependencies]
+brainix-bsp = { path = "../bsp" }
+
+[lints]
+workspace = true

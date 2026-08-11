@@ -1,6 +1,11 @@
-# FILESYSTEM_HARDENING.md
+> # 📋 UNSCHEDULED — accurate design, not on the roadmap
+>
+> **Reviewed 2026-08-02.** An addendum to [`FILESYSTEM_PLAN.md`](FILESYSTEM_PLAN.md), which is itself
+> unscheduled. Nothing is being built against either. See [`ROADMAP.md`](ROADMAP.md).
 
-# Brainix Filesystem Hardening Addendum
+---
+
+# Brainix Filesystem Hardening Addendum *(unscheduled)*
 
 ## Purpose
 This document strengthens the existing filesystem plan by adding mandatory security controls, clarifications, and protections identified during red-team review.

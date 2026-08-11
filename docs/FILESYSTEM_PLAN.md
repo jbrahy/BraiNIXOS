@@ -1,6 +1,20 @@
-# FILESYSTEM_PLAN.md
+> # 📋 UNSCHEDULED — accurate design, not on the roadmap
+>
+> **Reviewed 2026-08-02; re-checked 2026-08-03.** Nothing is being built against this. It is not scheduled
+> in [`ROADMAP.md`](ROADMAP.md). Its subtitle still says "x86-64 Operating System"; **x86-64 was dropped as
+> a platform on 2026-08-03**, which is one more reason nothing here is scheduled. The body is left
+> as-written, per the rule that unscheduled and historical documents are corrected by banner, not rewrite.
+>
+> The serving product needs **weight loading**, not a general filesystem: the BXW1 loader (P3-T3) reads a
+> single measured blob, and on the primary platform storage arrives via RTKit + ANS2 NVMe (AS-4a). A
+> general filesystem is a much larger TCB surface than that requires, and adding one would need explicit
+> justification under the "trusted set only shrinks" rule.
+>
+> Companion: [`FILESYSTEM_HARDENING.md`](FILESYSTEM_HARDENING.md), likewise unscheduled.
 
-# BraiNIX Filesystem Plan
+---
+
+# BraiNIX Filesystem Plan *(unscheduled)*
 ## Minimal Secure Storage Layout for an Ultra-Secure x86-64 Operating System
 
 Version: 1.0  

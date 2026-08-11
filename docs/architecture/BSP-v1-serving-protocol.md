@@ -1,3 +1,23 @@
+> # ⛔ SUPERSEDED — do not use as guidance
+>
+> **Superseded by [`BSP-v2-serving-protocol.md`](BSP-v2-serving-protocol.md) on 2026-08-02.**
+>
+> Owner decision 7 of 2026-08-02 removed asymmetric cryptography from the serving transport
+> entirely. The §5 handshake below — Ed25519 identities over an ephemeral X25519 exchange, with a
+> compile-time `CLIENT_ALLOWLIST` — is obsolete on both counts: the transport is now pre-shared-key
+> only (HKDF-SHA256 derivation, ChaCha20-Poly1305 records, mutual authentication by proof of PSK
+> possession), and no credential may be compiled into a build artifact.
+>
+> What survived into v2, unchanged: the `chacha20-poly1305@openssh.com` record layer, the implicit
+> per-direction sequence nonces, the fixed-pool sizing discipline, the message grammar, and the
+> fail-closed rejection table.
+>
+> Retained unedited as a historical record — including three stale `THREAT_MODEL.md` dominant-threat
+> **rank** citations (§0, §9), which v2 replaces with citations by name. See
+> [`../DOCUMENTATION_MAP.md`](../DOCUMENTATION_MAP.md).
+
+---
+
 # BSP v1 — BraiNIX Serving Protocol (authenticated inbound wire protocol)
 
 **Task:** P2-T1 (design only — no implementation, no git).

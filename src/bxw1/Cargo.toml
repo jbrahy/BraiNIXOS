@@ -1,0 +1,23 @@
+[package]
+name = "brainix-bxw1"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Fail-closed, zero-allocation BXW1 model-weight loader (P3-T3)"
+
+[dependencies]
+# The in-tree SHA-256 path. Same crate, same version, and the same
+# `force-soft` feature the kernel's hardware_security modules already build
+# against (src/kernel/Cargo.toml) -- this adds no new dependency to the tree
+# and no new vendored source. BXW1 §0 records that the in-tree
+# reimplementation has not landed and that `sha2` is still vendored.
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+
+[dev-dependencies]
+# The fixtures compute the digests a blob declares, and the seam test hands a
+# validated Q8_0 payload to the kernel that consumes it (P3-T4).
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+brainix-tensor = { path = "../tensor" }
+
+[lints]
+workspace = true

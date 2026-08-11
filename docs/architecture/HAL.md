@@ -1,12 +1,70 @@
+> # ⛔ SUPERSEDED — do not use as guidance
+>
+> **The HAL is cancelled. Owner decision 2 of 2026-08-03; see [`../ROADMAP.md`](../ROADMAP.md)
+> decisions #20–#21.**
+>
+> x86-64 was dropped as a platform on 2026-08-03, leaving one architecture. An eleven-trait
+> abstraction layer with a single backend is an abstraction over nothing: it buys no portability,
+> and it costs a layer of indirection through the most security-critical code in the tree. **Phase 1
+> (P1-T2..T7, P1-A) is cancelled**, struck through in place in `ROADMAP.md` rather than deleted.
+>
+> The obligations this document defined did not go away — they moved home. The W^X and page-table
+> proof obligation attaches to the **aarch64 MMU** directly; the `INV-DEV-006` no-widening proof
+> attaches to the **DART backend's own IOMMU trait** (AS-3). Both remain **Full tier** in
+> [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) §16. The TCB-AS/GPU
+> preconditions in `NORTH_STAR.md`, `THREAT_MODEL.md`, and `ROADMAP.md` named "the HAL IOMMU trait"
+> when they were signed on 2026-08-02; **they now name that DART trait directly**, each with a dated
+> history note, because they are signed pass/fail acceptance criteria for AS-5-T0 and a signed
+> criterion should not be edited silently. The obligation is unchanged in scope.
+>
+> **No code is removed by this cancellation.** `src/kernel/src/arch/**` stays in tree and stays
+> building as the frozen reference implementation the aarch64 port is written against
+> (`ROADMAP.md` decision #26).
+>
+> Retained unedited as a historical record: the trait decomposition below is still the clearest
+> written account of what each platform concern actually requires, and it was written to be
+> Apple-capable. Read it as analysis, not as a plan. See
+> [`../DOCUMENTATION_MAP.md`](../DOCUMENTATION_MAP.md).
+
+---
+
 # BraiNIX Hardware Abstraction Layer (HAL)
 
-Status: design (P1-T1). Implementation-ready specification for Phase-1 subagents. No
-code is refactored by this document; it defines the trait boundary that x86-64 backends
-will be coded against first, then aarch64 servers, then Apple Silicon.
+Status: design (P1-T1, landed `670e072`). Implementation-ready specification. No code is
+refactored by this document; it defines the trait boundary that the x86-64 backend is
+coded against first — because it is the existing working code and the reference the
+traits are proven against — and that the **aarch64 / Apple Silicon backend then
+implements as the primary platform**.
 
-Governing documents: `docs/NORTH_STAR.md`, `docs/THREAT_MODEL.md`,
+Governing documents: `docs/NORTH_STAR.md`, `docs/THREAT_MODEL.md`, `docs/ROADMAP.md`,
 `docs/architecture/MEMORY_MODEL.md`. Where this document and a governing document
 disagree, the governing document wins and this document is the bug.
+
+> **Reconciled 2026-08-02 — platform priority inverted.** This document was written when
+> Apple Silicon was deferred and aarch64 *servers* (Graviton/Ampere) were the second
+> target. The owner has since made **Apple Silicon the primary platform** (Mac mini M2 Pro,
+> `Mac14,12`, `T6020`). The trait design below is unchanged and remains correct — it was
+> written to be Apple-capable — but three framing points now read differently:
+>
+> 1. **"Later" no longer means "optional."** Every place below that describes Apple
+>    Silicon as a future third backend describes the **shipping** platform. AIC and DART
+>    are not exotic future cases used to sanity-check the traits; they are the interrupt
+>    controller and IOMMU the product runs on.
+> 2. **GICv3 and SMMUv3 are descoped.** Generic aarch64 server platforms are no longer a
+>    product goal. GICv3 survives only as a QEMU `virt` bring-up harness (P4-T3); SMMUv3
+>    is dropped. Where this document treats them as first-class targets, read them as
+>    harness-only.
+> 3. **The traits must bend toward AIC and DART, not away from them.** Any place the
+>    trait surface fits APIC and VT-d comfortably but forces AIC or DART into an
+>    awkward shape, the trait is wrong. Specifically: AIC's single packed event word
+>    (no ack/EOI pair), its **FIQ timer path outside the controller entirely**, its
+>    implementation-defined IPI registers, and DART's **many small per-device instances**
+>    rather than one translation unit. See `INV-ARM-005` and `INV-DEV-004..006` in
+>    `docs/security/SECURITY_INVARIANTS.md`.
+>
+> One addition with no analogue here: **page size is a HAL parameter.** Apple Silicon
+> uses 16 KiB base pages against x86-64's 4 KiB, and `hal/mmu.rs` is the single place it
+> is exposed. See `MEMORY_MODEL.md` §12 and `INV-MEM-009`.
 
 ---
 

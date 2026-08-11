@@ -24,6 +24,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-adt"
+version = "0.1.0"
+
+[[package]]
+name = "brainix-adt-verify"
+version = "0.1.0"
+dependencies = [
+ "brainix-adt",
+]
+
+[[package]]
 name = "brainix-auditd"
 version = "0.1.0"
 dependencies = [
@@ -42,6 +53,25 @@ name = "brainix-bootloader-verify"
 version = "0.1.0"
 dependencies = [
  "multiboot2",
+]
+
+[[package]]
+name = "brainix-bsp"
+version = "0.1.0"
+
+[[package]]
+name = "brainix-bsp-verify"
+version = "0.1.0"
+dependencies = [
+ "brainix-bsp",
+]
+
+[[package]]
+name = "brainix-bxw1"
+version = "0.1.0"
+dependencies = [
+ "brainix-tensor",
+ "sha2",
 ]
 
 [[package]]
@@ -116,6 +146,39 @@ name = "brainix-spawnd"
 version = "0.1.0"
 dependencies = [
  "brainix-libsyscall",
+]
+
+[[package]]
+name = "brainix-tensor"
+version = "0.1.0"
+
+[[package]]
+name = "brainix-tokenizer"
+version = "0.1.0"
+
+[[package]]
+name = "brainix-transformer"
+version = "0.1.0"
+dependencies = [
+ "brainix-tensor",
+]
+
+[[package]]
+name = "brainix-transport-crypto"
+version = "0.1.0"
+dependencies = [
+ "brainix-bsp",
+ "chacha20",
+ "sha2",
+ "subtle",
+]
+
+[[package]]
+name = "brainix-transport-crypto-verify"
+version = "0.1.0"
+dependencies = [
+ "brainix-bsp",
+ "brainix-transport-crypto",
 ]
 
 [[package]]

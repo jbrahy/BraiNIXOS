@@ -240,7 +240,19 @@ Timeout processing is deterministic with respect to the scheduler tick. The kern
 
 ---
 
-## 8. SYSCALL/SYSRET ABI
+## 8. Syscall ABI
+
+The IPC **semantics** in this document are architecture-neutral. Only the entry mechanism and register
+layout differ per platform, and that difference is confined to the architecture's syscall entry code.
+
+> **Reconciled 2026-08-02; restated 2026-08-03.** §8.1 below is the x86-64 ABI as implemented — that is
+> now the **frozen reference implementation**, not a supported platform, and it is retained because it is
+> the working code the aarch64 entry path is written against. §8.2 states the obligations the aarch64
+> entry path must meet on **the platform**. The register layout there is **not yet specified** — it is
+> defined when the code is written, not guessed here. *(The HAL is cancelled, so `hal/syscall.rs` does not
+> exist; the aarch64 obligations attach to AS-1's SVC entry path, which absorbed P4-T4.)*
+
+### 8.1 x86-64: SYSCALL/SYSRET *(frozen reference, not scheduled)*
 
 BraiNIX uses the x86-64 `SYSCALL`/`SYSRET` instruction pair for fast-path kernel entry and exit. This section defines the register layout for IPC syscalls.
 
@@ -288,6 +300,35 @@ When the kernel returns to userspace via `SYSRET`:
 - The kernel must sanitize all registers not used for return values before executing `SYSRET` to prevent information leakage between processes.
 - `SYSRET` has known errata on some Intel processors when returning to non-canonical addresses. The kernel must validate the return RIP before executing `SYSRET` and fall back to `IRETQ` if validation fails.
 - The kernel entry point must immediately switch to the kernel stack before reading any argument registers, to prevent stack-based attacks from userspace.
+
+---
+
+### 8.2 aarch64 / Apple Silicon: SVC *(obligations — implemented at AS-1)*
+
+The platform enters the kernel via the `SVC` instruction from EL0 to EL1, dispatched through the
+exception vector table. The register layout is defined when the code is implemented (AS-1); this section
+states what that implementation must satisfy so the obligations are reviewable before the code exists.
+**This matters more than it did:** with the QEMU `virt` harness cancelled on 2026-08-03, this text is the
+only review artifact standing between the obligations and their first run on hardware.
+
+1. **Identical semantics.** Everything in §§1–7 and §§9–11 — rendezvous blocking, capability transfer
+   atomicity, reply-capability lifecycle, timeout behavior, deadlock prevention — is unchanged. A
+   correctly written server must not be able to tell which platform it is running on.
+2. **The full register set is saved on the slow path.** aarch64 has more general-purpose registers than
+   x86-64 and a separate FP/NEON state. Anything not saved is either leaked to the next thread or lost.
+   The FP state matters specifically because `inferd` uses it (P3-T0) — an incomplete save is both a
+   correctness bug and a cross-process leak.
+3. **No register leaks across the boundary.** Registers not used to return values are zeroed or restored
+   before returning to EL0. The existing x86-64 "Security Considerations" rules below apply verbatim.
+4. **Message registers are chosen for the fast path.** The registers-only fast path (§3) must remain
+   register-only; a layout that forces a memory round-trip defeats the design.
+5. **Exception-vector entry is not a trusted path.** The vector table is established by the boot stub
+   before anything else runs (`INV-ARM-001`), and vector entry validates the syscall number before any
+   dispatch.
+6. **Timer interrupts arrive as FIQ, outside the interrupt controller.** This interacts with §7 (timeout
+   policy) and §10 (deadlock breaking): the timeout mechanism depends on a timer path that on Apple
+   Silicon does not flow through the AIC at all (`INV-ARM-005`). The backend must demonstrate that
+   timeouts still fire under load.
 
 ---
 

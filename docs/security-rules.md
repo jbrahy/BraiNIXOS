@@ -1,4 +1,17 @@
-## Foundational rules
+> # ⛔ SUPERSEDED — do not use as guidance
+>
+> **Superseded by [`security/SECURITY_INVARIANTS.md`](security/SECURITY_INVARIANTS.md) and
+> [`NORTH_STAR.md`](NORTH_STAR.md) on 2026-08-02.**
+>
+> Written 2026-04-11 — the oldest security document in the tree. Its foundational principles survive
+> (they were folded into the north-star's first principles), but it predates the named-invariant scheme
+> entirely, and invariants are now stated in exactly one place: `NORTH_STAR.md`.
+>
+> Retained unedited as a historical record. See [`DOCUMENTATION_MAP.md`](DOCUMENTATION_MAP.md).
+
+---
+
+## Foundational rules *(historical — superseded)*
 
 1. **Security must be structural, not probabilistic.** No core security guarantee may depend on obscurity, address secrecy, or an attacker not knowing the design. Defense-in-depth mitigations are allowed, but the system must remain secure even when the architecture is fully known.
 

@@ -14,12 +14,35 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+brainix-adt = { path = "../src/adt" }
+brainix-bsp = { path = "../src/bsp" }
+brainix-transport-crypto = { path = "../src/transport-crypto" }
 brainix-bootloader-verify = { path = "../src/bootloader-verify" }
 brainix-kernel = { path = "../src/kernel" }
 brainix-devd-nic = { path = "../src/servers/devd-nic" }
 brainix-linkd = { path = "../src/servers/linkd" }
 brainix-ipd = { path = "../src/servers/ipd" }
 brainix-transportd = { path = "../src/servers/transportd" }
+
+[[bin]]
+name = "fuzz_adt_parser_with_adversarial_firmware_device_trees"
+path = "fuzz_targets/fuzz_adt_parser_with_adversarial_firmware_device_trees.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_bsp_decoder_with_adversarial_wire_messages"
+path = "fuzz_targets/fuzz_bsp_decoder_with_adversarial_wire_messages.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_transport_crypto_record_open_with_adversarial_ciphertext"
+path = "fuzz_targets/fuzz_transport_crypto_record_open_with_adversarial_ciphertext.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_transport_crypto_handshake_with_adversarial_messages"
+path = "fuzz_targets/fuzz_transport_crypto_handshake_with_adversarial_messages.rs"
+doc = false
 
 [[bin]]
 name = "fuzz_bootloader_multiboot2_info_struct_parsing"

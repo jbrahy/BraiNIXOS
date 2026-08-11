@@ -1,0 +1,32 @@
+[package]
+name = "brainix-transport-crypto"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "BSP v2 PSK key schedule, HKDF ratchet, and ChaCha20-Poly1305 record protection (P2-T2)"
+
+[dependencies]
+# Structure only: this crate consumes the P2-T3 decoder rather than re-parsing
+# the wire. `brainix-bsp` holds no key material and has no dependencies.
+brainix-bsp = { path = "../bsp" }
+
+# The three vendored primitives P2-T2 is permitted to consume, at the versions
+# already in `vendor/`. No new dependency enters the tree here.
+#
+# `sha2` and `chacha20` are named in `docs/NORTH_STAR.md` as future in-tree
+# work; they are vendored today and this crate does not reimplement them.
+# HMAC-SHA256, HKDF-SHA256, and Poly1305 are **not** vendored and are in-tree
+# here (`hmac.rs`, `hkdf.rs`, `poly1305.rs`) -- see the crate docs.
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+chacha20 = { version = "0.9", default-features = false }
+subtle = { version = "2.6", default-features = false }
+
+[dev-dependencies]
+# The RFC 8439 AEAD known-answer test composes the 96-bit-nonce ChaCha20 with
+# this crate's Poly1305, so the vendored cipher is checked against the RFC
+# rather than only against itself.
+chacha20 = { version = "0.9", default-features = false }
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+
+[lints]
+workspace = true
