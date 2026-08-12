@@ -151,40 +151,48 @@ jobs:
     name: Kani Verification
     runs-on: ubuntu-latest
     steps:
+      # Kani is installed BEFORE checkout, deliberately.
+      #
+      # This repository's .cargo/config.toml sets
+      #   [source.crates-io] replace-with = "vendored-sources"
+      # and cargo honours that from the working directory. So installing Kani
+      # from inside the checkout fails with:
+      #   "crates-io is replaced with non-remote-registry source dir .../vendor"
+      # which is what model-checking/kani-github-action@v1 was doing on every
+      # one of its five invocations, and why it then reported "The version of
+      # Kani installed was different than the one requested".
+      #
+      # Running the install in a directory with no cargo config sidesteps it,
+      # and installs Kani exactly once rather than five times. Verification
+      # itself runs fine inside the checkout with the vendored config in place
+      # -- only the install is affected.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Kani (outside the checkout, see comment above)
+        run: |
+          cargo install --locked kani-verifier
+          cargo kani setup
+
       - uses: actions/checkout@v4
-      - uses: model-checking/kani-github-action@v1
-        with:
-          working-directory: .
-          args: --package brainix-capability-verify
+
+      - name: Kani — capability model, including the serving-era types (P2-T5)
+        run: cargo kani --package brainix-capability-verify
       - name: Kani — Apple Device Tree decoder (AS-0-T3)
-        uses: model-checking/kani-github-action@v1
-        with:
-          working-directory: .
-          args: --package brainix-adt-verify
+        run: cargo kani --package brainix-adt-verify
       # The no-allocation harness installs a global allocator, so it runs on its
       # own. See src/adt-verify/src/lib.rs for why it is feature-gated.
       - name: Kani — ADT decoder performs no allocation
-        uses: model-checking/kani-github-action@v1
-        with:
-          working-directory: .
-          args: >-
-            --package brainix-adt-verify
-            --features deny-allocation
-            --harness adt_decoder_performs_no_allocation
+        run: >-
+          cargo kani --package brainix-adt-verify
+          --features deny-allocation
+          --harness adt_decoder_performs_no_allocation
       # The two network-facing crates: the BSP v2 wire decoder and the PSK key
       # schedule plus AEAD record layer. Both are Full tier under
       # SECURITY_INVARIANTS.md §16 and are the outermost attack surface in the
       # system.
       - name: Kani — BSP v2 wire decoder (P2-T3)
-        uses: model-checking/kani-github-action@v1
-        with:
-          working-directory: .
-          args: --package brainix-bsp-verify
+        run: cargo kani --package brainix-bsp-verify
       - name: Kani — BSP v2 transport cryptography (P2-T2)
-        uses: model-checking/kani-github-action@v1
-        with:
-          working-directory: .
-          args: --package brainix-transport-crypto-verify
+        run: cargo kani --package brainix-transport-crypto-verify
 
   # ---------------------------------------------------------------------------
   # 5a. Formal verification — Prusti on brainix-ipc-core shim crate (D-07, D-08)
@@ -316,6 +324,15 @@ jobs:
     name: Security Scan
     runs-on: ubuntu-latest
     permissions:
+      # `contents: read` is REQUIRED here and its absence is why this job failed
+      # with "fatal: repository 'https://github.com/jbrahy/BraiNIX/' not found".
+      #
+      # Declaring a `permissions:` block REPLACES the default permission set
+      # rather than adding to it. Listing only `security-events: write` therefore
+      # dropped `contents: read`, leaving GITHUB_TOKEN unable to clone a private
+      # repository -- and this repository is private. The error reads like the
+      # repo is missing; it actually means the token could not see it.
+      contents: read
       security-events: write
     steps:
       - uses: actions/checkout@v4
