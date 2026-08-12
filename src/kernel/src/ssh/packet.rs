@@ -76,7 +76,11 @@ pub fn parse_packet(input: &[u8]) -> Option<ParsedPacket> {
     }
     let payload_start = 5;
     let payload_end = 4 + packet_length - padding_length;
-    Some(ParsedPacket { payload_start, payload_end, total_length })
+    Some(ParsedPacket {
+        payload_start,
+        payload_end,
+        total_length,
+    })
 }
 
 #[cfg(test)]

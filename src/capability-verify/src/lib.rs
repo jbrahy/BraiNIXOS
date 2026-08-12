@@ -415,5 +415,4 @@ mod hardware_security_proofs {
         // Prove: after Phase A seeding, key material is not all zeros
         kani::assume(true); // Stub -- replaced in Plan 01
     }
-
 }

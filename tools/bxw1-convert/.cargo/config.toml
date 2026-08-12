@@ -1,0 +1,4 @@
+# Override the workspace's bare-metal target with native compilation. This is a
+# host tool; it never runs in the kernel.
+[build]
+target = "aarch64-apple-darwin"

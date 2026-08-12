@@ -102,7 +102,11 @@ pub unsafe fn map_trampoline_into_user_page_table(user_page_map_level_4: &mut Pa
     let code_base = trampoline_code_virtual_base();
     map_kernel_page_into_user(user_page_map_level_4, code_base, code_flags);
     map_kernel_page_into_user(user_page_map_level_4, code_base + 0x1000, code_flags);
-    map_kernel_page_into_user(user_page_map_level_4, scratch_page_virtual_base(), scratch_flags);
+    map_kernel_page_into_user(
+        user_page_map_level_4,
+        scratch_page_virtual_base(),
+        scratch_flags,
+    );
 }
 
 unsafe fn map_kernel_page_into_user(
@@ -111,7 +115,12 @@ unsafe fn map_kernel_page_into_user(
     flags: PageTableFlags,
 ) {
     let physical_address = compute_physical_address_of_bss_page(virtual_address);
-    let _ = map_single_page_in_root(user_page_map_level_4, virtual_address, physical_address, flags);
+    let _ = map_single_page_in_root(
+        user_page_map_level_4,
+        virtual_address,
+        physical_address,
+        flags,
+    );
 }
 
 extern "C" {

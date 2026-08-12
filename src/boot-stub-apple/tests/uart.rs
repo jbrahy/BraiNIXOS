@@ -6,7 +6,9 @@
 
 mod common;
 
-use brainix_boot_stub_apple::registers::{TX_POLL_LIMIT, TX_READY_MASK, UTRSTAT_OFFSET, UTXH_OFFSET};
+use brainix_boot_stub_apple::registers::{
+    TX_POLL_LIMIT, TX_READY_MASK, UTRSTAT_OFFSET, UTXH_OFFSET,
+};
 use brainix_boot_stub_apple::uart::{TransmitOutcome, Uart};
 use common::{Access, FakeMmio};
 

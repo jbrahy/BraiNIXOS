@@ -103,8 +103,9 @@ pub fn bring_up<F: MmioFactory>(factory: &mut F, adt_blob: &[u8]) -> Outcome {
                 // what keeps the fallback from being mistaken for a fact.
                 authoritative.write_str("     note: fallback constant differs: ");
                 authoritative.write_hex_u64(UART_BASE_FALLBACK);
-                authoritative
-                    .write_str("\r\n     the adt value above is authoritative (t6030 constant)\r\n");
+                authoritative.write_str(
+                    "\r\n     the adt value above is authoritative (t6030 constant)\r\n",
+                );
                 Outcome::Disagreed {
                     adt_base: base,
                     fallback_base: UART_BASE_FALLBACK,
@@ -130,7 +131,9 @@ pub fn describe(error: DiscoverError) -> &'static str {
         DiscoverError::NoUartNode => "neither /arm-io/uart6 nor /arm-io/uart0 resolved",
         DiscoverError::CompatibleMissing => "selected node has no compatible property",
         DiscoverError::CompatibleMismatch => "selected node is not uart-1,samsung",
-        DiscoverError::RegUntranslatable(_) => "reg absent or untranslatable through /arm-io ranges",
+        DiscoverError::RegUntranslatable(_) => {
+            "reg absent or untranslatable through /arm-io ranges"
+        }
         DiscoverError::TranslationUnavailable => "/arm-io has no ranges: reg cannot be translated",
     }
 }

@@ -79,8 +79,12 @@ const PCI_COMMAND_BUS_MASTER: u32 = 1 << 2;
 /// cannot DMA (read descriptor rings / packet buffers) until Bus Master is set;
 /// QEMU's e1000 reports `pci_master 0` and silently drops transmits otherwise.
 pub fn enable_memory_space_and_bus_master(location: PciDeviceLocation) {
-    let command_and_status =
-        read_config_dword(location.bus, location.device, location.function, PCI_COMMAND_REGISTER_OFFSET);
+    let command_and_status = read_config_dword(
+        location.bus,
+        location.device,
+        location.function,
+        PCI_COMMAND_REGISTER_OFFSET,
+    );
     let updated = command_and_status | PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER;
     write_config_dword(
         location.bus,

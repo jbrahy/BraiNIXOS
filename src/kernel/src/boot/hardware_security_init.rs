@@ -266,8 +266,9 @@ fn perform_tpm_attestation_gate_check(boot_step_logger: &mut BootStepLogger) {
     // in initialize_hardware_security.
     let tpm_present = crate::hardware_security::tpm::registers::is_tpm_present();
     if tpm_present {
-        boot_step_logger
-            .ok("Measured boot: TPM 2.0 present at TIS 0xFED40000 (PCR[0..1] extended into real TPM)");
+        boot_step_logger.ok(
+            "Measured boot: TPM 2.0 present at TIS 0xFED40000 (PCR[0..1] extended into real TPM)",
+        );
     } else {
         boot_step_logger
             .warn("Measured boot: no TPM present at TIS 0xFED40000 (software-only fallback, INV-BOOT degraded)");
@@ -323,10 +324,7 @@ fn perform_tpm_attestation_gate_check(boot_step_logger: &mut BootStepLogger) {
 ///
 /// The dev-mode path remains gated behind the `dev-build` cargo feature and
 /// surfaces in PCR[1] via the dev-mode flag (see `IS_DEVELOPMENT_BUILD`).
-fn halt_or_warn_on_attestation_failure(
-    boot_step_logger: &mut BootStepLogger,
-    tpm_present: bool,
-) {
+fn halt_or_warn_on_attestation_failure(boot_step_logger: &mut BootStepLogger, tpm_present: bool) {
     if !IS_DEVELOPMENT_BUILD {
         boot_step_logger.halt("Attestation gate: TPM quote verification failed");
         halt_processor();

@@ -206,7 +206,7 @@ global_asm!(
     "mov %rsp, SYSCALL_TRAMPOLINE_SCRATCH+24(%rip)", // save user rsp
     "mov %rax, SYSCALL_TRAMPOLINE_SCRATCH+32(%rip)", // spill rax to free a register
     "mov SYSCALL_TRAMPOLINE_SCRATCH+0(%rip), %rax",  // kernel CR3
-    "mov %rax, %cr3",                                 // -> kernel page table (kernel now mapped)
+    "mov %rax, %cr3",                                // -> kernel page table (kernel now mapped)
     "mov SYSCALL_TRAMPOLINE_SCRATCH+8(%rip), %rsp",  // kernel RSP0
     "mov SYSCALL_TRAMPOLINE_SCRATCH+32(%rip), %rax", // restore rax
     // Preserve the user's callee-saved registers (rbx, rbp, r13-r15) across the
@@ -294,7 +294,7 @@ global_asm!(
     // Swap back to the user page table and the user stack, then SYSRET.
     "mov %rax, SYSCALL_TRAMPOLINE_SCRATCH+32(%rip)", // save return code
     "mov SYSCALL_TRAMPOLINE_SCRATCH+16(%rip), %rax", // user CR3
-    "mov %rax, %cr3",                                 // -> user page table
+    "mov %rax, %cr3",                                // -> user page table
     "mov SYSCALL_TRAMPOLINE_SCRATCH+24(%rip), %rsp", // restore user rsp
     "mov SYSCALL_TRAMPOLINE_SCRATCH+32(%rip), %rax", // restore return code
     // SYSRET restores RIP from rcx and RFLAGS from r11 (both pre-verified canonical).
@@ -310,7 +310,7 @@ global_asm!(
     "enter_userspace_trampoline:",
     "mov %rdx, SYSCALL_TRAMPOLINE_SCRATCH+16(%rip)", // record user CR3 for later exits
     "mov %rsi, SYSCALL_TRAMPOLINE_SCRATCH+24(%rip)", // user rsp
-    "mov %rdi, %rcx",                                 // SYSRET loads RIP from rcx
+    "mov %rdi, %rcx",                                // SYSRET loads RIP from rcx
     // RFLAGS for the first SYSRET to ring 3: reserved bit 1 only, IF CLEAR.
     // KPTI runs userspace on a page table that does NOT map the IDT or the
     // interrupt entry stubs, so any hardware interrupt taken in ring 3 would
@@ -318,8 +318,8 @@ global_asm!(
     // interrupt trampoline is mapped into every user page table, userspace runs
     // with interrupts masked and does I/O by polling via synchronous syscalls.
     "mov $0x002, %r11",
-    "mov %rdx, %cr3",                                 // -> user page table
-    "mov SYSCALL_TRAMPOLINE_SCRATCH+24(%rip), %rsp",  // load user rsp
+    "mov %rdx, %cr3",                                // -> user page table
+    "mov SYSCALL_TRAMPOLINE_SCRATCH+24(%rip), %rsp", // load user rsp
     "xor %rax, %rax",
     "xor %rbx, %rbx",
     "xor %rdx, %rdx",

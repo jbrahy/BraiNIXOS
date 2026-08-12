@@ -30,10 +30,16 @@ static mut KERNEL_CREDENTIAL_STORE: Option<CredentialStore> = None;
 /// Loads the credential store from `device` sector 0, or — if the sector does
 /// not hold a valid block — provisions root/jbrahy with the default password
 /// and writes it. Stores the device handle and the store in kernel globals.
-pub fn initialize_credential_store(device: VirtioBlockDevice, boot_step_logger: &mut BootStepLogger) {
+pub fn initialize_credential_store(
+    device: VirtioBlockDevice,
+    boot_step_logger: &mut BootStepLogger,
+) {
     // SAFETY: single-core boot; first and only writer of these globals.
     unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(CREDENTIAL_BLOCK_DEVICE), Some(device));
+        core::ptr::write(
+            core::ptr::addr_of_mut!(CREDENTIAL_BLOCK_DEVICE),
+            Some(device),
+        );
     }
 
     let mut block = [0u8; SECTOR_SIZE_IN_BYTES];
@@ -75,7 +81,9 @@ pub fn change_password(user: UserIdentity, new_password: &[u8]) -> bool {
             None => return false,
         };
         let salt = random_salt();
-        store.credential_for_mut(user).change_password(salt, new_password);
+        store
+            .credential_for_mut(user)
+            .change_password(salt, new_password);
         let device = match (*core::ptr::addr_of!(CREDENTIAL_BLOCK_DEVICE)).as_ref() {
             Some(device) => device,
             None => return false,
@@ -87,7 +95,10 @@ pub fn change_password(user: UserIdentity, new_password: &[u8]) -> bool {
 fn store_credential_store(store: CredentialStore) {
     // SAFETY: single-core boot; sole writer.
     unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(KERNEL_CREDENTIAL_STORE), Some(store));
+        core::ptr::write(
+            core::ptr::addr_of_mut!(KERNEL_CREDENTIAL_STORE),
+            Some(store),
+        );
     }
 }
 

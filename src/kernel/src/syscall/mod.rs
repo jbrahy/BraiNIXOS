@@ -4,6 +4,8 @@
 pub mod dispatch;
 
 pub mod audit_read;
+#[cfg(target_arch = "x86_64")]
+pub mod auth_syscalls;
 pub mod device_map_mmio;
 pub mod frame_map;
 pub mod ipc_dispatch_handlers;
@@ -17,5 +19,3 @@ pub mod serial_read;
 pub mod serial_write;
 #[cfg(target_arch = "x86_64")]
 pub mod user_memory;
-#[cfg(target_arch = "x86_64")]
-pub mod auth_syscalls;

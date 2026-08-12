@@ -1,0 +1,10 @@
+/target/
+
+# Model artifacts. Downloaded checkpoints and converted blobs are hundreds of
+# megabytes each and are reproducible from `fetch.py` plus this converter, so
+# the tools are committed and the artifacts are not.
+/models/
+/out/
+*.bxw1
+*.bxv1
+*.safetensors

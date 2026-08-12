@@ -21,8 +21,22 @@ const ALL_ROUTERS_MAC: [u8; 6] = [0x33, 0x33, 0x00, 0x00, 0x00, 0x02];
 /// Derives the IPv6 link-local address (fe80::/64 + modified EUI-64) from a MAC.
 pub fn link_local_address(mac: [u8; 6]) -> [u8; 16] {
     [
-        0xfe, 0x80, 0, 0, 0, 0, 0, 0,
-        mac[0] ^ 0x02, mac[1], mac[2], 0xff, 0xfe, mac[3], mac[4], mac[5],
+        0xfe,
+        0x80,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        mac[0] ^ 0x02,
+        mac[1],
+        mac[2],
+        0xff,
+        0xfe,
+        mac[3],
+        mac[4],
+        mac[5],
     ]
 }
 
@@ -141,7 +155,11 @@ mod tests {
     #[test]
     fn test_icmpv6_checksum_nonzero() {
         let message = [133u8, 0, 0, 0, 0, 0, 0, 0];
-        let checksum = icmpv6_checksum(link_local_address(MAC), [0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2], &message);
+        let checksum = icmpv6_checksum(
+            link_local_address(MAC),
+            [0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+            &message,
+        );
         assert_ne!(checksum, 0);
     }
 }

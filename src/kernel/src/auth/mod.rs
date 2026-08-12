@@ -193,7 +193,8 @@ impl CredentialStore {
     /// into the untrusted devd-disk server; today the kernel does the I/O.
     pub fn serialize_to_block(&self) -> [u8; CREDENTIAL_BLOCK_SIZE_IN_BYTES] {
         let mut block = [0u8; CREDENTIAL_BLOCK_SIZE_IN_BYTES];
-        block[OFFSET_MAGIC..OFFSET_MAGIC + 4].copy_from_slice(&CREDENTIAL_BLOCK_MAGIC.to_le_bytes());
+        block[OFFSET_MAGIC..OFFSET_MAGIC + 4]
+            .copy_from_slice(&CREDENTIAL_BLOCK_MAGIC.to_le_bytes());
         block[OFFSET_VERSION..OFFSET_VERSION + 4]
             .copy_from_slice(&CREDENTIAL_BLOCK_VERSION.to_le_bytes());
         write_credential_into_block(
@@ -270,8 +271,7 @@ fn read_credential_from_block(
     let mut salt = [0u8; SALT_LENGTH_IN_BYTES];
     salt.copy_from_slice(&block[salt_offset..salt_offset + SALT_LENGTH_IN_BYTES]);
     let mut password_hash = [0u8; PASSWORD_HASH_LENGTH_IN_BYTES];
-    password_hash
-        .copy_from_slice(&block[hash_offset..hash_offset + PASSWORD_HASH_LENGTH_IN_BYTES]);
+    password_hash.copy_from_slice(&block[hash_offset..hash_offset + PASSWORD_HASH_LENGTH_IN_BYTES]);
     Credential {
         salt,
         password_hash,

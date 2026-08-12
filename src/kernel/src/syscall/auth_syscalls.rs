@@ -42,15 +42,11 @@ const RESULT_SUCCESS: i64 = 0;
 
 /// Handles sys_auth_login: verifies the username/password from user memory.
 pub fn handle_auth_login_syscall() -> i64 {
-    let (username, username_length, password, password_length) =
-        match read_credential_arguments() {
-            Some(arguments) => arguments,
-            None => return RESULT_REJECTED,
-        };
-    match verify_login(
-        &username[..username_length],
-        &password[..password_length],
-    ) {
+    let (username, username_length, password, password_length) = match read_credential_arguments() {
+        Some(arguments) => arguments,
+        None => return RESULT_REJECTED,
+    };
+    match verify_login(&username[..username_length], &password[..password_length]) {
         Some((_user, true)) => RESULT_ACCEPTED_MUST_CHANGE,
         Some((_user, false)) => RESULT_ACCEPTED,
         None => RESULT_REJECTED,
@@ -115,7 +111,11 @@ fn read_password_change_arguments() -> Option<PasswordChangeArguments> {
     let mut current_password = [0u8; 64];
     let mut new_password = [0u8; 64];
     copy_from_user(username_virtual, username_length, &mut username)?;
-    copy_from_user(current_virtual, current_password_length, &mut current_password)?;
+    copy_from_user(
+        current_virtual,
+        current_password_length,
+        &mut current_password,
+    )?;
     copy_from_user(new_virtual, new_password_length, &mut new_password)?;
     Some(PasswordChangeArguments {
         username,

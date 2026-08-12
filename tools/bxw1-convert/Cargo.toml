@@ -1,0 +1,19 @@
+[package]
+name = "bxw1-convert"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Converts a pretrained decoder-only checkpoint into a BXW1 weight blob and a BXV1 vocabulary blob"
+
+[[bin]]
+name = "bxw1-convert"
+path = "src/main.rs"
+
+# No dependencies. The workspace replaces crates.io with a vendored directory,
+# so a third-party crate here would mean vendoring and re-checksumming the tree
+# for a host tool; SHA-256, JSON and the safetensors container are each small
+# enough to carry.
+[dependencies]
+
+[profile.release]
+panic = "unwind"

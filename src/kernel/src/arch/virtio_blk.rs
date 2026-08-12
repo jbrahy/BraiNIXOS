@@ -23,8 +23,8 @@
 
 use core::sync::atomic::{fence, Ordering};
 
-use crate::arch::pci::{find_device, VIRTIO_PCI_VENDOR_ID};
 use crate::arch::paging::page_table_walk_helpers::compute_physical_address_of_bss_page;
+use crate::arch::pci::{find_device, VIRTIO_PCI_VENDOR_ID};
 
 /// PCI device ID of the transitional virtio-blk device (legacy interface).
 const VIRTIO_BLK_TRANSITIONAL_DEVICE_ID: u16 = 0x1001;
@@ -218,7 +218,8 @@ pub fn initialize_block_device() -> Option<VirtioBlockDevice> {
     }
 
     // SAFETY: single-core boot; the static queue area is exclusively ours.
-    let queue_physical = unsafe { bss_physical_address(core::ptr::addr_of!(VIRTQUEUE_AREA) as u64) };
+    let queue_physical =
+        unsafe { bss_physical_address(core::ptr::addr_of!(VIRTQUEUE_AREA) as u64) };
     write_port_dword(
         io_base_port + REGISTER_QUEUE_ADDRESS_PFN,
         (queue_physical >> 12) as u32,

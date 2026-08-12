@@ -33,7 +33,12 @@ pub const ICMP_PING_FRAME_LENGTH: usize =
     ETHERNET_HEADER_LENGTH + ipv4::IPV4_HEADER_LENGTH + icmp::ICMP_ECHO_LENGTH;
 
 /// Writes a 14-byte Ethernet header into `out`.
-fn write_ethernet_header(out: &mut [u8], destination_mac: [u8; 6], source_mac: [u8; 6], ethertype: u16) {
+fn write_ethernet_header(
+    out: &mut [u8],
+    destination_mac: [u8; 6],
+    source_mac: [u8; 6],
+    ethertype: u16,
+) {
     out[0..6].copy_from_slice(&destination_mac);
     out[6..12].copy_from_slice(&source_mac);
     out[12..14].copy_from_slice(&ethertype.to_be_bytes());

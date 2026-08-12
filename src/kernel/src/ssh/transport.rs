@@ -63,7 +63,10 @@ pub fn derive_direction_keys(
     let mut length_key = [0u8; 32];
     payload_key.copy_from_slice(&key[0..32]);
     length_key.copy_from_slice(&key[32..64]);
-    DirectionKeys { payload_key, length_key }
+    DirectionKeys {
+        payload_key,
+        length_key,
+    }
 }
 
 fn nonce_for_sequence(sequence_number: u32) -> [u8; 8] {
@@ -185,7 +188,10 @@ pub fn open_packet(
         return None;
     }
     payload_out[..payload_length].copy_from_slice(&plaintext[1..1 + payload_length]);
-    Some(OpenedPacket { payload_length, consumed: total })
+    Some(OpenedPacket {
+        payload_length,
+        consumed: total,
+    })
 }
 
 fn constant_time_equal(a: &[u8], b: &[u8]) -> bool {
@@ -212,7 +218,8 @@ mod tests {
         let sealed_length = seal_packet(&keys, 3, payload, &padding, &mut sealed);
 
         let mut recovered = [0u8; 256];
-        let opened = open_packet(&keys, 3, &sealed[..sealed_length], &mut recovered).expect("opens");
+        let opened =
+            open_packet(&keys, 3, &sealed[..sealed_length], &mut recovered).expect("opens");
         assert_eq!(&recovered[..opened.payload_length], payload);
         assert_eq!(opened.consumed, sealed_length);
     }

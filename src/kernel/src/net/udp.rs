@@ -107,7 +107,7 @@ mod tests {
         let length = build_dns_query(0xBEEF, b"\x03foo\x00", &mut out);
         assert_eq!(u16::from_be_bytes([out[0], out[1]]), 0xBEEF);
         assert_eq!(u16::from_be_bytes([out[4], out[5]]), 1); // qdcount
-        // name (5) + qtype(2) + qclass(2) after the 12-byte header
+                                                             // name (5) + qtype(2) + qclass(2) after the 12-byte header
         assert_eq!(length, 12 + 5 + 4);
     }
 }

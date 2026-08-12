@@ -14,9 +14,11 @@
 //! interface.
 #![allow(unsafe_code)]
 
-use crate::arch::pci::{find_device, read_base_address_register};
-use crate::arch::paging::kernel_page_table::{kernel_virtual_to_physical, map_mmio_region_into_kernel};
+use crate::arch::paging::kernel_page_table::{
+    kernel_virtual_to_physical, map_mmio_region_into_kernel,
+};
 use crate::arch::paging::page_table_walk_helpers::compute_physical_address_of_bss_page;
+use crate::arch::pci::{find_device, read_base_address_register};
 
 /// True guest-physical address backing a kernel virtual address for device DMA
 /// (descriptor rings, buffers). Uses the fixed image-offset helper, which is
@@ -97,7 +99,8 @@ static mut TX_DESCRIPTOR_RING: DescriptorRing =
     DescriptorRing([0u8; RING_ENTRY_COUNT * DESCRIPTOR_SIZE]);
 static mut RX_DESCRIPTOR_RING: DescriptorRing =
     DescriptorRing([0u8; RING_ENTRY_COUNT * DESCRIPTOR_SIZE]);
-static mut RX_BUFFERS: ReceiveBuffers = ReceiveBuffers([[0u8; RECEIVE_BUFFER_SIZE]; RING_ENTRY_COUNT]);
+static mut RX_BUFFERS: ReceiveBuffers =
+    ReceiveBuffers([[0u8; RECEIVE_BUFFER_SIZE]; RING_ENTRY_COUNT]);
 static mut TX_BUFFER: TransmitBuffer = TransmitBuffer([0u8; RECEIVE_BUFFER_SIZE]);
 /// Next TX descriptor index (the tail we write).
 static mut TX_TAIL_INDEX: usize = 0;
@@ -160,10 +163,16 @@ impl E1000Device {
             let walk_physical = kernel_virtual_to_physical(virtual_address).unwrap_or(0);
             let cmd_via_vaddr =
                 core::ptr::read_volatile((virtual_address + 11) as *const u8) as u64;
-            let device_view_pointer = (crate::memory::virtual_address_layout::DIRECT_MAP_REGION_START
-                .wrapping_add(compute_physical + 11)) as *const u8;
+            let device_view_pointer =
+                (crate::memory::virtual_address_layout::DIRECT_MAP_REGION_START
+                    .wrapping_add(compute_physical + 11)) as *const u8;
             let cmd_via_device_physical = core::ptr::read_volatile(device_view_pointer) as u64;
-            (compute_physical, walk_physical, cmd_via_vaddr, cmd_via_device_physical)
+            (
+                compute_physical,
+                walk_physical,
+                cmd_via_vaddr,
+                cmd_via_device_physical,
+            )
         }
     }
 }
@@ -240,9 +249,13 @@ fn clear_multicast_table(mmio_base_address: u64) {
 
 /// Programs the TX descriptor ring registers and enables the transmitter.
 unsafe fn setup_transmit_ring(mmio_base_address: u64) {
-    let ring_physical = dma_physical_address(core::ptr::addr_of!(TX_DESCRIPTOR_RING) as u64,);
+    let ring_physical = dma_physical_address(core::ptr::addr_of!(TX_DESCRIPTOR_RING) as u64);
     core::ptr::write(core::ptr::addr_of_mut!(TX_TAIL_INDEX), 0);
-    write_register(mmio_base_address, REGISTER_TX_DESCRIPTOR_BASE_LOW, ring_physical as u32);
+    write_register(
+        mmio_base_address,
+        REGISTER_TX_DESCRIPTOR_BASE_LOW,
+        ring_physical as u32,
+    );
     write_register(
         mmio_base_address,
         REGISTER_TX_DESCRIPTOR_BASE_HIGH,
@@ -256,7 +269,11 @@ unsafe fn setup_transmit_ring(mmio_base_address: u64) {
     write_register(mmio_base_address, REGISTER_TX_DESCRIPTOR_HEAD, 0);
     write_register(mmio_base_address, REGISTER_TX_DESCRIPTOR_TAIL, 0);
     write_register(mmio_base_address, REGISTER_TRANSMIT_IPG, TRANSMIT_IPG_VALUE);
-    write_register(mmio_base_address, REGISTER_TRANSMIT_CONTROL, TRANSMIT_CONTROL_VALUE);
+    write_register(
+        mmio_base_address,
+        REGISTER_TRANSMIT_CONTROL,
+        TRANSMIT_CONTROL_VALUE,
+    );
 }
 
 /// Programs the RX descriptor ring (each descriptor pointing at a buffer) and
@@ -264,15 +281,19 @@ unsafe fn setup_transmit_ring(mmio_base_address: u64) {
 unsafe fn setup_receive_ring(mmio_base_address: u64) {
     let ring_base = core::ptr::addr_of_mut!(RX_DESCRIPTOR_RING) as *mut u8;
     for descriptor_index in 0..RING_ENTRY_COUNT {
-        let buffer_physical = dma_physical_address(core::ptr::addr_of!(RX_BUFFERS.0[descriptor_index]) as u64,);
+        let buffer_physical =
+            dma_physical_address(core::ptr::addr_of!(RX_BUFFERS.0[descriptor_index]) as u64);
         let descriptor = ring_base.add(descriptor_index * DESCRIPTOR_SIZE);
         core::ptr::write_volatile(descriptor as *mut u64, buffer_physical);
         core::ptr::write_volatile(descriptor.add(12) as *mut u8, 0); // status
     }
     core::ptr::write(core::ptr::addr_of_mut!(RX_NEXT_INDEX), 0);
-    let ring_physical =
-        dma_physical_address(core::ptr::addr_of!(RX_DESCRIPTOR_RING) as u64);
-    write_register(mmio_base_address, REGISTER_RX_DESCRIPTOR_BASE_LOW, ring_physical as u32);
+    let ring_physical = dma_physical_address(core::ptr::addr_of!(RX_DESCRIPTOR_RING) as u64);
+    write_register(
+        mmio_base_address,
+        REGISTER_RX_DESCRIPTOR_BASE_LOW,
+        ring_physical as u32,
+    );
     write_register(
         mmio_base_address,
         REGISTER_RX_DESCRIPTOR_BASE_HIGH,
@@ -289,7 +310,11 @@ unsafe fn setup_receive_ring(mmio_base_address: u64) {
         REGISTER_RX_DESCRIPTOR_TAIL,
         (RING_ENTRY_COUNT - 1) as u32,
     );
-    write_register(mmio_base_address, REGISTER_RECEIVE_CONTROL, RECEIVE_CONTROL_VALUE);
+    write_register(
+        mmio_base_address,
+        REGISTER_RECEIVE_CONTROL,
+        RECEIVE_CONTROL_VALUE,
+    );
 }
 
 /// Copies `frame` into the TX buffer, writes the descriptor, bumps the tail, and
@@ -298,20 +323,25 @@ unsafe fn transmit_frame(mmio_base_address: u64, frame: &[u8]) -> bool {
     let tail_index = core::ptr::read(core::ptr::addr_of!(TX_TAIL_INDEX));
     let buffer = core::ptr::addr_of_mut!(TX_BUFFER.0) as *mut u8;
     core::ptr::copy_nonoverlapping(frame.as_ptr(), buffer, frame.len());
-    let buffer_physical =
-        dma_physical_address(core::ptr::addr_of!(TX_BUFFER) as u64);
+    let buffer_physical = dma_physical_address(core::ptr::addr_of!(TX_BUFFER) as u64);
 
     let descriptor =
         (core::ptr::addr_of_mut!(TX_DESCRIPTOR_RING) as *mut u8).add(tail_index * DESCRIPTOR_SIZE);
     core::ptr::write_volatile(descriptor as *mut u64, buffer_physical);
     core::ptr::write_volatile(descriptor.add(8) as *mut u16, frame.len() as u16);
-    core::ptr::write_volatile(descriptor.add(11) as *mut u8, // CMD
-        TX_CMD_END_OF_PACKET | TX_CMD_INSERT_FCS | TX_CMD_REPORT_STATUS);
+    core::ptr::write_volatile(
+        descriptor.add(11) as *mut u8, // CMD
+        TX_CMD_END_OF_PACKET | TX_CMD_INSERT_FCS | TX_CMD_REPORT_STATUS,
+    );
     core::ptr::write_volatile(descriptor.add(12) as *mut u8, 0); // STA
 
     let next_tail = (tail_index + 1) % RING_ENTRY_COUNT;
     core::ptr::write(core::ptr::addr_of_mut!(TX_TAIL_INDEX), next_tail);
-    write_register(mmio_base_address, REGISTER_TX_DESCRIPTOR_TAIL, next_tail as u32);
+    write_register(
+        mmio_base_address,
+        REGISTER_TX_DESCRIPTOR_TAIL,
+        next_tail as u32,
+    );
 
     // QEMU processes the TX ring synchronously on the TDT write (TDH advances to
     // the tail). The legacy descriptor's DD write-back is unreliable under this
@@ -322,7 +352,8 @@ unsafe fn transmit_frame(mmio_base_address: u64, frame: &[u8]) -> bool {
         if read_register(mmio_base_address, REGISTER_TX_DESCRIPTOR_HEAD) as usize == next_tail {
             return true;
         }
-        if core::ptr::read_volatile(descriptor.add(12) as *const u8) & TX_STATUS_DESCRIPTOR_DONE != 0
+        if core::ptr::read_volatile(descriptor.add(12) as *const u8) & TX_STATUS_DESCRIPTOR_DONE
+            != 0
         {
             return true;
         }

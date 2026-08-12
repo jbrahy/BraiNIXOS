@@ -225,8 +225,11 @@ fn resolve_page_directory_for_address(
 ) -> &'static mut PageTable {
     let pml4_index = extract_page_map_level_4_index(virtual_address);
     let pdpt_index = extract_page_directory_pointer_table_index(virtual_address);
-    let page_directory_pointer_table =
-        ensure_page_directory_pointer_table_exists(page_map_level_4, pml4_index, intermediate_flags);
+    let page_directory_pointer_table = ensure_page_directory_pointer_table_exists(
+        page_map_level_4,
+        pml4_index,
+        intermediate_flags,
+    );
     ensure_page_directory_exists(page_directory_pointer_table, pdpt_index, intermediate_flags)
 }
 
@@ -534,8 +537,8 @@ pub fn kernel_virtual_to_physical(virtual_address: u64) -> Option<u64> {
     let page_map_level_4 = acquire_kernel_page_map_level_4_reference();
     // SAFETY: kernel PML4 is valid and active; resolve walks it read-only (the
     // address is already mapped, so no intermediate tables are allocated).
-    let frame_base = unsafe { resolve_mapped_physical_address(page_map_level_4, virtual_address) }
-        .ok()?;
+    let frame_base =
+        unsafe { resolve_mapped_physical_address(page_map_level_4, virtual_address) }.ok()?;
     Some(frame_base | (virtual_address & 0xFFF))
 }
 

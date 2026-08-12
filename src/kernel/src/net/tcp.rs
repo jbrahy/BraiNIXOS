@@ -44,7 +44,10 @@ pub fn parse_segment(segment: &[u8]) -> Option<TcpSegmentView> {
         destination_port: u16::from_be_bytes([segment[2], segment[3]]),
         sequence_number: u32::from_be_bytes([segment[4], segment[5], segment[6], segment[7]]),
         acknowledgment_number: u32::from_be_bytes([
-            segment[8], segment[9], segment[10], segment[11],
+            segment[8],
+            segment[9],
+            segment[10],
+            segment[11],
         ]),
         flags: segment[13],
         window_size: u16::from_be_bytes([segment[14], segment[15]]),
@@ -163,7 +166,14 @@ mod tests {
     #[test]
     fn test_syn_segment() {
         let mut out = [0u8; 32];
-        let length = build_syn([10, 0, 2, 15], [1, 1, 1, 1], 50000, 53, 0x11223344, &mut out);
+        let length = build_syn(
+            [10, 0, 2, 15],
+            [1, 1, 1, 1],
+            50000,
+            53,
+            0x11223344,
+            &mut out,
+        );
         assert_eq!(length, TCP_HEADER_LENGTH);
         assert_eq!(u16::from_be_bytes([out[0], out[1]]), 50000);
         assert_eq!(u16::from_be_bytes([out[2], out[3]]), 53);

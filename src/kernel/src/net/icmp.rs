@@ -13,7 +13,7 @@ pub fn build_echo_request(identifier: u16, sequence: u16) -> [u8; ICMP_ECHO_LENG
     let mut message = [0u8; ICMP_ECHO_LENGTH];
     message[0] = ICMP_TYPE_ECHO_REQUEST;
     message[1] = 0; // code
-    // checksum (2..4) zero for computation
+                    // checksum (2..4) zero for computation
     message[4..6].copy_from_slice(&identifier.to_be_bytes());
     message[6..8].copy_from_slice(&sequence.to_be_bytes());
     let checksum = internet_checksum(&message);

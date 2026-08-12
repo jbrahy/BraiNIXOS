@@ -138,7 +138,18 @@ pub fn poly1305_mac(key: &[u8; 32], message: &[u8]) -> [u8; 16] {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn mul_add(h0: u32, m0: u32, h1: u32, m1: u32, h2: u32, m2: u32, h3: u32, m3: u32, h4: u32, m4: u32) -> u64 {
+fn mul_add(
+    h0: u32,
+    m0: u32,
+    h1: u32,
+    m1: u32,
+    h2: u32,
+    m2: u32,
+    h3: u32,
+    m3: u32,
+    h4: u32,
+    m4: u32,
+) -> u64 {
     (h0 as u64) * (m0 as u64)
         + (h1 as u64) * (m1 as u64)
         + (h2 as u64) * (m2 as u64)
