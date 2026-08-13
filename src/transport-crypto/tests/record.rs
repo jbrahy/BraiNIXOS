@@ -319,3 +319,108 @@ fn both_directions_carry_traffic_independently() {
         assert_eq!(opened.payload, &inbound);
     }
 }
+
+// -------------------------------------------- forgery, found by coverage
+//
+// AuthenticationFailed had NEVER been executed by a test. In an AEAD record
+// layer that arm IS the security property: everything else the layer does is
+// bookkeeping, and tag rejection is the part an attacker actually attacks. A
+// round-trip test proves the honest path works and says nothing at all about
+// the dishonest one.
+
+/// Every single-bit flip anywhere in a sealed record must be rejected.
+#[test]
+fn a_tampered_record_is_rejected_wherever_it_is_tampered() {
+    let mut session = common::handshake();
+    let mut wire = vec![0u8; MAX_SEALED_RECORD_BYTES];
+    let sealed = session
+        .server
+        .sealer
+        .seal(b"authentic payload", &mut wire)
+        .expect("seals");
+
+    // Length prefix, ciphertext, and tag alike: no region of the record is
+    // unauthenticated, so a flip in any of them must deny.
+    for byte_index in 0..sealed {
+        for bit in [0x01u8, 0x80] {
+            let mut tampered = wire[..sealed].to_vec();
+            tampered[byte_index] ^= bit;
+
+            let mut fresh = common::handshake();
+            let mut scratch = vec![0u8; MAX_SEALED_RECORD_BYTES];
+            let outcome = fresh.client.opener.open(&tampered, &mut scratch);
+
+            // Rejection is the property; WHICH rejection depends on the region.
+            // Corrupting the length prefix changes the declared length, so
+            // framing denies with RecordIncomplete before the tag is ever
+            // checked. Everywhere else the tag catches it. Both are refusals,
+            // and asserting only AuthenticationFailed would have wrongly
+            // flagged the framing path as a hole.
+            let error = outcome.err().unwrap_or_else(|| {
+                panic!("a flip of bit {bit:#04x} at byte {byte_index} was ACCEPTED")
+            });
+            assert!(
+                matches!(
+                    error,
+                    TransportCryptoError::AuthenticationFailed
+                        | TransportCryptoError::RecordIncomplete
+                ),
+                "flip at byte {byte_index} denied with an unexpected error: {error:?}"
+            );
+        }
+    }
+}
+
+/// A truncated record is rejected rather than opened as a shorter one.
+#[test]
+fn a_truncated_record_is_rejected() {
+    let mut session = common::handshake();
+    let mut wire = vec![0u8; MAX_SEALED_RECORD_BYTES];
+    let sealed = session
+        .server
+        .sealer
+        .seal(b"authentic payload", &mut wire)
+        .expect("seals");
+
+    for shortened in 1..sealed {
+        let mut fresh = common::handshake();
+        let mut scratch = vec![0u8; MAX_SEALED_RECORD_BYTES];
+        assert!(
+            fresh
+                .client
+                .opener
+                .open(&wire[..shortened], &mut scratch)
+                .is_err(),
+            "a record truncated to {shortened} of {sealed} bytes was accepted"
+        );
+    }
+}
+
+/// The sequence counter is observable, and it advances exactly once per record.
+#[test]
+fn the_sequence_advances_once_per_record_on_both_directions() {
+    let mut session = common::handshake();
+    assert_eq!(session.server.sealer.sequence(), 0);
+    assert_eq!(session.client.opener.sequence(), 0);
+
+    let mut wire = vec![0u8; MAX_SEALED_RECORD_BYTES];
+    let mut scratch = vec![0u8; MAX_SEALED_RECORD_BYTES];
+    for expected in 1..=3u32 {
+        let sealed = session
+            .server
+            .sealer
+            .seal(b"tick", &mut wire)
+            .expect("seals");
+        session
+            .client
+            .opener
+            .open(&wire[..sealed], &mut scratch)
+            .expect("opens");
+        assert_eq!(session.server.sealer.sequence(), expected);
+        assert_eq!(
+            session.client.opener.sequence(),
+            expected,
+            "sender and receiver must not drift"
+        );
+    }
+}

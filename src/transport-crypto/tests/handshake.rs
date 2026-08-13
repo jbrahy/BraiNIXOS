@@ -510,3 +510,74 @@ fn a_client_hello_of_the_wrong_length_is_a_structural_denial() {
     let outcome = server.identify(&[0u8; 63], &table);
     assert!(matches!(outcome, Err(TransportCryptoError::Wire(_))));
 }
+
+// ------------------------------------------- teardown, found by coverage
+//
+// §9.4's teardown obligation had NEVER been executed by a test. In a crypto
+// crate, `zeroize` is not housekeeping: it is the whole of the claim that a
+// torn-down session leaves no key material behind, and an untested erase is an
+// erase nobody has watched happen.
+
+#[test]
+fn teardown_destroys_the_session_id_and_both_directions_of_keys() {
+    let mut session = common::handshake();
+
+    assert_ne!(
+        session.server.session_id, [0u8; 32],
+        "the fixture must start with a live session_id"
+    );
+
+    session.server.zeroize();
+
+    assert_eq!(
+        session.server.session_id, [0u8; 32],
+        "§9.4: teardown must destroy the session_id"
+    );
+
+    // The client half is independent: tearing one side down must not reach
+    // across and mutate the other, or a server teardown would silently break a
+    // peer that is still live.
+    assert_ne!(
+        session.client.session_id, [0u8; 32],
+        "tearing down one side must not touch the other"
+    );
+
+    session.client.zeroize();
+    assert_eq!(session.client.session_id, [0u8; 32]);
+}
+
+#[test]
+fn teardown_is_idempotent() {
+    let mut session = common::handshake();
+    session.server.zeroize();
+    // A second teardown must not panic or resurrect state: `servd` may unwind a
+    // session through more than one path.
+    session.server.zeroize();
+    assert_eq!(session.server.session_id, [0u8; 32]);
+}
+
+#[test]
+fn a_default_server_handshake_is_a_new_one() {
+    let mut from_default = ServerHandshake::default();
+    let mut from_new = ServerHandshake::new();
+    assert_eq!(from_default.matched_slot(), from_new.matched_slot());
+    assert_eq!(
+        from_default.matched_slot(),
+        None,
+        "a fresh handshake has matched no credential slot yet"
+    );
+
+    // And the accessor reports a real slot once the scan has matched one.
+    let table = common::table_with_one_client();
+    let credential = common::enroll(&common::ENROLLED_MATERIAL, CredentialRole::Client, 0);
+    let (_, hello) = ClientHandshake::start(&credential, &common::CLIENT_NONCE);
+    let matched = from_new.identify(&hello, &table).expect("identifies");
+    from_new
+        .derive(matched, &common::SERVER_NONCE)
+        .expect("derives");
+    assert_eq!(
+        from_new.matched_slot(),
+        Some(0),
+        "the slot is recorded at derive, not at identify"
+    );
+}
