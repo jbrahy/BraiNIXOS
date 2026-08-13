@@ -38,6 +38,7 @@
 // correct that the mask is a no-op on a u32 and wrong about whether it should
 // go -- in crypto, matching the reference beats terseness.
 #![allow(clippy::identity_op)]
+#![allow(clippy::manual_range_contains)]
 //!
 //! Layered build-out (RFC 4251-4254):
 //!   1. version exchange                                   — DONE

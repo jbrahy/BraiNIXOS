@@ -22,6 +22,10 @@
 // REMOVE THIS BLOCK if any of this is ever unfrozen.
 #![allow(clippy::arithmetic_side_effects)]
 #![allow(clippy::unnecessary_cast)]
+#![allow(clippy::identity_op)]
+// A TSS field kept for layout fidelity with the hardware structure even though
+// nothing reads it; removing it would misalign the struct against the manual.
+#![allow(dead_code)]
 
 pub mod context_switch_assembly;
 pub mod hardware_registers;

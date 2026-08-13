@@ -4,6 +4,56 @@
 //! driver does the actual transmit/receive. Today it covers ARP (IPv4 address
 //! resolution) — enough to prove the NIC's TX+RX path works end-to-end by
 //! resolving the gateway's MAC. IPv4/ICMP/UDP/IPv6/TCP build on the same shape.
+//!
+//! # ⚠️ Frozen x86-64 reference — NOT the serving datapath
+//!
+//! The serving path is the decomposed server chain, not this module:
+//! `devd-nic ▸ linkd ▸ ipd ▸ transportd ▸ servd` (`ROADMAP.md`, *Serving
+//! datapath*). Those servers already carry their own `ethernet.rs`, `ipv4.rs`,
+//! and `icmp.rs`.
+//!
+//! This module's only consumers are `boot/phases.rs` — boot-time **self-tests**
+//! (ARP, ICMP ping, DNS query, IPv6 router solicitation, TCP SYN) — and
+//! `boot/ssh_bridge.rs`, which **P2-T6 deletes**. It drives e1000 and virtio,
+//! neither of which exists on Apple Silicon, so it cannot run on the only
+//! supported platform without a full port. Frozen under decision #26.
+//!
+//! ## Defects recorded here rather than fixed, because nothing runs this
+//!
+//! Two are genuine panic paths, not lint noise. **Anyone porting this to
+//! aarch64, or reviving it, must fix them first:**
+//!
+//! 1. **`tcp::tcp_checksum` indexes a fixed buffer with an unchecked length.**
+//!    `buffer` is `[0u8; 12 + 1500]` and `buffer[12..12 + segment.len()]`
+//!    panics for any segment longer than 1500 bytes. The function takes
+//!    `&[u8]` with no documented bound.
+//! 2. **`tcp::build_segment` writes past `out` without checking it.**
+//!    `out[TCP_HEADER_LENGTH..TCP_HEADER_LENGTH + payload.len()]` panics when
+//!    the caller's buffer is smaller than header plus payload.
+//!
+//! Both are reachable only from the boot self-tests above, on a platform that
+//! was dropped, which is why they are documented rather than repaired.
+
+// Lint suppression, scoped and justified — same basis as `arch/`.
+//
+// ~36 sites, mostly clippy::arithmetic_side_effects on frame-offset math. They
+// have been failing CI continuously, invisible until 2026-08-12 because Style
+// Check died at `cargo fmt` before reaching clippy.
+//
+// Suppressed rather than fixed because this tree is frozen (#26) and superseded
+// for the datapath that matters. The two real defects above are recorded instead
+// of silenced. The server stack that replaces this is held to the unsuppressed
+// bar.
+//
+// REMOVE THIS BLOCK if this module is ever ported or unfrozen — and fix the two
+// defects above at the same time.
+#![allow(clippy::arithmetic_side_effects)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::manual_range_contains)]
+#![allow(clippy::too_many_arguments)]
+// identity_op: explicit masks in the TCP checksum path, kept for symmetry with
+// the RFC 793 pseudo-header layout.
+#![allow(clippy::identity_op)]
 
 pub mod icmp;
 pub mod ipv4;
