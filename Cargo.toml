@@ -15,7 +15,7 @@ members = [
     "src/bootloader-verify",
     "src/servers/*",
     "src/capability-verify",
-    "src/brainix-ipc-core",
+    "src/ipc-verify",
     "userland/shell/0.01",
 ]
 exclude = [

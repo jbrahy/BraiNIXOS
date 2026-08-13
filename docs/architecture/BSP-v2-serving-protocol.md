@@ -109,7 +109,7 @@ did — but it changes visibly and is repaired in one place.
 
 Proof tier, per `docs/security/SECURITY_INVARIANTS.md` §16: the BSP request
 parser, the transport crypto, and the credential store are all **Full** tier —
-invariant mapping, fuzz, Kani, Prusti, audit report, and no-regression bars. None
+invariant mapping, fuzz, Kani, audit report, and no-regression bars. None
 of the three is a Reduced-tier component, and this document is the invariant
 mapping artifact for the first two.
 
@@ -1420,7 +1420,7 @@ allowed to read.
 
 The BSP request parser, the transport crypto, and the credential store are all
 **Full** proof tier (`docs/security/SECURITY_INVARIANTS.md` §16), which means all
-six artifacts: invariant mapping, fuzz, Kani, Prusti, audit report, and
+five artifacts: invariant mapping, fuzz, Kani, audit report, and
 no-regression bars. BSP MUST ship with at least the following before facing real
 clients:
 
@@ -1538,7 +1538,7 @@ is reachable from a socket, because nothing yet listens on one.
   corpora (89 wire messages, 29 handshake messages, 49 record-open ciphertexts), and
   CI runs both Kani packages. **Two gaps remain and neither is closed by that commit:**
   the fuzz targets are *built and never executed* — `.github/workflows/ci.yml` has no
-  `cargo fuzz` job at all (ROADMAP P2-T10) — and there is still no Prusti contract and
+  `cargo fuzz` job at all (ROADMAP P2-T10) — and there is still
   no independent audit report. §13's `(key_material, role, nonces) → (selector,
   confirms, directional keys)` vectors do not exist either; what exists is RFC
   known-answer coverage of the primitives, which is a different obligation. Both

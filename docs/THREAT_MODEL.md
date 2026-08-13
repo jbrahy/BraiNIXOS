@@ -79,7 +79,7 @@ cost of the exception is correctness. That is also the reason it stays: `fiat-cr
 is machine-verified against a formal specification, and a hand-written replacement would trade a
 machine-checked property for an unchecked one. Owning the code would satisfy the dependency-closure rule
 and *lower* the assurance that rule exists to protect. The residual gap is stated rather than closed —
-Kani and Prusti cannot be produced for code we do not own, so its Full-tier row in
+Kani cannot be produced for code we do not own, so its Full-tier row in
 `docs/security/SECURITY_INVARIANTS.md` §16 names those two artifacts as missing. `sha2` and `chacha20` are
 the opposite case: vendored today, specified to be reimplemented in-tree, and tracked debt until they are.
 

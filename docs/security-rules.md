@@ -153,7 +153,7 @@
 
 60. **Supply-chain checks are mandatory in CI.** Vendoring, `cargo vet`, `cargo deny`, and `cargo audit` must be enforced, not optional.
 
-61. **Verification jobs must be isolated.** If Kani and Prusti require different pinned toolchains, isolate them cleanly instead of weakening reproducibility.
+61. **Verification jobs must be isolated.** If verification tools require different pinned toolchains, isolate them cleanly instead of weakening reproducibility. *(Kani is the only such tool as of 2026-08-12; Prusti was removed — see `security/SECURITY_INVARIANTS.md` §16. Kani's installation is deliberately performed before checkout, because the repository's vendored-sources config otherwise breaks its installer.)*
 
 62. **No “temporary” CI bypasses in the main branch.** Any exception mechanism becomes permanent attack surface.
 

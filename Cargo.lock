@@ -97,8 +97,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "brainix-ipc-core"
+name = "brainix-ipc-verify"
 version = "0.1.0"
+dependencies = [
+ "brainix-kernel",
+]
 
 [[package]]
 name = "brainix-ipd"

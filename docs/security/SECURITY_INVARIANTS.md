@@ -1202,9 +1202,32 @@ Introduced 2026-08-02 by owner decision. **The proof gate is tiered by TCB proxi
 uniform per-component gate that demanded the same six artifacts from every component regardless of what a
 compromise of it could reach.
 
-- **Full tier — all six artifacts:** invariant mapping, fuzz target, Kani harness, Prusti contracts,
-  security audit report, and no-regression bars.
-- **Reduced tier — tests and a security audit report only.** No Kani, no Prusti.
+- **Full tier — all ~~six~~ five artifacts:** invariant mapping, fuzz target, Kani harness,
+  ~~Prusti contracts,~~ security audit report, and no-regression bars.
+- **Reduced tier — tests and a security audit report only.** No Kani~~, no Prusti~~.
+
+> **Prusti was removed from the artifact list on 2026-08-12** (owner decision), reducing Full tier from
+> six artifacts to five. Recorded rather than silently edited, because this is a signed criterion and the
+> count is quoted elsewhere.
+>
+> **Why.** The single Prusti artifact in the tree, `src/brainix-ipc-core/`, had **never executed**, and
+> could not have: its annotations gated on `feature = "prusti"` while its manifest declared no
+> `[features]` section, and the CI action required a `prusti-contracts` dependency that was deliberately
+> absent. Beyond that it verified a **hand-written copy** of three IPC ideas that nothing in the tree
+> depended on and the kernel never called, and the copy's contracts were **tautologies** — each of the
+> form *"a function that returns `Ok` exactly when P holds, returns `Ok` only when P holds"*, true by
+> construction and independent of what the kernel does.
+>
+> So no Full-tier component has ever satisfied this artifact, and the list asserted otherwise. Prusti also
+> cannot target the real `no_std` kernel paths, which is why the shim existed at all.
+>
+> **What replaced it.** `src/ipc-verify/`, five Kani harnesses over the **real** `perform_rendezvous`
+> covering INV-IPC-002, INV-IPC-005, and INV-AUTH-003. Kani already verifies real kernel code elsewhere in
+> this tree, so the obligation moved to a tool that demonstrably works here rather than being dropped.
+>
+> **What is now openly uncovered:** INV-IPC-003's blocking, queueing, and timeout-rollback paths.
+> `perform_rendezvous` is the transfer step and never blocks, so those remain covered by unit tests only.
+> That gap was previously masked by the claim that Prusti covered it.
 
 **The rule.** Full tier covers the TCB, every parser of hostile input, and all crypto. Reduced tier covers
 capability-bounded servers whose compromise is contained by the capability model. The justification is the

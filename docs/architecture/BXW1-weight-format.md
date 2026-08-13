@@ -25,7 +25,7 @@ explicit accept path is denial (NORTH_STAR "Fail closed").
 
 Proof tier, per [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md)
 §16: the **BXW1 weight loader is Full tier** — invariant mapping, fuzz target,
-Kani harness, Prusti contracts, audit report, and no-regression bars. It is
+Kani harness, audit report, and no-regression bars. It is
 listed there as "hostile input from disk, and the integrity gate for the weights
 themselves (`INV-MODEL-002`)." This document is the invariant-mapping artifact.
 The parser `inferd` embeds to resolve tensors (§10.3) is Full tier in its own
@@ -80,7 +80,7 @@ right and does not inherit `inferd`'s Reduced tier — §16's first corollary.
 | `INV-SERVE-002` (no allocation driven by foreign sizes) — read here as its disk analogue | Every buffer the loader uses is a compile-time-sized `static`: a 256-byte header buffer, the ≤ 640 KiB table buffer, and the hash state. The copy length in §10.1 comes from the **storage layer's** reported object length checked against a `const`, never from the blob's own `total_size`. No file-supplied number sizes anything, ever. |
 | `INV-SCHED-004` (exhaustion is explicit) | A blob larger than `WEIGHTS_REGION` returns an enumerated error before any copy (§8.2). There is no truncation, no partial residency, and no fallback to a smaller model. |
 | `INV-PARSE-001` (fail-closed hostile-input parser) | §7's rule table is the enumeration of every attacker-controllable value and its required behaviour. All arithmetic is checked; nothing saturates or wraps; a value that does not fit denies. |
-| `INV-PARSE-002` (fuzz target *and* Kani harness) | §12 names both, plus the Prusti and audit obligations Full tier requires. |
+| `INV-PARSE-002` (fuzz target *and* Kani harness) | §12 names both, plus the audit obligations Full tier requires. |
 | `INV-PARSE-004` (disagreeing sources fail closed) | Three sources describe overlapping facts — the header's hyperparameters, the tensor table's shapes, and the tokenizer vocabulary blob. Disagreement is a DENY with no precedence rule (§7.5), for the reason `INV-PARSE-004` gives: picking a winner means trusting one unaudited source over another. |
 | `INV-FAIL-001` (failure modes are defined) | §7.1 defines exactly one failure action for every rejection in this document. |
 | `INV-FAIL-002` (recovery mints no hidden authority) | A failed load grants nothing, and leaves the previously sealed generation active when it is refused before §10.5's teardown. A successful load grants `inferd` a **read-only** view and no new capability (§10.2). `modeld`'s own capabilities are its three (§10.0) and it exits holding none of them. |
@@ -1507,7 +1507,7 @@ of BXW1 is implemented:**
   says so explicitly, and BSP v2 itself is unimplemented in full.
 - `sha2` is still vendored; the in-tree SHA-256 this format depends on has not
   been written.
-- No fuzz target, Kani harness, Prusti contract, or test vector from §12 exists.
+- No fuzz target, Kani harness, or test vector from §12 exists.
 - **The 200 GB/s bandwidth figure is Apple's published number, not a measurement
   taken on the reference machine.** Every tokens-per-second figure in §4.5 and
   §8.2 is derived from it and inherits its uncertainty. No BraiNIX code has ever
@@ -1523,7 +1523,7 @@ line above is struck.
 The BXW1 loader is **Full tier**
 ([`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) §16),
 which means all six artifacts: invariant mapping (§1), fuzz target, Kani
-harness, Prusti contracts, security audit report, and no-regression bars. P3-T9b
+harness, security audit report, and no-regression bars. P3-T9b
 requires the loader to be green under fuzz soak and Kani **independently**, with
 no component permitted to pass on another's evidence.
 

@@ -65,7 +65,7 @@ bytes touch.
 | Invariant | How BXV1 enforces it |
 |---|---|
 | `INV-PARSE-001` (fail-closed hostile-input parser) | §7's rule tables enumerate every attacker-controllable value and its required behaviour. All arithmetic is checked; nothing saturates or wraps; a value that does not fit denies. The decoder is `#![no_std]`, `#![forbid(unsafe_code)]`, and allocation-free. |
-| `INV-PARSE-002` (fuzz target *and* Kani harness) | §9 names both, plus the Prusti and audit obligations Full tier requires. |
+| `INV-PARSE-002` (fuzz target *and* Kani harness) | §9 names both, plus the audit obligations Full tier requires. |
 | `INV-PARSE-004` (disagreeing sources fail closed) | Three sources describe the vocabulary's size: BXW1's `vocab_size`, the embedding matrix's row count, and this format's `token_count`. Disagreement is a DENY with no precedence rule — BXW1 §7.5 rule C7 owns that check, and `Vocabulary::token_count()` exists to feed it. Inside this format the same principle applies to every redundant field: `rank`, the byte-token table, and both sort indices are all derivable and all compared (§2). |
 | **INV-MEM** (fixed pools, no heap) | Every buffer is caller-supplied or a compile-time-sized array. No quantity in a blob ever sizes, extends, or indexes a buffer: counts are compared against a `const` first and are then used only to bound loops. |
 | `INV-SERVE-002` (no allocation driven by foreign sizes) | The encode path takes its output and scratch slices from the caller and refuses a call whose slices are too small. The prompt length is compared against `MAX_ENCODE_INPUT_BYTES`, never used to size anything. |
@@ -878,7 +878,7 @@ structural validation without assuming the first one did.
 The tokenizer vocab parser is **Full tier**
 ([`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) §16),
 which means all six artifacts: invariant mapping (§1), fuzz target, Kani harness,
-Prusti contracts, security audit report, and no-regression bars. P3-T9b requires
+security audit report, and no-regression bars. P3-T9b requires
 it to be green under fuzz soak and Kani **independently**, with no component
 permitted to pass on another's evidence.
 

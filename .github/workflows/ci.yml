@@ -35,7 +35,7 @@ jobs:
         run: cargo clippy -p brainix-kernel -p brainix-bootloader --features brainix-kernel/kernel-binary --target x86_64-unknown-none -- -D warnings
 
       - name: cargo clippy (host target)
-        run: cargo clippy --workspace --exclude brainix-capability-verify --exclude brainix-kernel --exclude brainix-bootloader --exclude brainix-ipc-core --exclude brainix-bootloader-verify -- -D warnings
+        run: cargo clippy --workspace --exclude brainix-capability-verify --exclude brainix-kernel --exclude brainix-bootloader --exclude brainix-ipc-verify --exclude brainix-bootloader-verify -- -D warnings
 
   # ---------------------------------------------------------------------------
   # 1. Supply chain audit — runs after style gate
@@ -105,7 +105,7 @@ jobs:
           key: ${{ runner.os }}-cargo-unit-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run capability-verify unit tests (hosted Kani shim)
-        run: cargo test -p capability-verify --verbose
+        run: cargo test -p brainix-capability-verify --verbose
 
       - name: Run kernel security boot tests (host target)
         run: cargo test -p brainix-kernel --verbose
@@ -193,19 +193,13 @@ jobs:
         run: cargo kani --package brainix-bsp-verify
       - name: Kani — BSP v2 transport cryptography (P2-T2)
         run: cargo kani --package brainix-transport-crypto-verify
-
-  # ---------------------------------------------------------------------------
-  # 5a. Formal verification — Prusti on brainix-ipc-core shim crate (D-07, D-08)
-  # ---------------------------------------------------------------------------
-  prusti:
-    name: Prusti Verification
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run Prusti verification on brainix-ipc-core
-        uses: viperproject/prusti-action@v1
-        with:
-          path: src/brainix-ipc-core
+      # Replaces the former Prusti job. That job pointed at src/brainix-ipc-core/,
+      # a shim whose contracts were tautologies about a hand-written copy of the
+      # IPC path that nothing in the tree called -- and which had never once
+      # executed, because its annotations gated on a feature its manifest never
+      # declared. These harnesses run against the real perform_rendezvous.
+      - name: Kani — IPC rendezvous capability transfer (INV-IPC-002/005)
+        run: cargo kani --package brainix-ipc-verify
 
   # ---------------------------------------------------------------------------
   # 5. QEMU integration test — boots kernel, asserts serial output

@@ -216,8 +216,17 @@ fn test_reply_capability_is_single_use() {
 
 /// SC-05 / INV-IPC-002 / INV-AUTH-003
 ///
-/// Prusti property in brainix-ipc-core covers this formally.
-/// Unit-level evidence: rights monotonicity check returns error for amplification.
+/// Formally covered by `brainix-ipc-verify`'s `rendezvous_never_amplifies_rights`,
+/// a Kani harness over this same `perform_rendezvous`, symbolic across the whole
+/// rights lattice and both slot indices.
+///
+/// It previously read "Prusti property in brainix-ipc-core covers this formally."
+/// That was false in three ways at once: the Prusti job had never executed, the
+/// shim it named verified a hand-written copy nothing called, and the copy's
+/// contracts were tautologies. A comment pointing at coverage that does not
+/// exist is worse than no comment, because it tells a reviewer to stop looking.
+///
+/// Unit-level evidence below: rights monotonicity returns an error on amplification.
 #[test]
 fn property_ipc_cannot_increase_capability_rights() {
     use crate::ipc::rendezvous::perform_rendezvous;
