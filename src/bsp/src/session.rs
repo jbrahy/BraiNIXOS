@@ -223,6 +223,7 @@ impl Session {
         match self.session_type {
             Some(SessionType::Client) => self.accept_client_request(payload),
             Some(SessionType::Admin) => self.accept_admin_verb(payload),
+            // COVERAGE-EXEMPT: session_type is None only after close(), which also sets state to Closed, so require_established() above denies first. Defence in depth against a future state that clears the type without closing.
             None => Err(self.deny(BspError::DataMessageBeforeEstablished)),
         }
     }
@@ -425,6 +426,7 @@ fn check_running_total(total: u32, declared: u32) -> Result<(), BspError> {
         return Err(BspError::PromptChunkExceedsDeclaredLength);
     }
     if total > MAX_PROMPT_BYTES {
+        // COVERAGE-EXEMPT: unreachable today and the comment above says why: the declared-length bound is tighter than the buffer bound, so it always denies first. Kept because the cap is the buffer size, never `len`.
         return Err(BspError::PromptChunkExceedsPromptBuffer);
     }
     Ok(())

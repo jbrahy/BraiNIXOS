@@ -572,3 +572,146 @@ fn an_admin_session_accepts_every_verb_and_stays_established() {
         assert_eq!(session.state(), SessionState::Established);
     }
 }
+
+// ----------------------------------------------- accessors found by coverage
+//
+// `request_id()` is how a server correlates a response with the request that
+// caused it. Coverage showed only the `Reboot` and `InferCommit` arms were ever
+// executed, so five admin verbs and three client requests had an untested
+// correlation path — the failure mode being a response attributed to the wrong
+// request, which on a multiplexed session means one client's answer reaching
+// another.
+
+#[test]
+fn every_admin_verb_reports_its_own_request_id() {
+    let id = 0xA1B2_C3D4_u32;
+    let verbs: [(&str, Vec<u8>); 6] = [
+        (
+            "enroll-key",
+            enroll_key(id, CredentialRole::Client.to_wire(), nonce(0x21)),
+        ),
+        ("revoke-key", revoke_key(id, sixteen(0x22))),
+        ("load-weights", load_weights(id, nonce(0x23))),
+        ("read-audit-log", read_audit_log(id, 7, 3)),
+        (
+            "restart-server",
+            restart_server(id, RestartTarget::Servd.to_wire()),
+        ),
+        ("reboot", reboot(id)),
+    ];
+    for (name, bytes) in verbs {
+        assert_eq!(
+            AdminVerb::decode(&bytes).unwrap().request_id(),
+            id,
+            "{name} lost its request_id in decode"
+        );
+    }
+}
+
+#[test]
+fn every_client_request_reports_its_own_request_id() {
+    let id = 0x0102_0304_u32;
+
+    assert_eq!(
+        ClientRequest::decode(&infer_begin(id, 16, 700, 900, 5))
+            .unwrap()
+            .request_id(),
+        Some(id)
+    );
+    assert_eq!(
+        ClientRequest::decode(&prompt_chunk(id, b"hello"))
+            .unwrap()
+            .request_id(),
+        Some(id)
+    );
+    assert_eq!(
+        ClientRequest::decode(&cancel(id)).unwrap().request_id(),
+        Some(id)
+    );
+    assert_eq!(
+        ClientRequest::decode(&close()).unwrap().request_id(),
+        None,
+        "Close correlates with no request; reporting an id would invent one"
+    );
+}
+
+#[test]
+fn finish_reason_round_trips_through_its_wire_value() {
+    let all = [
+        FinishReason::Ok,
+        FinishReason::Length,
+        FinishReason::Cancelled,
+        FinishReason::ModelError,
+    ];
+    for reason in all {
+        assert_eq!(
+            FinishReason::from_wire(reason.to_wire()),
+            Ok(reason),
+            "{reason:?} did not survive the wire round trip"
+        );
+    }
+
+    // The assignment is normative (§10.3): a client on the other end of a
+    // different implementation decodes these numbers, so they are not free to
+    // drift with the enum's declaration order.
+    assert_eq!(FinishReason::Ok.to_wire(), 0);
+    assert_eq!(FinishReason::Length.to_wire(), 1);
+    assert_eq!(FinishReason::Cancelled.to_wire(), 2);
+    assert_eq!(FinishReason::ModelError.to_wire(), 3);
+
+    for unknown in [4u8, 5, 127, 128, 255] {
+        assert_eq!(
+            FinishReason::from_wire(unknown),
+            Err(brainix_bsp::BspError::UnknownMessageType),
+            "{unknown} is not an assigned finish reason and must not be guessed"
+        );
+    }
+}
+
+#[test]
+fn a_default_session_is_a_new_session() {
+    assert_eq!(Session::default().state(), Session::new().state());
+}
+
+/// What actually keeps a response inside one record is the PER-VARIANT cap,
+/// not the record bound.
+///
+/// Written while chasing the uncovered `ResponseExceedsRecordPlaintext` arm,
+/// which turned out to be unreachable: `MAX_TOKEN_CHUNK` is 512 and
+/// `MAX_AUDIT_CHUNK` is 1024, both far under the 4096-byte record plaintext, so
+/// the variant's own cap always denies first. The record bound is defence in
+/// depth behind them. Pinning that ordering here means a future widening of
+/// either cap has to confront this test rather than silently rely on the outer
+/// check.
+#[test]
+fn the_per_variant_cap_denies_before_the_record_bound_is_reached() {
+    let mut out = vec![0u8; brainix_bsp::BSP_MAX_RECORD_PLAINTEXT * 2];
+
+    let oversized_tokens = vec![0x41u8; brainix_bsp::MAX_TOKEN_CHUNK + 1];
+    assert_eq!(
+        ClientResponse::TokenChunk {
+            request_id: 7,
+            tokens: &oversized_tokens,
+        }
+        .encode(&mut out),
+        Err(brainix_bsp::BspError::TokenChunkExceedsMaximum)
+    );
+
+    let oversized_records = vec![0x42u8; brainix_bsp::MAX_AUDIT_CHUNK + 1];
+    assert_eq!(
+        AdminResponse::AuditChunk {
+            request_id: 9,
+            next_cursor: 0,
+            records: &oversized_records,
+        }
+        .encode(&mut out),
+        Err(brainix_bsp::BspError::AuditChunkExceedsMaximum)
+    );
+
+    assert!(
+        brainix_bsp::MAX_TOKEN_CHUNK < brainix_bsp::BSP_MAX_RECORD_PLAINTEXT
+            && brainix_bsp::MAX_AUDIT_CHUNK < brainix_bsp::BSP_MAX_RECORD_PLAINTEXT,
+        "if either cap ever reaches the record plaintext, the record bound stops \
+         being unreachable and its exemption in response.rs must be removed"
+    );
+}
