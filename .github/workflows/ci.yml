@@ -145,6 +145,33 @@ jobs:
         run: cargo build --target x86_64-unknown-none --release
 
   # ---------------------------------------------------------------------------
+  # 3b. Line coverage — the ratchet toward 100% on the covered set
+  #
+  # Distinct from tools/proof-coverage/, which tracks INVARIANT coverage (which
+  # of the eight headline invariants have Kani proofs). This measures whether
+  # tests actually execute the code. Both are required; neither substitutes for
+  # the other.
+  # ---------------------------------------------------------------------------
+  coverage:
+    name: Line Coverage
+    runs-on: ubuntu-latest
+    needs: supply-chain
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (pinned nightly)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-01
+          components: rust-src, llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Coverage gate
+        run: ./bin/coverage-gate.sh
+
+  # ---------------------------------------------------------------------------
   # 4. Formal verification — Kani on the capability-verify and adt-verify crates
   # ---------------------------------------------------------------------------
   kani:
