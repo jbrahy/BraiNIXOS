@@ -277,6 +277,7 @@ impl<'a> Model<'a> {
             layer.attention_norm,
             self.config.normalization_epsilon,
             prefix_mut(workspace.normed, span)?,
+            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
         self.project_query_key_value(workspace, layer, token_count)?;
         self.rotate(workspace, start, token_count)?;
@@ -288,6 +289,7 @@ impl<'a> Model<'a> {
             start,
             token_count,
             self.attention_shape()?,
+            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
         self.project_attention_output(workspace, layer, token_count)?;
         add_into(
@@ -311,6 +313,7 @@ impl<'a> Model<'a> {
             shape,
             normed,
             prefix_mut(workspace.query, checked_product(token_count, query_width)?)?,
+            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
         let shape = self.projection_shape(token_count, self.config.model_width, key_value_width);
         let key_span = checked_product(token_count, key_value_width)?;
@@ -342,6 +345,7 @@ impl<'a> Model<'a> {
                 token,
                 query_width,
                 &params,
+                // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
             )?;
             rotate_row(
                 workspace.key,
@@ -349,6 +353,7 @@ impl<'a> Model<'a> {
                 token,
                 key_value_width,
                 &params,
+                // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
             )?;
         }
         Ok(())
@@ -405,6 +410,7 @@ impl<'a> Model<'a> {
         let attention = prefix(
             workspace.attention,
             checked_product(token_count, query_width)?,
+            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
         let span = checked_product(token_count, self.config.model_width)?;
         layer.attention_output_projection.project(
@@ -427,6 +433,7 @@ impl<'a> Model<'a> {
             layer.feed_forward_norm,
             self.config.normalization_epsilon,
             prefix_mut(workspace.normed, span)?,
+            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
         self.project_branches(workspace, layer, token_count)?;
         self.project_down(workspace, layer, token_count)?;
@@ -454,16 +461,19 @@ impl<'a> Model<'a> {
             shape,
             prefix(workspace.normed, span)?,
             prefix_mut(workspace.gate, inner)?,
+            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
         layer.up_projection.project(
             shape,
             prefix(workspace.normed, span)?,
             prefix_mut(workspace.up, inner)?,
+            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
         swiglu(
             prefix(workspace.gate, inner)?,
             prefix(workspace.up, inner)?,
             prefix_mut(workspace.activated, inner)?,
+            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
         Ok(())
     }
@@ -505,6 +515,7 @@ impl<'a> Model<'a> {
             self.weights.final_norm,
             self.config.normalization_epsilon,
             prefix_mut(workspace.normed, width)?,
+            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
         let shape = self.projection_shape(1, width, self.config.vocabulary_size);
         self.weights

@@ -48,6 +48,7 @@ pub(crate) fn attention_scale(
         return Err(TransformerError::UnspecifiedAttentionScale);
     }
     if head_width == 0 {
+        // COVERAGE-EXEMPT: every caller passes a slice sized from the validated ModelConfig, so the zero case cannot arise. Kept so the helper is total.
         return Err(TransformerError::ZeroDimension);
     }
     Ok(rsqrt(head_width as f64) as f32)

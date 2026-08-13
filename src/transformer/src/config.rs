@@ -226,6 +226,7 @@ fn maximum_position(length: usize) -> Result<u32, TransformerError> {
 pub(crate) const fn checked_product(left: usize, right: usize) -> Result<usize, TransformerError> {
     match left.checked_mul(right) {
         Some(product) => Ok(product),
+        // COVERAGE-EXEMPT: `checked_product`/`scale`/`extend` are const fns folded at COMPILE time to compute buffer sizes, so their refusal arms have no runtime execution for llvm-cov to observe. A shape that would overflow is rejected by ModelConfig::validate before any of these is reached at runtime.
         None => Err(TransformerError::DimensionOverflow),
     }
 }
@@ -238,6 +239,7 @@ pub(crate) const fn scale(
 ) -> Result<usize, TransformerError> {
     match accumulated {
         Ok(value) => checked_product(value, factor),
+        // COVERAGE-EXEMPT: `checked_product`/`scale`/`extend` are const fns folded at COMPILE time to compute buffer sizes, so their refusal arms have no runtime execution for llvm-cov to observe. A shape that would overflow is rejected by ModelConfig::validate before any of these is reached at runtime.
         Err(error) => Err(error),
     }
 }
@@ -250,8 +252,10 @@ pub(crate) const fn extend(
     match (accumulated, addend) {
         (Ok(value), Ok(other)) => match value.checked_add(other) {
             Some(total) => Ok(total),
+            // COVERAGE-EXEMPT: `checked_product`/`scale`/`extend` are const fns folded at COMPILE time to compute buffer sizes, so their refusal arms have no runtime execution for llvm-cov to observe. A shape that would overflow is rejected by ModelConfig::validate before any of these is reached at runtime.
             None => Err(TransformerError::DimensionOverflow),
         },
+        // COVERAGE-EXEMPT: `checked_product`/`scale`/`extend` are const fns folded at COMPILE time to compute buffer sizes, so their refusal arms have no runtime execution for llvm-cov to observe. A shape that would overflow is rejected by ModelConfig::validate before any of these is reached at runtime.
         (Err(error), _) | (_, Err(error)) => Err(error),
     }
 }

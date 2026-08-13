@@ -70,6 +70,7 @@ pub(crate) fn copy_into(source: &[f32], destination: &mut [f32]) {
 /// residual can never be added over part of the stream.
 pub(crate) fn add_into(source: &[f32], destination: &mut [f32]) -> Result<(), TransformerError> {
     if source.len() != destination.len() {
+        // COVERAGE-EXEMPT: add_into is pub(crate) and every caller passes two slices taken from the same validated workspace geometry, so the lengths agree by construction. Kept so a future caller cannot add a residual over part of the stream.
         return Err(TransformerError::WorkspaceTooSmall);
     }
     for (value, slot) in source.iter().zip(destination.iter_mut()) {

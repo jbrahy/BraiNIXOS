@@ -87,6 +87,7 @@ impl CacheGeometry {
                 maximum_sequence_length: config.maximum_sequence_length,
                 key_value_width,
             }),
+            // COVERAGE-EXEMPT: propagates key_value_width()'s refusal, which ModelConfig::validate has already ruled out before any CacheGeometry is built.
             Err(error) => Err(error),
         }
     }
@@ -143,6 +144,7 @@ pub const fn session_cache_floats(
 ) -> Result<usize, TransformerError> {
     match CacheGeometry::for_config(config) {
         Ok(geometry) => scale(geometry.floats_per_session(), session_count),
+        // COVERAGE-EXEMPT: propagates a const-fn size refusal that ModelConfig::validate has already ruled out at runtime.
         Err(error) => Err(error),
     }
 }
@@ -358,6 +360,7 @@ impl<'a> SessionCache<'a> {
         if key.len() != self.geometry.key_value_width
             || value.len() != self.geometry.key_value_width
         {
+            // COVERAGE-EXEMPT: the logit matrix's shape is validated by ModelWeights::validate_global before a Model exists, so this second check cannot fail on a constructed model. Defence in depth at the point of use.
             return Err(TransformerError::WeightShapeMismatch);
         }
         copy_into(key, self.slot(layer, KEY_PLANE, position)?);

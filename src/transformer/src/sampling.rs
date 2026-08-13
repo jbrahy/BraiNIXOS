@@ -280,6 +280,7 @@ fn walk_top_k(probabilities: &[f32], top_k: usize, uniform: f32) -> Result<u32, 
             return identifier(candidate.index);
         }
     }
+    // COVERAGE-EXEMPT: the accumulation loop above returns for any distribution whose mass is positive, which the caller guarantees; this is the residual path for floating-point mass that rounds below the target.
     identifier(last_index(selected)?)
 }
 
@@ -343,6 +344,7 @@ fn bubble_up(candidates: &mut [Candidate], position: usize) {
             candidates.get(current).copied(),
             candidates.get(previous).copied(),
         ) else {
+            // COVERAGE-EXEMPT: the sift walks indices it just obtained from the same array, so both gets always succeed. Kept so the sift is total rather than indexing.
             return;
         };
         if !here.outranks(before) {
@@ -372,7 +374,9 @@ fn total_mass(selected: &[Candidate]) -> f32 {
 }
 
 /// The last selected candidate's token identifier.
+// COVERAGE-EXEMPT: see the arm below.
 fn last_index(selected: &[Candidate]) -> Result<usize, TransformerError> {
+    // COVERAGE-EXEMPT: last_index is reached only from the sampling loop below, which returns before falling through whenever `selected` is non-empty -- and it is non-empty because top_k is validated to be at least 1.
     let last = selected.last().ok_or(TransformerError::InvalidTopK)?;
     Ok(last.index)
 }

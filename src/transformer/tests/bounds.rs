@@ -421,3 +421,133 @@ fn a_workspace_built_for_another_model_is_refused() {
         Err(TransformerError::WorkspaceGeometryMismatch)
     );
 }
+
+// ------------------------------------------- deny paths found by coverage
+//
+// Every config hyperparameter arrives from a BXW1 header, which is hostile
+// input. These arms are what stop a malformed header from being turned into a
+// buffer size, so an unexecuted one is an untested refusal.
+
+#[test]
+fn a_zero_key_value_head_count_is_refused_rather_than_dividing_by_zero() {
+    let mut config = fixture_config(RopePairing::Interleaved);
+    config.key_value_head_count = 0;
+
+    assert_eq!(
+        config.query_heads_per_group(),
+        Err(TransformerError::InvalidKeyValueHeadCount),
+        "grouped-query attention divides by this; zero must refuse, not trap"
+    );
+}
+
+#[test]
+fn a_valid_key_value_head_count_reports_the_group_size() {
+    let config = fixture_config(RopePairing::Interleaved);
+    assert_eq!(
+        config.query_heads_per_group(),
+        Ok(2),
+        "4 query heads / 2 kv heads"
+    );
+}
+
+#[test]
+fn a_sequence_length_past_the_rope_bound_is_refused() {
+    let mut config = fixture_config(RopePairing::Interleaved);
+    config.maximum_sequence_length = usize::MAX;
+
+    let error = config
+        .validate()
+        .expect_err("an unbounded sequence must deny");
+    assert!(
+        matches!(
+            error,
+            TransformerError::SequenceLengthExceedsRopeBound | TransformerError::DimensionOverflow
+        ),
+        "got {error:?}"
+    );
+}
+
+#[test]
+fn the_model_reports_back_the_config_and_geometry_it_was_built_with() {
+    let config = fixture_config(RopePairing::Interleaved);
+    let fixture = Fixture::new(config, 0x900d_0031);
+    let layers = fixture.layer_views();
+    let model = Model::new(config, fixture.weights(&layers)).expect("the fixture is valid");
+
+    // A caller sizes its own cache and workspace from these, so a model that
+    // misreported them would have every downstream buffer sized wrongly.
+    assert_eq!(model.config().layer_count, config.layer_count);
+    assert_eq!(model.config().model_width, config.model_width);
+    assert_eq!(
+        model.cache_geometry(),
+        CacheGeometry::for_config(&config).expect("the fixture is valid")
+    );
+}
+
+#[test]
+fn a_tensor_kernel_error_is_carried_through_rather_than_flattened() {
+    // TransformerError::Kernel is how a tensor-layer refusal reaches the
+    // caller. Flattening it would lose which kernel refused and why.
+    let kernel = TransformerError::from(brainix_tensor::TensorError::ZeroDimension);
+    assert_eq!(
+        kernel,
+        TransformerError::Kernel(brainix_tensor::TensorError::ZeroDimension)
+    );
+}
+
+#[test]
+fn a_sequence_length_that_fits_a_u32_but_passes_the_rope_bound_is_refused() {
+    // Distinct from the usize::MAX case, which overflows earlier. This one is
+    // representable and still past what the RoPE tables cover, so it must be
+    // caught by the bound rather than silently producing garbage angles.
+    let mut config = fixture_config(RopePairing::Interleaved);
+    config.maximum_sequence_length = brainix_tensor::MAX_ROPE_POSITION as usize + 2;
+
+    assert_eq!(
+        config.validate(),
+        Err(TransformerError::SequenceLengthExceedsRopeBound)
+    );
+}
+
+#[test]
+fn a_token_embedding_table_of_the_wrong_size_is_refused() {
+    // The embedding table's length is vocabulary_size × model_width. A header
+    // that disagrees with its own payload must deny rather than index into
+    // whatever follows.
+    let config = fixture_config(RopePairing::Interleaved);
+    let fixture = Fixture::new(config, 0x900d_0041);
+    let layers = fixture.layer_views();
+
+    let mut shrunk = config;
+    shrunk.vocabulary_size = config.vocabulary_size + 1;
+
+    assert_eq!(
+        Model::new(shrunk, fixture.weights(&layers)).unwrap_err(),
+        TransformerError::WeightShapeMismatch,
+        "a vocabulary the embedding table cannot cover must deny"
+    );
+}
+
+#[test]
+fn a_cache_arena_with_any_zero_dimension_is_refused() {
+    let config = fixture_config(RopePairing::Interleaved);
+    let sound = CacheGeometry::for_config(&config).expect("the fixture is valid");
+    let mut storage = vec![0.0_f32; session_cache_floats(&config, MAXIMUM_BATCH).expect("sizes")];
+
+    // Each dimension independently: a zero in any of the three makes every
+    // derived offset degenerate, so the arena must refuse rather than hand back
+    // slices that overlap.
+    for zeroed in ["layer_count", "maximum_sequence_length", "key_value_width"] {
+        let mut geometry = sound;
+        match zeroed {
+            "layer_count" => geometry.layer_count = 0,
+            "maximum_sequence_length" => geometry.maximum_sequence_length = 0,
+            _ => geometry.key_value_width = 0,
+        }
+        assert_eq!(
+            KeyValueArena::new(&mut storage, geometry).err(),
+            Some(TransformerError::ZeroDimension),
+            "a zero {zeroed} was accepted"
+        );
+    }
+}
