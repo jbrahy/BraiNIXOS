@@ -1,6 +1,44 @@
 //! BraiNIX SSH server — an SSH-2.0 implementation integrated into the OS,
 //! served over the kernel TCP stack.
 //!
+//! # ⚠️ Dev-era scaffolding, not the product
+//!
+//! `NORTH_STAR.md` §*Non-goals* names **"a general-purpose remote shell"** a
+//! non-goal, and states that administration is explicitly *not* a shell,
+//! because "a shell that can do anything is ambient authority under another
+//! name, which is exactly what the capability model exists to forbid."
+//!
+//! Remote management is the BSP v2 admin session's **six frozen verbs**
+//! (`enroll-key`, `revoke-key`, `load-weights`, `read-audit-log`,
+//! `restart-server`, `reboot`), with the serial console as break-glass.
+//!
+//! This module's crypto was **ported** into `src/transport-crypto/` by P2-T2
+//! (copied, not moved — see `architecture/BSP-v2-serving-protocol.md` §14), and
+//! `boot/ssh_bridge.rs` is deleted by **P2-T6**. Nothing is scheduled to run
+//! this code, and it is x86-64-era: it would need a full aarch64 port to
+//! survive on the only supported platform.
+
+// Lint suppression, scoped to this dead module and justified rather than
+// blanket-applied.
+//
+// These fire ~156 times here and have been failing CI continuously -- invisible
+// until 2026-08-12, because Style Check died at `cargo fmt` before ever reaching
+// clippy. Fixing them would be careful work on code that P2-T6 orphans and that
+// no scheduled task runs.
+//
+// REMOVE THIS BLOCK when P2-T6 deletes the SSH bridge. If this module somehow
+// outlives P2-T6, that is a signal the suppression is hiding live code and the
+// lints should be fixed instead.
+#![allow(clippy::arithmetic_side_effects)]
+#![allow(clippy::cognitive_complexity)]
+#![allow(clippy::too_many_arguments)]
+// `identity_op` fires on poly1305's explicit `& 0xffff_ffff` masks. Those are
+// deliberate: they mirror the reference implementation's 32-bit limb discipline
+// and make the field arithmetic auditable against it. Clippy is technically
+// correct that the mask is a no-op on a u32 and wrong about whether it should
+// go -- in crypto, matching the reference beats terseness.
+#![allow(clippy::identity_op)]
+//!
 //! Layered build-out (RFC 4251-4254):
 //!   1. version exchange                                   — DONE
 //!   2. binary packet protocol + KEXINIT negotiation       — DONE
