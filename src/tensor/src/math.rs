@@ -89,7 +89,18 @@ fn round_to_nearest(value: f64) -> f64 {
 /// Returns `0.0` below the normal range and `+Inf` above it rather than
 /// producing a nonsense exponent, so the function is total for every `i64`.
 fn two_pow(k: i64) -> f64 {
-    let biased = k.wrapping_add(F64_EXPONENT_BIAS);
+    // `saturating_add`, not `wrapping_add`. With wrapping, a large positive `k`
+    // overflowed to a large NEGATIVE `biased`, took the underflow branch, and
+    // returned 0.0 for an argument meaning "astronomically large" — the exact
+    // inversion the doc comment above promises this function does not make.
+    // `two_pow(i64::MAX)` returned 0.0 instead of +Inf.
+    //
+    // Found by a coverage test written to reach the two saturation guards,
+    // which had never been executed. `exp` only ever calls this with a `kf`
+    // bounded by its own argument reduction, so the defect was latent rather
+    // than reachable through the public API — but "total for every `i64`" was
+    // not true, and this makes it true.
+    let biased = k.saturating_add(F64_EXPONENT_BIAS);
     if biased <= 0 {
         return 0.0;
     }
@@ -321,7 +332,7 @@ pub(crate) fn sin_cos(x: f64) -> (f64, f64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{exp, ln, powf, rsqrt, sin_cos, MAX_SIN_COS_ARG};
+    use super::{exp, ln, powf, rsqrt, sin_cos, two_pow, MAX_SIN_COS_ARG};
 
     /// Deterministic xorshift64\* — the tests must not depend on a host RNG.
     struct Rng(u64);
@@ -374,7 +385,7 @@ mod tests {
         let mut rng = Rng(0x0fed_cba9_8765_4321);
         let mut worst = 0.0_f64;
         for _ in 0..20_000 {
-            let x = exp(rng.next_range(-200.0, 200.0));
+            let x = exp(rng.next_range(-800.0, 800.0));
             if x == 0.0 || !x.is_finite() {
                 continue;
             }
@@ -409,7 +420,7 @@ mod tests {
         let mut rng = Rng(0x5555_aaaa_5555_aaaa);
         let mut worst = 0.0_f64;
         for _ in 0..20_000 {
-            let x = exp(rng.next_range(-200.0, 200.0));
+            let x = exp(rng.next_range(-800.0, 800.0));
             if x == 0.0 || !x.is_finite() {
                 continue;
             }
@@ -445,5 +456,33 @@ mod tests {
             let (s, c) = sin_cos(x);
             assert!((s * s + c * c - 1.0).abs() < 1e-12);
         }
+    }
+
+    /// Closes regions coverage showed unexecuted: `two_pow`'s saturation
+    /// guards, which are what make it total for every `i64` rather than
+    /// producing a nonsense exponent, and `relative_error`'s zero-reference
+    /// arm.
+    #[test]
+    fn two_pow_saturates_instead_of_wrapping_the_exponent_field() {
+        assert_eq!(two_pow(0), 1.0);
+        assert_eq!(two_pow(1), 2.0);
+        assert_eq!(two_pow(-1), 0.5);
+
+        // Below the normal range: 0.0, not a wrapped exponent.
+        assert_eq!(two_pow(-1023), 0.0);
+        assert_eq!(two_pow(-4096), 0.0);
+        assert_eq!(two_pow(i64::MIN), 0.0);
+
+        // Above it: +Inf, not a wrapped exponent.
+        assert_eq!(two_pow(1024), f64::INFINITY);
+        assert_eq!(two_pow(4096), f64::INFINITY);
+        assert_eq!(two_pow(i64::MAX), f64::INFINITY);
+    }
+
+    #[test]
+    fn relative_error_falls_back_to_absolute_error_against_a_zero_reference() {
+        assert_eq!(relative_error(0.0, 0.0), 0.0);
+        assert_eq!(relative_error(2.5, 0.0), 2.5);
+        assert_eq!(relative_error(-2.5, 0.0), 2.5);
     }
 }

@@ -337,3 +337,27 @@ impl<'a> Q8Weights<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `read_f32_le` is `pub(crate)`, so its rejection arm is unreachable from
+    /// the integration suite and coverage showed it unexecuted. The arm is the
+    /// whole reason the function returns `Option` rather than indexing.
+    #[test]
+    fn read_f32_le_accepts_exactly_four_bytes_and_nothing_else() {
+        assert_eq!(read_f32_le(&1.0_f32.to_le_bytes()), Some(1.0));
+        assert_eq!(read_f32_le(&[0, 0, 0, 0]), Some(0.0));
+
+        // `no_std`: fixed slices rather than `vec!`.
+        let eight = [0u8; 8];
+        for wrong_length in [0usize, 1, 2, 3, 5, 8] {
+            assert_eq!(
+                read_f32_le(&eight[..wrong_length]),
+                None,
+                "{wrong_length} bytes is not a binary32 and must not be guessed at"
+            );
+        }
+    }
+}

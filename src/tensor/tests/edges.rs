@@ -727,3 +727,110 @@ fn silu_is_zero_at_zero_and_saturates_gracefully() {
     assert!(out[3].abs() < 1e-30, "{}", out[3]);
     assert!(out.iter().all(|v| v.is_finite()));
 }
+
+// ---------------------------------------------- deny paths found by coverage
+//
+// Every test below closes a region that line coverage showed unexecuted. They
+// are all rejection paths, which is the point: a parser's error arms are the
+// half an agreement test never reaches, and an unexecuted `return Err(..)` is
+// an untested claim about what the code refuses.
+
+#[test]
+fn rope_rejects_an_empty_input() {
+    let mut out: Vec<f32> = Vec::new();
+    let error = rope(
+        &[],
+        &RopeParams {
+            d_head: 4,
+            rope_dim: 4,
+            base: 1.0e4,
+            pairing: RopePairing::Interleaved,
+            position: 0,
+        },
+        &mut out,
+    )
+    .expect_err("an empty input has no heads to rotate");
+    assert_eq!(error, TensorError::ZeroDimension);
+}
+
+#[test]
+fn rope_rejects_an_output_of_a_different_length() {
+    let x = vec![0.0_f32; 8];
+    let mut out = vec![f32::NAN; 7];
+    let error = rope(
+        &x,
+        &RopeParams {
+            d_head: 4,
+            rope_dim: 4,
+            base: 1.0e4,
+            pairing: RopePairing::Interleaved,
+            position: 0,
+        },
+        &mut out,
+    )
+    .expect_err("a short output buffer must deny, never truncate");
+    assert_eq!(error, TensorError::ShapeMismatch);
+}
+
+#[test]
+fn rope_rejects_an_input_that_is_not_a_whole_number_of_heads() {
+    let x = vec![0.0_f32; 9];
+    let mut out = vec![f32::NAN; 9];
+    let error = rope(
+        &x,
+        &RopeParams {
+            d_head: 4,
+            rope_dim: 4,
+            base: 1.0e4,
+            pairing: RopePairing::Interleaved,
+            position: 0,
+        },
+        &mut out,
+    )
+    .expect_err("9 is not a multiple of d_head 4");
+    assert_eq!(error, TensorError::ShapeMismatch);
+}
+
+#[test]
+fn derived_payload_len_rejects_a_zero_dimension() {
+    assert_eq!(
+        Q8Weights::derived_payload_len(0, Q8_0_BLOCK),
+        Err(TensorError::ZeroDimension)
+    );
+    assert_eq!(
+        Q8Weights::derived_payload_len(4, 0),
+        Err(TensorError::ZeroDimension)
+    );
+}
+
+#[test]
+fn derived_payload_len_rejects_a_width_that_is_not_block_aligned() {
+    assert_eq!(
+        Q8Weights::derived_payload_len(4, Q8_0_BLOCK + 1),
+        Err(TensorError::NotBlockAligned),
+        "Q8_0 stores whole blocks; a partial trailing block has no representation"
+    );
+}
+
+#[test]
+fn dequantize_into_rejects_a_destination_of_the_wrong_size() {
+    let n_out = 2;
+    let n_in = Q8_0_BLOCK;
+    let payload_len = Q8Weights::derived_payload_len(n_out, n_in).unwrap();
+    let payload = vec![0u8; payload_len];
+    let weights = Q8Weights::new(&payload, n_out, n_in).unwrap();
+
+    let mut too_small = vec![0.0_f32; n_out * n_in - 1];
+    assert_eq!(
+        weights.dequantize_into(&mut too_small),
+        Err(TensorError::ShapeMismatch)
+    );
+
+    let mut too_large = vec![0.0_f32; n_out * n_in + 1];
+    assert_eq!(
+        weights.dequantize_into(&mut too_large),
+        Err(TensorError::ShapeMismatch),
+        "an oversized destination is as wrong as a short one: the caller has \
+         the shape wrong either way, and silently filling a prefix would hide it"
+    );
+}
