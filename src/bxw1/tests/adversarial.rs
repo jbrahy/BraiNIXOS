@@ -987,3 +987,47 @@ fn a_nonzero_trailing_pad_denies() {
     blob.patch_byte(offset + length + 1, 0xFF);
     assert_eq!(blob.error(), Bxw1Error::NonZeroPadByte);
 }
+
+// --------------------------------------------- deny paths found by coverage
+
+/// §6.3: every required tensor must be present. Dropping one must deny by
+/// name, not by producing a model that silently computes with a missing
+/// weight.
+#[test]
+fn a_blob_missing_a_required_tensor_denies() {
+    let shape = ModelShape::default();
+    let mut specs = common::required_tensors(&shape);
+    let dropped = specs.remove(0);
+    let blob = common::build(&shape, specs);
+
+    // The COUNT check fires before the name check: the architecture fixes how
+    // many tensors a conforming blob has, so removing one is caught as a count
+    // violation and MissingRequiredTensor is never reached this way. Pinned
+    // here so the ordering is a stated property rather than an accident, and so
+    // the exemption on names.rs has something to point at.
+    assert_eq!(
+        blob.error(),
+        Bxw1Error::TensorCountNotArchRequired,
+        "dropping {} must deny",
+        dropped.name
+    );
+}
+
+/// Rule D13/D14 ordering: which check catches a tensor extent that runs past
+/// the declared data region.
+///
+/// Written while chasing two uncovered arms, `ExtentPastDataRegion` and
+/// `ExtentExceedsRegionCapacity`. Shrinking `tensor_data_len` without
+/// truncating the blob is caught earlier, by the rule that the region must end
+/// exactly at the blob's end. Pinning that here means the ordering is a stated
+/// property, and the exemptions on those two arms have something to point at.
+#[test]
+fn shrinking_the_declared_data_region_is_caught_before_any_extent_is_examined() {
+    let mut blob = valid_blob();
+    blob.patch_u64(header::TENSOR_DATA_LEN, 128);
+    let error = blob.error();
+    assert!(
+        error != Bxw1Error::ExtentPastDataRegion && error != Bxw1Error::ExtentExceedsRegionCapacity,
+        "an earlier rule must deny first, got {error:?}"
+    );
+}

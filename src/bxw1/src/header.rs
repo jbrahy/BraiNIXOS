@@ -358,6 +358,7 @@ impl Metadata {
 
         let vocab_digest = copy_digest(
             read_field(blob, offset::VOCAB_DIGEST, DIGEST_LEN).ok_or(Bxw1Error::TruncatedHeader)?,
+            // COVERAGE-EXEMPT: copy_digest cannot fail here: read_field above already returned exactly DIGEST_LEN bytes or None.
         )?;
         let vocab_len = read_u64_le(blob, offset::VOCAB_LEN).ok_or(Bxw1Error::TruncatedHeader)?;
         if vocab_len == 0 {
@@ -584,6 +585,7 @@ fn require_zero_field(blob: &[u8], at: usize, length: usize) -> Result<(), Bxw1E
 /// Copies a 32-byte digest field into an owned array without indexing.
 fn copy_digest(field: &[u8]) -> Result<[u8; DIGEST_LEN], Bxw1Error> {
     if field.len() != DIGEST_LEN {
+        // COVERAGE-EXEMPT: every caller passes a slice from read_field(.., DIGEST_LEN), which already guarantees the length. Kept so copy_digest is total for any slice.
         return Err(Bxw1Error::TruncatedHeader);
     }
     let mut digest = [0_u8; DIGEST_LEN];

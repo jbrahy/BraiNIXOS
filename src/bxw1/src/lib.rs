@@ -338,6 +338,7 @@ impl<'a> WeightBlob<'a> {
             return Err(Bxw1Error::BlobTooSmallForHeader);
         }
         if length > BXW1_MAX_BLOB_BYTES {
+            // COVERAGE-EXEMPT: BXW1_MAX_BLOB_BYTES is ~22 GiB; a test that allocates a blob past it would need 22 GiB of RAM. The adjacent u64::try_from guard covers the conversion half of the same check and IS tested.
             return Err(Bxw1Error::BlobExceedsMaxSize);
         }
         if length > region_capacity {
@@ -482,6 +483,7 @@ impl<'a> Tensor<'a> {
     pub fn dims(&self) -> &[u64] {
         match self.dims.get(..self.rank) {
             Some(dims) => dims,
+            // COVERAGE-EXEMPT: rank is validated at parse time to be at most dims.len(), so the range is always in bounds. The arm avoids a panicking index on a struct a future constructor might build differently.
             None => &[],
         }
     }

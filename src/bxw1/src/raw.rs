@@ -34,6 +34,7 @@ pub(crate) fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
     let end = offset.checked_add(U16_LEN)?;
     match bytes.get(offset..end)? {
         [b0, b1] => Some(u16::from_le_bytes([*b0, *b1])),
+        // COVERAGE-EXEMPT: `bytes.get(offset..end)?` above already guarantees the slice is exactly this many bytes, so the pattern always matches. The arm exists because the compiler cannot prove the length, and it is what keeps the function total instead of indexing.
         _ => None,
     }
 }
@@ -43,6 +44,7 @@ pub(crate) fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
     let end = offset.checked_add(U32_LEN)?;
     match bytes.get(offset..end)? {
         [b0, b1, b2, b3] => Some(u32::from_le_bytes([*b0, *b1, *b2, *b3])),
+        // COVERAGE-EXEMPT: `bytes.get(offset..end)?` above already guarantees the slice is exactly this many bytes, so the pattern always matches. The arm exists because the compiler cannot prove the length, and it is what keeps the function total instead of indexing.
         _ => None,
     }
 }
@@ -55,6 +57,7 @@ pub(crate) fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
         [b0, b1, b2, b3, b4, b5, b6, b7] => {
             Some(u64::from_le_bytes([*b0, *b1, *b2, *b3, *b4, *b5, *b6, *b7]))
         }
+        // COVERAGE-EXEMPT: `bytes.get(offset..end)?` above already guarantees the slice is exactly this many bytes, so the pattern always matches. The arm exists because the compiler cannot prove the length, and it is what keeps the function total instead of indexing.
         _ => None,
     }
 }

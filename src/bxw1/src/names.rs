@@ -206,6 +206,7 @@ impl SlotSet {
         if self.contains(slot.bit()?)? {
             Ok(())
         } else {
+            // COVERAGE-EXEMPT: unreachable because the tensor COUNT check denies first -- the architecture fixes the count, so a blob missing a required tensor is rejected as TensorCountNotArchRequired. Pinned by a_blob_missing_a_required_tensor_denies.
             Err(Bxw1Error::MissingRequiredTensor)
         }
     }
@@ -294,6 +295,7 @@ fn classify(name: &[u8], n_layers: u32) -> Option<Slot> {
 /// complete.
 fn parse_layer_index(digits: &[u8]) -> Option<u32> {
     if digits.is_empty() || digits.len() > MAX_INDEX_DIGITS {
+        // COVERAGE-EXEMPT: same as below: an overlong or empty digit run is caught as UnknownTensorName by the name matcher first.
         return None;
     }
     if digits.len() > 1 && digits.first() == Some(&b'0') {
@@ -303,6 +305,7 @@ fn parse_layer_index(digits: &[u8]) -> Option<u32> {
     for byte in digits {
         let digit = byte.checked_sub(b'0')?;
         if digit > 9 {
+            // COVERAGE-EXEMPT: parse_layer_index is only reached for a name whose shape already matched the layer pattern, and the table walk rejects a non-digit or overlong index as UnknownTensorName before this. Kept so the parser is total.
             return None;
         }
         value = value.checked_mul(10)?.checked_add(u32::from(digit))?;

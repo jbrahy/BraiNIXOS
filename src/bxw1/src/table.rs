@@ -327,11 +327,13 @@ pub(crate) fn walk_extent(
         .checked_add(header.tensor_data_len)
         .ok_or(Bxw1Error::TensorDataExtentOverflow)?;
     if end > region_end {
+        // COVERAGE-EXEMPT: same ordering as the capacity check below.
         return Err(Bxw1Error::ExtentPastDataRegion);
     }
     // Rule D14, checked in addition to D13: the blob's own accounting agreeing
     // with itself says nothing about whether it fits in memory.
     if end > region_capacity {
+        // COVERAGE-EXEMPT: defence in depth behind rule H11: the data region must end exactly at the blob's end, so a shrunk tensor_data_len is denied before any extent is examined. Pinned by shrinking_the_declared_data_region_is_caught_before_any_extent_is_examined.
         return Err(Bxw1Error::ExtentExceedsRegionCapacity);
     }
 

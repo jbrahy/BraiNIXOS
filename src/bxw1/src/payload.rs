@@ -148,6 +148,7 @@ fn verify_content(record: &Record<'_>, payload: &[u8]) -> Result<(), Bxw1Error> 
 fn le_bits(bytes: &[u8]) -> Option<u32> {
     match bytes {
         [b0, b1, b2, b3] => Some(u32::from_le_bytes([*b0, *b1, *b2, *b3])),
+        // COVERAGE-EXEMPT: le_bits is only ever called with a chunks_exact(4) slice, so the pattern always matches. Kept so the function is total rather than indexing.
         _ => None,
     }
 }

@@ -154,3 +154,44 @@ fn a_region_exactly_the_size_of_the_blob_is_enough() {
     );
     assert!(REGION_CAPACITY > capacity);
 }
+
+// ------------------------------------------------ round trips found by coverage
+//
+// `to_bxw1` is the encoder half of the enum mapping. Coverage showed only the
+// decoder half (`from_bxw1`) had ever run, which means the tool that WRITES a
+// blob and the loader that reads one had never been checked against each other.
+// A drift there produces a file that this loader rejects and no test catches.
+
+#[test]
+fn dtype_round_trips_through_its_bxw1_value() {
+    for dtype in [Dtype::F32, Dtype::Q8] {
+        assert_eq!(
+            Dtype::from_bxw1(dtype.to_bxw1()),
+            Ok(dtype),
+            "{dtype:?} did not survive the encode/decode round trip"
+        );
+    }
+    // Normative values (§5.4): a blob written by any other tool carries these
+    // numbers, so they are not free to follow the enum's declaration order.
+    assert_eq!(Dtype::F32.to_bxw1(), Dtype::BXW1_F32);
+    assert_eq!(Dtype::Q8.to_bxw1(), Dtype::BXW1_Q8_0);
+}
+
+#[test]
+fn rope_pairing_round_trips_through_its_bxw1_value() {
+    for pairing in [RopePairing::Interleaved, RopePairing::HalfSplit] {
+        assert_eq!(
+            RopePairing::from_bxw1(pairing.to_bxw1()),
+            Ok(pairing),
+            "{pairing:?} did not survive the encode/decode round trip"
+        );
+    }
+    assert_eq!(
+        RopePairing::Interleaved.to_bxw1(),
+        RopePairing::BXW1_INTERLEAVED
+    );
+    assert_eq!(
+        RopePairing::HalfSplit.to_bxw1(),
+        RopePairing::BXW1_HALF_SPLIT
+    );
+}
