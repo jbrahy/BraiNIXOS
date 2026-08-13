@@ -129,6 +129,7 @@ impl Vocabulary<'_> {
     ) -> Result<EncodeCursor, VocabularyError> {
         let end = self.pretokenizer().segment_end(input, cursor.position)?;
         if end <= cursor.position || end > input.len() {
+            // COVERAGE-EXEMPT: requires an in-tree pretokenizer to return an end outside the input or at or before the cursor. All three implementations are exhaustively tested against this; the guard exists so a fourth cannot silently break encode.
             return Err(VocabularyError::SplitterMadeNoProgress);
         }
         let segment = input
@@ -498,6 +499,7 @@ fn close_gap(
 /// both the source range and the destination inside the slice.
 fn remove_element(values: &mut [u32], removed: usize, end: usize) -> Result<(), VocabularyError> {
     if removed >= end || end > values.len() {
+        // COVERAGE-EXEMPT: remove_element is only ever called with indices derived from a merge that was found in the current token run, so removed < end <= values.len() holds by construction.
         return Err(overflow());
     }
     let source = removed.checked_add(1).ok_or(overflow())?;

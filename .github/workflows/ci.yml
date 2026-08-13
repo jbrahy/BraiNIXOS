@@ -169,7 +169,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Coverage gate
-        run: ./bin/coverage-gate.sh
+        run: ./bin/coverage-gate.py
 
   # ---------------------------------------------------------------------------
   # 4. Formal verification — Kani on the capability-verify and adt-verify crates

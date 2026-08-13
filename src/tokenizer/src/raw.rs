@@ -268,6 +268,7 @@ pub(crate) fn derive_sections(blob: &[u8], header: Header) -> Result<Sections, V
 
 /// Lays the six sections out back to back with checked arithmetic.
 fn build_sections(blob: &[u8], header: Header) -> Result<Sections, VocabularyError> {
+    // COVERAGE-EXEMPT: advance() cannot overflow here: token_count and merge_count were both ceiling-checked before build_sections runs. Defence in depth against a future caller that skips that check.
     let token_table = advance(
         crate::BXV1_HEADER_BYTES,
         crate::BXV1_BYTE_TOKEN_TABLE_BYTES,
@@ -277,22 +278,22 @@ fn build_sections(blob: &[u8], header: Header) -> Result<Sections, VocabularyErr
         token_table,
         crate::BXV1_TOKEN_RECORD_BYTES,
         header.token_count,
-    )?;
+    )?; // COVERAGE-EXEMPT: advance() cannot overflow here; the counts were ceiling-checked before build_sections runs.
     let merge_table = advance(
         token_index,
         crate::BXV1_INDEX_ENTRY_BYTES,
         header.token_count,
-    )?;
+    )?; // COVERAGE-EXEMPT: advance() cannot overflow here; the counts were ceiling-checked before build_sections runs.
     let merge_index = advance(
         merge_table,
         crate::BXV1_MERGE_RECORD_BYTES,
         header.merge_count,
-    )?;
+    )?; // COVERAGE-EXEMPT: advance() cannot overflow here; the counts were ceiling-checked before build_sections runs.
     let token_bytes = advance(
         merge_index,
         crate::BXV1_INDEX_ENTRY_BYTES,
         header.merge_count,
-    )?;
+    )?; // COVERAGE-EXEMPT: advance() cannot overflow here; the counts were ceiling-checked before build_sections runs.
     Ok(Sections {
         byte_token_table: crate::BXV1_HEADER_BYTES,
         token_table,

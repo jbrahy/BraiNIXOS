@@ -175,6 +175,7 @@ fn run_end(input: &[u8], start: usize, class: ByteClass) -> usize {
         if classify(*byte) != class {
             break;
         }
+        // COVERAGE-EXEMPT: end.checked_add(1) can only return None at usize::MAX, which needs a 2^64-byte input. MAX_ENCODE_INPUT_BYTES is 16 KiB.
         end = match end.checked_add(1) {
             Some(next) => next,
             None => break,
@@ -279,6 +280,7 @@ fn whitespace_prefixed_segment_end(
 fn preceded_by_space(input: &[u8], position: usize) -> bool {
     let previous = match position.checked_sub(1) {
         Some(index) => index,
+        // COVERAGE-EXEMPT: preceded_by_space is only called with position >= 1, per its own contract.
         None => return false,
     };
     input.get(previous) == Some(&b' ')
