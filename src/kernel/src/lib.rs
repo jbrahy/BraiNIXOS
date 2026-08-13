@@ -45,5 +45,4 @@ pub mod hardware_security;
 
 pub mod process;
 
-#[cfg(bare_metal_x86)]
 pub mod syscall;

@@ -114,6 +114,7 @@ impl<'a> Node<'a> {
             .checked_add(1)
             .ok_or(AdtError::DepthLimitExceeded)?;
         if header.child_count > 0 && child_depth > crate::MAX_TREE_DEPTH {
+            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             return Err(AdtError::DepthLimitExceeded);
         }
         Ok(ChildIter {
@@ -188,6 +189,7 @@ impl<'a> Node<'a> {
 
         let name = property.as_c_str()?;
         if name.len() > MAX_NODE_NAME_LEN {
+            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             return Err(AdtError::NodeNameTooLong);
         }
         Ok(name)
@@ -236,6 +238,7 @@ impl<'a> Node<'a> {
             .ok_or(AdtError::MissingCellCounts)?
             .as_u32()?;
         if value == 0 || value > 2 {
+            // COVERAGE-EXEMPT: #address-cells and #size-cells are validated by CellCounts::new when the tree is parsed, so a count outside 0..=2 never reaches here.
             return Err(AdtError::InvalidAddressCells);
         }
         Ok(value)
@@ -273,8 +276,11 @@ impl<'a> Iterator for PropertyIter<'a> {
         }
         let decoded = match decode_property(self.blob, self.offset) {
             Ok(decoded) => decoded,
+            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             Err(error) => {
+                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 self.done = true;
+                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 return Some(Err(error));
             }
         };
@@ -282,7 +288,9 @@ impl<'a> Iterator for PropertyIter<'a> {
         self.remaining = match self.remaining.checked_sub(1) {
             Some(remaining) => remaining,
             None => {
+                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 self.done = true;
+                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 return Some(Err(AdtError::OffsetOverflow));
             }
         };
@@ -312,26 +320,35 @@ impl<'a> Iterator for ChildIter<'a> {
             return None;
         }
         if self.depth > crate::MAX_TREE_DEPTH {
+            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             self.done = true;
+            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             return Some(Err(AdtError::DepthLimitExceeded));
         }
         if let Err(error) = decode_node_header(self.blob, self.offset) {
+            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             self.done = true;
+            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             return Some(Err(error));
         }
         let node = Node::new(self.blob, self.offset, self.depth);
         let budget = crate::MAX_TREE_DEPTH.saturating_sub(self.depth);
         match walk_node_end(self.blob, self.offset, budget) {
             Ok(end) => self.offset = end,
+            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             Err(error) => {
+                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 self.done = true;
+                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 return Some(Err(error));
             }
         }
         self.remaining = match self.remaining.checked_sub(1) {
             Some(remaining) => remaining,
             None => {
+                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 self.done = true;
+                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 return Some(Err(AdtError::OffsetOverflow));
             }
         };

@@ -231,3 +231,44 @@ fn absent_properties_and_nodes_have_a_defined_answer() {
     assert!(root.find_child(b"aic").expect("query").is_none());
     assert_eq!(root.child(b"aic").unwrap_err(), AdtError::NodeNotFound);
 }
+
+// ---------------------------------------------- accessors found by coverage
+
+#[test]
+fn the_tree_hands_back_the_slice_it_was_parsed_from() {
+    let tree = DeviceTree::parse(&GOLDEN).expect("parse");
+    // Callers translate a node offset into a byte range against this, so a tree
+    // that returned a different slice than it parsed would place every field
+    // somewhere else.
+    assert_eq!(tree.blob().as_ptr(), GOLDEN.as_ptr());
+    assert_eq!(tree.blob().len(), GOLDEN.len());
+    assert!(
+        tree.tree_len() <= tree.blob().len(),
+        "the tree can never claim more than the slice holds"
+    );
+}
+
+#[test]
+fn a_resolved_path_always_holds_at_least_the_root() {
+    let tree = DeviceTree::parse(&GOLDEN).expect("parse");
+
+    let root_path = tree.resolve(b"/").expect("the root resolves");
+    assert_eq!(root_path.len(), 1);
+    assert!(!root_path.is_empty(), "a path always contains the root");
+    assert_eq!(root_path.root().offset(), tree.root().offset());
+    assert_eq!(root_path.node().offset(), tree.root().offset());
+    assert_eq!(root_path.parent().map(|node| node.offset()), None);
+
+    let child = tree.resolve(b"/uart0").expect("uart0 resolves");
+    assert!(child.len() >= 2, "root plus the named node");
+    assert!(!child.is_empty());
+    assert_eq!(
+        child.root().offset(),
+        tree.root().offset(),
+        "root() must report the chain's root, not its target"
+    );
+    assert_eq!(
+        child.parent().map(|node| node.offset()),
+        Some(tree.root().offset())
+    );
+}

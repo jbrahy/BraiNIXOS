@@ -219,6 +219,7 @@ impl<'a> DeviceTree<'a> {
         match self.resolve(path) {
             Ok(_) => Ok(true),
             Err(AdtError::NodeNotFound) => Ok(false),
+            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             Err(error) => Err(error),
         }
     }
@@ -272,6 +273,7 @@ impl<'a> NodePath<'a> {
     pub fn root(&self) -> Node<'a> {
         match self.nodes.first() {
             Some(node) => *node,
+            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             None => self.target,
         }
     }

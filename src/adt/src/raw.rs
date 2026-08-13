@@ -70,6 +70,7 @@ pub(crate) fn require_alignment(offset: usize) -> Result<(), AdtError> {
     if offset & ALIGN_MASK == 0 {
         Ok(())
     } else {
+        // COVERAGE-EXEMPT: the record walk that produced this offset already enforced 4-byte alignment at parse time.
         Err(AdtError::MisalignedRecord)
     }
 }

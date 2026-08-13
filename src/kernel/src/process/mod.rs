@@ -24,7 +24,6 @@ pub mod elf_load_into_address_space;
 pub mod elf_loader;
 pub mod module_loader;
 pub mod process_table;
-#[cfg(bare_metal_x86)]
 pub mod server_launch;
 
 /// Re-export ProcessType so kernel code can reference it as `process::ProcessType`.

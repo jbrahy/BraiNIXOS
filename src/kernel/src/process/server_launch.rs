@@ -222,7 +222,7 @@ fn write_capability_into_slot(
 ///
 /// Enforces INV-AUTH-001 (empty CSpace), INV-MEM-002 (KPTI), and
 /// INV-MEM-003 (W^X).
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 pub fn create_server_process_from_elf(
     process_type: ProcessType,
     elf_module_bytes: &[u8],
@@ -238,7 +238,7 @@ pub fn create_server_process_from_elf(
     build_loaded_process(process_type, entry_point, elf_module_bytes, &segments)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 fn build_loaded_process(
     process_type: ProcessType,
     entry_point: u64,
@@ -262,7 +262,7 @@ fn build_loaded_process(
 
 /// Returns the physical address of a freshly built user PML4 root, for use as
 /// the thread's CR3 value when the dispatcher returns to Ring 3.
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 fn compute_user_page_table_physical_address(
     user_page_map_level_4: &x86_64::structures::paging::PageTable,
 ) -> u64 {
@@ -272,7 +272,7 @@ fn compute_user_page_table_physical_address(
     .as_u64()
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 fn build_layout_for_loaded_process(
     entry_point: u64,
 ) -> Result<
@@ -283,13 +283,13 @@ fn build_layout_for_loaded_process(
         .map_err(map_address_space_error_to_elf_load_error)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 fn acquire_fresh_user_page_map_level_4() -> &'static mut x86_64::structures::paging::PageTable {
     // SAFETY: Single-core boot, no concurrent access to the bootstrap pool.
     unsafe { crate::arch::paging::kernel_page_table::allocate_user_page_map_level_4() }
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 fn load_segments_and_stack(
     user_page_map_level_4: &mut x86_64::structures::paging::PageTable,
     elf_module_bytes: &[u8],
@@ -311,7 +311,7 @@ fn load_segments_and_stack(
     Ok(())
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 fn finalize_loaded_process_handle(
     process_type: ProcessType,
     layout: &crate::process::address_space::ProcessAddressSpaceLayout,
@@ -332,7 +332,7 @@ fn finalize_loaded_process_handle(
     })
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 fn map_address_space_error_to_elf_load_error(
     error: AddressSpaceError,
 ) -> crate::process::elf_loader::ElfLoadError {

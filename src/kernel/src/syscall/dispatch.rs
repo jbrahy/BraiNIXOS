@@ -110,13 +110,20 @@ fn handle_server_range_syscall(syscall_number: u64, thread_identifier: u32) -> O
         SYSCALL_NUMBER_FRAME_MAP => Some(super::frame_map::handle_frame_map_syscall(
             thread_identifier,
         )),
+        // The serial handlers drive the boot console, which is bare metal only.
+        #[cfg(bare_metal_x86)]
         SYSCALL_NUMBER_SERIAL_READ_BYTE => {
             Some(super::serial_read::handle_serial_read_byte_syscall())
         }
+        #[cfg(bare_metal_x86)]
         SYSCALL_NUMBER_SERIAL_WRITE_BYTE => {
             Some(super::serial_write::handle_serial_write_byte_syscall())
         }
+        // The auth handlers copy from user memory, which only exists on bare
+        // metal; on a host verification build they are not dispatchable.
+        #[cfg(bare_metal_x86)]
         SYSCALL_NUMBER_AUTH_LOGIN => Some(super::auth_syscalls::handle_auth_login_syscall()),
+        #[cfg(bare_metal_x86)]
         SYSCALL_NUMBER_AUTH_SET_PASSWORD => {
             Some(super::auth_syscalls::handle_auth_set_password_syscall())
         }
