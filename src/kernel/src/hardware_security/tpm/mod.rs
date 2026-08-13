@@ -15,4 +15,5 @@
 pub mod commands;
 pub mod monotonic_counter;
 pub mod quote;
+#[cfg(bare_metal_x86)]
 pub mod registers;

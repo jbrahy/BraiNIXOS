@@ -34,23 +34,23 @@ pub enum SpectreV2MitigationMode {
 }
 
 /// IA32_SPEC_CTRL MSR address: controls IBRS and STIBP.
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 const SPECULATIVE_EXECUTION_CONTROL_MSR_ADDRESS: u32 = 0x48;
 
 /// IA32_PRED_CMD MSR address: write bit 0 to issue IBPB.
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 const PREDICTION_COMMAND_MSR_ADDRESS: u32 = 0x49;
 
 /// IA32_ARCH_CAPABILITIES MSR address: bit 1 = eIBRS (IBRS_ALL).
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 const ARCHITECTURE_CAPABILITIES_MSR_ADDRESS: u32 = 0x10A;
 
 /// Bit 0 of IA32_SPEC_CTRL: enables IBRS.
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 const INDIRECT_BRANCH_RESTRICTED_SPECULATION_ENABLE_BIT: u64 = 1;
 
 /// Bit 0 of IA32_PRED_CMD: issues IBPB when written.
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 const INDIRECT_BRANCH_PREDICTION_BARRIER_BIT: u64 = 1;
 
 /// Selects the Spectre v2 mitigation mode based on hardware capabilities.
@@ -69,14 +69,14 @@ pub fn select_spectre_v2_mitigation_mode() -> SpectreV2MitigationMode {
 }
 
 /// Reads IA32_ARCH_CAPABILITIES MSR on x86_64; returns 0 on other targets.
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 fn read_architecture_capabilities_msr() -> u64 {
     use crate::arch::hardware_registers::read_model_specific_register;
     read_model_specific_register(ARCHITECTURE_CAPABILITIES_MSR_ADDRESS)
 }
 
 /// Returns 0 (no capabilities) on non-x86_64 host targets.
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(not(bare_metal_x86))]
 fn read_architecture_capabilities_msr() -> u64 {
     0
 }
@@ -100,7 +100,7 @@ fn determine_mode_from_capabilities(
 ///
 /// Enforces INV-X86-002 (Spectre v2 mitigation is always active).
 /// Verified by: test_enable_spectre_v2_mitigation_writes_ibrs_when_no_eibrs
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 pub fn enable_spectre_v2_mitigation(mitigation_mode: SpectreV2MitigationMode) {
     use crate::arch::hardware_registers::write_model_specific_register;
     if mitigation_mode == SpectreV2MitigationMode::RetpolineWithIndirectBranchRestrictedSpeculation
@@ -112,6 +112,13 @@ pub fn enable_spectre_v2_mitigation(mitigation_mode: SpectreV2MitigationMode) {
     }
 }
 
+/// No MSR exists to write off bare metal; mitigation is the host OS's job there.
+///
+/// This is a verification-build stub, never a deployed code path: `bare_metal_x86`
+/// is the only configuration BraiNIX ships.
+#[cfg(not(bare_metal_x86))]
+pub fn enable_spectre_v2_mitigation(_mitigation_mode: SpectreV2MitigationMode) {}
+
 /// Issues an Indirect Branch Prediction Barrier (IBPB) via IA32_PRED_CMD MSR.
 ///
 /// Clears the branch predictor state, preventing cross-process Spectre v2
@@ -119,7 +126,7 @@ pub fn enable_spectre_v2_mitigation(mitigation_mode: SpectreV2MitigationMode) {
 ///
 /// Enforces INV-X86-002 (Spectre v2 mitigation is always active on x86-64).
 /// Verified by: test_ibpb_is_called_on_context_switch (integration test)
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 pub fn issue_indirect_branch_prediction_barrier() {
     use crate::arch::hardware_registers::write_model_specific_register;
     write_model_specific_register(
@@ -127,6 +134,10 @@ pub fn issue_indirect_branch_prediction_barrier() {
         INDIRECT_BRANCH_PREDICTION_BARRIER_BIT,
     );
 }
+
+/// No MSR exists to write off bare metal; see the note on the stub above.
+#[cfg(not(bare_metal_x86))]
+pub fn issue_indirect_branch_prediction_barrier() {}
 
 /// Logs the active Spectre v2 mitigation mode to the boot serial console.
 ///
@@ -172,7 +183,7 @@ fn log_retpoline_active() {}
 /// Verified by: LFENCE presence verified via grep in acceptance criteria
 #[inline(always)]
 pub fn issue_speculative_load_barrier() {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(bare_metal_x86)]
     // SAFETY: LFENCE is a non-destructive serializing instruction.
     // It serializes loads to prevent speculative reads past this point.
     // - Precondition: None (always safe to execute)
@@ -231,7 +242,7 @@ mod tests {
     ///
     /// Gated to x86_64 because the constants are only defined for that target.
     #[test]
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(bare_metal_x86)]
     fn test_spectre_msr_constants_are_correct() {
         assert_eq!(SPECULATIVE_EXECUTION_CONTROL_MSR_ADDRESS, 0x48u32);
         assert_eq!(PREDICTION_COMMAND_MSR_ADDRESS, 0x49u32);

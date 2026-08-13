@@ -14,14 +14,21 @@
 pub mod attestation_gate;
 pub mod binary_signing;
 pub mod cpu_feature_detection;
+#[cfg(bare_metal_x86)]
 pub mod csprng;
+#[cfg(bare_metal_x86)]
 pub mod entropy_source;
+#[cfg(bare_metal_x86)]
 pub mod indirect_branch_tracking;
 pub mod iommu_detection;
 pub mod kernel_config_blob;
+#[cfg(bare_metal_x86)]
 pub mod kernel_write_protection;
+#[cfg(bare_metal_x86)]
 pub mod memory_encryption;
 pub mod pcr_measurement;
+#[cfg(bare_metal_x86)]
 pub mod server_measurement;
 pub mod spectre_mitigation;
+#[cfg(bare_metal_x86)]
 pub mod tpm;

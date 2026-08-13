@@ -30,7 +30,23 @@ chacha20 = { version = "0.9", default-features = false }
 ed25519-dalek = { version = "2", default-features = false }
 curve25519-dalek = { version = "4", default-features = false }
 
-[target.'cfg(target_arch = "x86_64")'.dependencies]
+# Bare-metal x86-64 ONLY -- note `target_os = "none"`, which is load-bearing.
+#
+# Gating on `target_arch = "x86_64"` alone was wrong in a way that only showed up
+# off this machine: on an x86_64 *hosted* target (the Linux CI runner, or
+# x86_64-apple-darwin) that cfg is also true, so host verification builds pulled
+# in crates that only make sense on bare metal. That broke the Kani job outright
+# -- Kani ships its own, newer nightly, and vendored `x86_64` 0.15.4 uses the
+# unstable `Step` trait, which moved to `core::range::Step`. Every Kani harness in
+# the repository was failing as a result, which is the project's entire evidence
+# model.
+#
+# It stayed invisible locally because this workstation is aarch64, where
+# `target_arch = "x86_64"` is false and the crates were already excluded.
+#
+# `instructions` and `abi_x86_interrupt` are meaningless in a hosted build, so
+# excluding them there is correct on its own terms, not merely a CI workaround.
+[target.'cfg(all(target_arch = "x86_64", target_os = "none"))'.dependencies]
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "abi_x86_interrupt"] }
 multiboot2 = { version = "0.24.1", default-features = false }
 

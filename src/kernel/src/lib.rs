@@ -7,10 +7,10 @@
 #![deny(unsafe_code)]
 #![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 pub mod arch;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(bare_metal_x86)]
 pub mod boot;
 
 pub mod auth;
@@ -25,7 +25,7 @@ pub mod db;
 /// unit tests can run on aarch64-apple-darwin host targets. The file lives
 /// in boot/ but contains no hardware access — only compile-time constants
 /// and pure constructor functions for DeviceCapabilityData.
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(not(bare_metal_x86))]
 #[path = "boot/device_table.rs"]
 pub mod device_table;
 
@@ -45,4 +45,5 @@ pub mod hardware_security;
 
 pub mod process;
 
+#[cfg(bare_metal_x86)]
 pub mod syscall;
