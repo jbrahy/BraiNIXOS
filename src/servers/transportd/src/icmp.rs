@@ -79,7 +79,7 @@ pub fn compute_icmp_checksum(message_bytes: &[u8]) -> u16 {
 /// Odd-length messages are padded with a zero byte on the right.
 fn accumulate_sixteen_bit_words(message_bytes: &[u8]) -> u32 {
     let word_count = message_bytes.len() / 2;
-    let has_trailing_byte = message_bytes.len() % 2 != 0;
+    let has_trailing_byte = !message_bytes.len().is_multiple_of(2);
     let word_sum = sum_all_sixteen_bit_words(message_bytes, word_count);
     add_trailing_byte_if_present(word_sum, message_bytes, has_trailing_byte)
 }
@@ -89,11 +89,11 @@ fn sum_all_sixteen_bit_words(message_bytes: &[u8], word_count: usize) -> u32 {
     let mut accumulated = 0u32;
     let mut word_index = 0;
     while word_index < word_count {
-        let byte_offset = word_index * 2;
+        let byte_offset = word_index.saturating_mul(2);
         let high_byte = u32::from(message_bytes[byte_offset]);
-        let low_byte = u32::from(message_bytes[byte_offset + 1]);
-        accumulated += (high_byte << 8) | low_byte;
-        word_index += 1;
+        let low_byte = u32::from(message_bytes[byte_offset.saturating_add(1)]);
+        accumulated = accumulated.saturating_add((high_byte << 8) | low_byte);
+        word_index = word_index.saturating_add(1);
     }
     accumulated
 }
@@ -105,8 +105,10 @@ fn add_trailing_byte_if_present(
     has_trailing_byte: bool,
 ) -> u32 {
     if has_trailing_byte {
-        let trailing_byte = u32::from(message_bytes[message_bytes.len() - 1]);
-        return accumulated + (trailing_byte << 8);
+        // has_trailing_byte is only true for a non-empty odd-length message.
+        let last = message_bytes.len().saturating_sub(1);
+        let trailing_byte = u32::from(message_bytes[last]);
+        return accumulated.saturating_add(trailing_byte << 8);
     }
     accumulated
 }
@@ -117,7 +119,8 @@ fn add_trailing_byte_if_present(
 fn fold_carry_bits_into_sixteen_bits(accumulated: u32) -> u32 {
     let lower_sixteen = accumulated & 0xFFFF;
     let upper_sixteen = accumulated >> 16;
-    lower_sixteen + upper_sixteen
+    // Both operands are 16-bit, so the sum fits a u32 with room to spare.
+    lower_sixteen.saturating_add(upper_sixteen)
 }
 
 /// Validates the ICMP checksum of a message by verifying the result is zero.

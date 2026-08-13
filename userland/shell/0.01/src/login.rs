@@ -48,6 +48,11 @@ pub trait CredentialAuthority {
 }
 
 /// Which line the flow is currently waiting for.
+///
+/// The shared `Awaiting` prefix is deliberate: every variant names a line the
+/// flow is blocked on, and dropping it would leave `Username` and `Password`
+/// reading as values rather than states.
+#[allow(clippy::enum_variant_names)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum LoginStage {
     AwaitingUsername,

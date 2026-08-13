@@ -67,7 +67,9 @@ fn validate_ether_type_is_ipv4(ether_type: u16) -> Result<(), EthernetParseError
 ///
 /// Caller must have already validated that frame_bytes is at least ETHERNET_HEADER_LENGTH bytes.
 fn compute_ethernet_payload_length(frame_bytes: &[u8]) -> usize {
-    frame_bytes.len() - ETHERNET_HEADER_LENGTH
+    // The caller validated the length; saturating turns a broken
+    // precondition into an empty payload rather than a wrapped one.
+    frame_bytes.len().saturating_sub(ETHERNET_HEADER_LENGTH)
 }
 
 /// Constructs a ParsedEthernetFrame from the validated EtherType and payload length.

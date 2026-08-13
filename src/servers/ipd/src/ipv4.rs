@@ -69,7 +69,8 @@ fn validate_minimum_ipv4_length(packet_bytes: &[u8]) -> Result<(), Ipv4ParseErro
 /// Extracts the Internet Header Length field and converts it to bytes.
 fn extract_header_length_in_bytes(packet_bytes: &[u8]) -> usize {
     let internet_header_length_in_words = (packet_bytes[0] & 0x0F) as usize;
-    internet_header_length_in_words * 4
+    // IHL is a 4-bit field, so the product is at most 60.
+    internet_header_length_in_words.saturating_mul(4)
 }
 
 /// Returns Err(InvalidChecksum) if the IPv4 header checksum is not valid.
@@ -93,13 +94,13 @@ pub fn compute_ipv4_header_checksum(header_bytes: &[u8], header_length: usize) -
     let mut word_index = 0;
     while word_index < header_length {
         let high_byte = u16::from(header_bytes[word_index]);
-        let low_byte = u16::from(header_bytes[word_index + 1]);
+        let low_byte = u16::from(header_bytes[word_index.saturating_add(1)]);
         let word = (high_byte << 8) | low_byte;
-        accumulator += u32::from(word);
-        word_index += 2;
+        accumulator = accumulator.saturating_add(u32::from(word));
+        word_index = word_index.saturating_add(2);
     }
     while accumulator > 0xFFFF {
-        accumulator = (accumulator & 0xFFFF) + (accumulator >> 16);
+        accumulator = (accumulator & 0xFFFF).saturating_add(accumulator >> 16);
     }
     !(accumulator as u16)
 }
@@ -144,7 +145,10 @@ fn build_parsed_ipv4_header(
     let source_address = extract_source_address(packet_bytes);
     let destination_address = extract_destination_address(packet_bytes);
     let payload_offset = header_length;
-    let payload_length = packet_bytes.len() - header_length;
+    // header_length was validated against packet_bytes.len() upstream;
+    // saturating means a violated precondition yields an empty payload
+    // rather than a wrapped, enormous one.
+    let payload_length = packet_bytes.len().saturating_sub(header_length);
     Ok(ParsedIpv4Header {
         source_address,
         destination_address,

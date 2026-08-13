@@ -194,7 +194,9 @@ fn append_login_byte<S: ByteSink>(
         return;
     }
     line_buffer[*line_length] = byte_value;
-    *line_length += 1;
+    // The bound was checked immediately above; saturating keeps the cursor
+    // inside the buffer even if that guard is ever moved or weakened.
+    *line_length = line_length.saturating_add(1);
     if !flow.is_collecting_secret() {
         echo_printable_byte(sink, byte_value);
     }

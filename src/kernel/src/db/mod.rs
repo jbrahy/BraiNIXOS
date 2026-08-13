@@ -257,7 +257,7 @@ impl Database {
         let count = self.tx.count;
         let mut i = count;
         while i > 0 {
-            i -= 1;
+            i = i.saturating_sub(1);
             let entry = self.tx.entries[i];
             let slot_index = entry.slot_index as usize;
             if slot_index < MAX_ROWS {
@@ -329,7 +329,7 @@ impl<'a> RowRef<'a> {
 
     pub fn text(&self, column: ColumnId) -> Result<&[u8], DbError> {
         match self.slot.cells.get(column.0) {
-            Some(Cell::Text { bytes, len }) => Ok(&bytes[..*len as usize]),
+            Some(Cell::Text { bytes, len: used }) => Ok(&bytes[..*used as usize]),
             _ => Err(DbError::ColumnTypeMismatch),
         }
     }
@@ -347,7 +347,7 @@ impl<'a> Iterator for RowScan<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         while self.next < MAX_ROWS {
             let index = self.next;
-            self.next += 1;
+            self.next = self.next.saturating_add(1);
             let slot = &self.database.rows.slots[index];
             if slot.live && slot.table == self.table {
                 return Some((RowId(index as u32), RowRef { slot }));
@@ -390,7 +390,7 @@ impl<'a> Iterator for PredicateScan<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         while self.next < MAX_ROWS {
             let index = self.next;
-            self.next += 1;
+            self.next = self.next.saturating_add(1);
             let slot = &self.database.rows.slots[index];
             if slot.live && slot.table == self.table {
                 if let Some(Cell::Integer(value)) = slot.cells.get(self.column).copied() {
@@ -420,36 +420,44 @@ impl<'a> Iterator for JoinScan<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         while self.outer < MAX_ROWS {
             let left_slot = &self.database.rows.slots[self.outer];
-            if !(left_slot.live && left_slot.table == self.left_table) {
-                self.outer += 1;
-                self.inner = 0;
+            let Some(left_key) = integer_key(left_slot, self.left_table, self.left_col) else {
+                self.advance_outer();
                 continue;
-            }
-            let left_key = match left_slot.cells.get(self.left_col).copied() {
-                Some(Cell::Integer(key)) => key,
-                _ => {
-                    self.outer += 1;
-                    self.inner = 0;
-                    continue;
-                }
             };
             while self.inner < MAX_ROWS {
                 let right_index = self.inner;
-                self.inner += 1;
+                self.inner = self.inner.saturating_add(1);
                 let right_slot = &self.database.rows.slots[right_index];
-                if right_slot.live && right_slot.table == self.right_table {
-                    if let Some(Cell::Integer(right_key)) =
-                        right_slot.cells.get(self.right_col).copied()
-                    {
-                        if right_key == left_key {
-                            return Some((RowRef { slot: left_slot }, RowRef { slot: right_slot }));
-                        }
-                    }
+                if integer_key(right_slot, self.right_table, self.right_col) == Some(left_key) {
+                    return Some((RowRef { slot: left_slot }, RowRef { slot: right_slot }));
                 }
             }
-            self.outer += 1;
-            self.inner = 0;
+            self.advance_outer();
         }
         None
+    }
+}
+
+impl JoinScan<'_> {
+    /// Moves to the next left row and restarts the inner scan.
+    fn advance_outer(&mut self) {
+        self.outer = self.outer.saturating_add(1);
+        self.inner = 0;
+    }
+}
+
+/// The integer key of `slot` for `column`, or `None` unless the row is live,
+/// belongs to `table`, and holds an integer there.
+///
+/// Extracted so the join's two sides ask the same question the same way; both
+/// used to spell it out inline, which is what pushed `next` past the complexity
+/// bar and made the two conditions drift-prone.
+fn integer_key(slot: &RowSlot, table: u16, column: usize) -> Option<i64> {
+    if !(slot.live && slot.table == table) {
+        return None;
+    }
+    match slot.cells.get(column).copied() {
+        Some(Cell::Integer(key)) => Some(key),
+        _ => None,
     }
 }

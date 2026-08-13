@@ -41,8 +41,11 @@ impl Schema {
             return Err(DbError::ColumnCountMismatch);
         }
         let mut types = [ColumnType::Integer; MAX_COLUMNS];
-        for index in 0..column_types.len() {
-            types[index] = column_types[index];
+        // Zip rather than index: the length was just bounds-checked above, and
+        // copying by iterator removes the possibility of the two slices
+        // disagreeing at all.
+        for (slot, declared) in types.iter_mut().zip(column_types.iter()) {
+            *slot = *declared;
         }
         Ok(Schema {
             types,

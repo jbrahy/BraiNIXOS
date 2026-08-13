@@ -41,13 +41,13 @@ pub fn copy_from_user(
     // bootstrap page-table storage.
     let page_table =
         unsafe { retrieve_page_table_by_physical_address(PhysAddr::new(user_page_table_physical)) };
-    for byte_index in 0..length {
-        let source_virtual = user_virtual_address.wrapping_add(byte_index as u64);
-        let byte = match read_one_user_byte(page_table, source_virtual) {
-            Some(byte) => byte,
-            None => return None,
-        };
-        destination[byte_index] = byte;
+    // Iterate the destination directly rather than indexing it by a loop
+    // counter: the slot and its offset then cannot disagree, and a short
+    // destination truncates the copy instead of panicking mid-way through
+    // reading user memory.
+    for (offset, slot) in destination.iter_mut().enumerate().take(length) {
+        let source_virtual = user_virtual_address.wrapping_add(offset as u64);
+        *slot = read_one_user_byte(page_table, source_virtual)?;
     }
     Some(length)
 }

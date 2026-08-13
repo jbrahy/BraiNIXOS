@@ -256,8 +256,9 @@ fn write_credential_into_block(
     hash_offset: usize,
     flag_offset: usize,
 ) {
-    block[salt_offset..salt_offset + SALT_LENGTH_IN_BYTES].copy_from_slice(&credential.salt);
-    block[hash_offset..hash_offset + PASSWORD_HASH_LENGTH_IN_BYTES]
+    block[salt_offset..salt_offset.saturating_add(SALT_LENGTH_IN_BYTES)]
+        .copy_from_slice(&credential.salt);
+    block[hash_offset..hash_offset.saturating_add(PASSWORD_HASH_LENGTH_IN_BYTES)]
         .copy_from_slice(&credential.password_hash);
     block[flag_offset] = u8::from(credential.must_change_password);
 }
@@ -269,9 +270,11 @@ fn read_credential_from_block(
     flag_offset: usize,
 ) -> Credential {
     let mut salt = [0u8; SALT_LENGTH_IN_BYTES];
-    salt.copy_from_slice(&block[salt_offset..salt_offset + SALT_LENGTH_IN_BYTES]);
+    salt.copy_from_slice(&block[salt_offset..salt_offset.saturating_add(SALT_LENGTH_IN_BYTES)]);
     let mut password_hash = [0u8; PASSWORD_HASH_LENGTH_IN_BYTES];
-    password_hash.copy_from_slice(&block[hash_offset..hash_offset + PASSWORD_HASH_LENGTH_IN_BYTES]);
+    password_hash.copy_from_slice(
+        &block[hash_offset..hash_offset.saturating_add(PASSWORD_HASH_LENGTH_IN_BYTES)],
+    );
     Credential {
         salt,
         password_hash,
@@ -282,9 +285,9 @@ fn read_credential_from_block(
 fn read_u32(block: &[u8; CREDENTIAL_BLOCK_SIZE_IN_BYTES], offset: usize) -> u32 {
     u32::from_le_bytes([
         block[offset],
-        block[offset + 1],
-        block[offset + 2],
-        block[offset + 3],
+        block[offset.saturating_add(1)],
+        block[offset.saturating_add(2)],
+        block[offset.saturating_add(3)],
     ])
 }
 

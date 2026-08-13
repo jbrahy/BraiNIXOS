@@ -7,15 +7,18 @@ const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 fn hash_key(key: i64) -> usize {
-    let mut hash = FNV_OFFSET;
-    let bytes = (key as u64).to_le_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        hash ^= bytes[index] as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-        index += 1;
-    }
-    (hash % MAX_ROWS as u64) as usize
+    // Iterating the bytes directly removes the manual cursor and its increment,
+    // and with it the possibility of walking off the end. FNV's multiply is
+    // wrapping by definition, not by oversight.
+    let hash = (key as u64)
+        .to_le_bytes()
+        .iter()
+        .fold(FNV_OFFSET, |accumulated, byte| {
+            (accumulated ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
+        });
+    // MAX_ROWS is a non-zero constant, so the remainder is total; written as
+    // checked_rem so that stays true if it is ever made configurable.
+    hash.checked_rem(MAX_ROWS as u64).unwrap_or(0) as usize
 }
 
 #[derive(Clone, Copy)]
@@ -75,20 +78,20 @@ impl HashIndex {
         let start = hash_key(key);
         let mut probe = 0;
         while probe < MAX_ROWS {
-            let slot = (start + probe) % MAX_ROWS;
+            let slot = start.wrapping_add(probe).checked_rem(MAX_ROWS).unwrap_or(0);
             if !self.buckets[slot].occupied {
                 self.buckets[slot] = Bucket {
                     occupied: true,
                     key,
                     row,
                 };
-                self.count += 1;
+                self.count = self.count.saturating_add(1);
                 return Ok(());
             }
             if self.unique && self.buckets[slot].key == key {
                 return Err(super::DbError::DuplicateKey);
             }
-            probe += 1;
+            probe = probe.saturating_add(1);
         }
         Err(super::DbError::IndexFull)
     }
@@ -97,14 +100,14 @@ impl HashIndex {
         let start = hash_key(key);
         let mut probe = 0;
         while probe < MAX_ROWS {
-            let slot = (start + probe) % MAX_ROWS;
+            let slot = start.wrapping_add(probe).checked_rem(MAX_ROWS).unwrap_or(0);
             if !self.buckets[slot].occupied {
                 return None;
             }
             if self.buckets[slot].key == key {
                 return Some(self.buckets[slot].row);
             }
-            probe += 1;
+            probe = probe.saturating_add(1);
         }
         None
     }

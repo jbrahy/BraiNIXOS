@@ -392,6 +392,10 @@ pub fn syscall_serial_read_byte() -> Option<u8> {
     translate_serial_read_return(return_value)
 }
 
+// Only the x86-64 syscall stubs call this, so on any other host it is
+// genuinely dead. Gated to match its callers rather than left to trip
+// dead_code on a non-x86 development machine.
+#[cfg(target_arch = "x86_64")]
 /// Translates the sys_serial_read_byte return into an Option<u8>.
 ///
 /// The kernel returns a byte value 0..=255 when data is ready, and -1
@@ -462,6 +466,10 @@ pub const SYSCALL_NUMBER_AUTH_LOGIN: u64 = 14;
 /// Syscall number for sys_auth_set_password.
 pub const SYSCALL_NUMBER_AUTH_SET_PASSWORD: u64 = 15;
 
+// Only the x86-64 syscall stubs call this, so on any other host it is
+// genuinely dead. Gated to match its callers rather than left to trip
+// dead_code on a non-x86 development machine.
+#[cfg(target_arch = "x86_64")]
 /// Packs two buffer lengths into one register: username in the high 32 bits,
 /// password (or new password) in the low 32 bits.
 #[inline]

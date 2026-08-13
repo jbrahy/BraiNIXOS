@@ -10,7 +10,7 @@
 //! The following call must be added to `src/kernel/src/boot/phases.rs` in the
 //! `execute_boot_sequence()` function AFTER audit log initialization:
 //!
-//! ```rust
+//! ```text
 //! audit_log_protection::protect_audit_log_pages(&mut audit_ring_buffer);
 //! ```
 //!
