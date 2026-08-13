@@ -616,3 +616,93 @@ fn one_bit_of_the_pretokenizer_field_changes_the_meaning_of_the_whole_blob() {
     let vocabulary = Vocabulary::parse(&blob).unwrap();
     assert_eq!(vocabulary.pretokenizer(), Pretokenizer::WhitespacePrefixed);
 }
+
+// ----------------------------------------------- deny paths found by coverage
+//
+// Each of these closes a line that coverage showed unexecuted. They are all
+// rejection paths, which is where a vocabulary parser's real obligations live:
+// the blob is hostile input, and an unexecuted `return Err(..)` is an untested
+// claim about what the parser refuses.
+
+#[test]
+fn merge_record_rejects_an_index_at_or_past_the_declared_count() {
+    let built = sample_vocabulary();
+    let vocabulary = Vocabulary::parse(&built.bytes).expect("the sample must parse");
+    let merge_count = vocabulary.merge_count();
+
+    assert_eq!(
+        vocabulary.merge_record(merge_count),
+        Err(VocabularyError::MergeIndexOutOfRange),
+        "the first index past the end is out of range, not the last valid one"
+    );
+    assert_eq!(
+        vocabulary.merge_record(u32::MAX),
+        Err(VocabularyError::MergeIndexOutOfRange)
+    );
+}
+
+#[test]
+fn token_record_rejects_an_index_at_or_past_the_declared_count() {
+    let built = sample_vocabulary();
+    let vocabulary = Vocabulary::parse(&built.bytes).expect("the sample must parse");
+    let token_count = vocabulary.token_count();
+
+    assert_eq!(
+        vocabulary.token_record(token_count),
+        Err(VocabularyError::TokenIdOutOfRange)
+    );
+    assert_eq!(
+        vocabulary.token_record(u32::MAX),
+        Err(VocabularyError::TokenIdOutOfRange)
+    );
+}
+
+#[test]
+fn a_blob_larger_than_the_ceiling_is_refused_before_any_field_is_read() {
+    // BXV1_MAX_BLOB_BYTES is 64 MiB. The ceiling exists so a declared size can
+    // never be used to make the parser reserve or walk an unbounded extent, so
+    // it must be enforced ahead of every other check.
+    let oversized = vec![0u8; brainix_tokenizer::BXV1_MAX_BLOB_BYTES + 1];
+    assert_eq!(
+        refusal(&oversized),
+        VocabularyError::BlobExceedsCeiling,
+        "the ceiling must be checked before the magic, not after"
+    );
+}
+
+#[test]
+fn a_declared_token_count_that_overflows_the_section_layout_denies() {
+    // The six sections are laid out back to back with checked arithmetic. A
+    // count near u32::MAX makes that arithmetic overflow, which must deny
+    // rather than wrap into a small, plausible-looking offset.
+    let built = sample_vocabulary();
+    let patched = patched_u32(&built.bytes, 12, u32::MAX);
+    let error = refusal(&patched);
+    assert!(
+        matches!(
+            error,
+            VocabularyError::TokenCountExceedsCeiling
+                | VocabularyError::ArithmeticOverflow
+                | VocabularyError::SectionOffsetMismatch
+                | VocabularyError::TotalSizeMismatch
+        ),
+        "an overflowing token_count must deny, got {error:?}"
+    );
+}
+
+#[test]
+fn a_declared_merge_count_that_overflows_the_section_layout_denies() {
+    let built = sample_vocabulary();
+    let patched = patched_u32(&built.bytes, 16, u32::MAX);
+    let error = refusal(&patched);
+    assert!(
+        matches!(
+            error,
+            VocabularyError::MergeCountExceedsCeiling
+                | VocabularyError::ArithmeticOverflow
+                | VocabularyError::SectionOffsetMismatch
+                | VocabularyError::TotalSizeMismatch
+        ),
+        "an overflowing merge_count must deny, got {error:?}"
+    );
+}

@@ -44,7 +44,7 @@ CRATE_FLOORS=(
     "brainix-bsp:97:94"
     "brainix-transport-crypto:95:94"
     "brainix-bxw1:97:91"
-    "brainix-tokenizer:98:91"
+    "brainix-tokenizer:98:92"
     "brainix-tensor:100:96"   # PINNED at 100% lines - cannot regress
     "brainix-transformer:96:88"
 )
