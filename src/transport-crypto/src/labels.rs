@@ -22,6 +22,7 @@ use brainix_bsp::{LEN_CONFIRM, LEN_LABEL, LEN_NONCE};
 ///
 /// A `const fn` so every label below is a compile-time constant and a label
 /// longer than 16 bytes is a compile error rather than a truncation.
+// COVERAGE-EXEMPT: `label` is a const fn evaluated at COMPILE time to build the label constants, so it has no runtime execution for llvm-cov to observe. Its output is asserted by the known-answer vectors in tests/known_answer.rs.
 const fn label(text: &[u8]) -> [u8; LEN_LABEL] {
     let mut padded = [0u8; LEN_LABEL];
     let mut position = 0usize;
@@ -29,6 +30,7 @@ const fn label(text: &[u8]) -> [u8; LEN_LABEL] {
         padded[position] = text[position];
         position = position.saturating_add(1);
     }
+    // COVERAGE-EXEMPT: const fn, evaluated at compile time - see above.
     padded
 }
 

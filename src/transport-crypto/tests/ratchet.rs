@@ -317,3 +317,97 @@ fn enrollment_destroys_the_key_material_it_consumed() {
     let _credential = Credential::enroll(&mut material, CredentialRole::Client, 0);
     assert_eq!(material, [0u8; 32]);
 }
+
+// -------------------------------------------- replay guard, found by coverage
+//
+// `commit` is §6.2's monotonic compare-and-swap. Its REJECTION arm had never
+// executed, which means the property that makes the ratchet a ratchet — that it
+// never moves backwards — was asserted in prose and nowhere else. A chain that
+// accepts a stale scratch re-derives a key an attacker has already seen the
+// traffic for, which is the exact thing forward secrecy is supposed to prevent.
+
+#[test]
+fn a_commit_at_or_behind_the_persisted_position_is_refused() {
+    // Persisted at 5; a scratch resolved from an earlier position must lose.
+    for stale in 0..=4u64 {
+        let mut state = chain_at(5);
+        let before = *state.key().expose();
+        let scratch = chain_at(stale).scratch();
+
+        assert!(
+            !state.commit(scratch),
+            "a scratch at {stale} must not overwrite a chain already at 5"
+        );
+        assert_eq!(
+            *state.key().expose(),
+            before,
+            "a refused commit must leave the persisted key untouched"
+        );
+        assert_eq!(
+            state.counter(),
+            5,
+            "a refused commit must not move the counter"
+        );
+    }
+}
+
+#[test]
+fn a_commit_at_exactly_the_persisted_position_is_refused() {
+    // The boundary: equal is not ahead. Accepting it would let the same
+    // position be committed twice, which is a replay by another name.
+    let mut state = chain_at(7);
+    let scratch = chain_at(6).scratch();
+    let before = *state.key().expose();
+
+    assert!(!state.commit(scratch));
+    assert_eq!(*state.key().expose(), before);
+    assert_eq!(state.counter(), 7);
+}
+
+#[test]
+fn a_commit_strictly_ahead_is_accepted_and_moves_the_chain() {
+    let mut state = chain_at(5);
+    let before = *state.key().expose();
+    let scratch = chain_at(5).scratch();
+
+    assert!(state.commit(scratch), "a scratch one ahead must win");
+    assert_eq!(state.counter(), 6);
+    assert_ne!(
+        *state.key().expose(),
+        before,
+        "the persisted key must actually advance"
+    );
+}
+
+#[test]
+fn a_scratch_at_the_counter_ceiling_cannot_commit() {
+    // `counter + 1` overflowing is refused rather than wrapped: wrapping would
+    // send the chain back to zero and re-issue every key it ever derived.
+    let mut state = chain_at(u64::MAX);
+    let scratch = ChainState::at(Secret::from_bytes([0x21u8; 32]), u64::MAX).scratch();
+    assert!(!state.commit(scratch));
+    assert_eq!(state.counter(), u64::MAX);
+}
+
+/// `ct_eq` is the constant-time comparison every secret comparison routes
+/// through. Coverage showed it had never been called directly, so its
+/// correctness rested entirely on callers exercising it incidentally.
+#[test]
+fn constant_time_equality_agrees_with_ordinary_equality() {
+    let a = Secret::<32>::from_bytes([0x11u8; 32]);
+    let same = Secret::<32>::from_bytes([0x11u8; 32]);
+    assert!(a.ct_eq(&same));
+    assert!(a.ct_eq(&a));
+
+    // A difference in any single byte, at either end or the middle, must be
+    // detected — an early-exit comparison would pass the first case and leak
+    // the position of the first differing byte through timing.
+    for index in [0usize, 1, 15, 30, 31] {
+        let mut bytes = [0x11u8; 32];
+        bytes[index] ^= 0x01;
+        assert!(
+            !a.ct_eq(&Secret::<32>::from_bytes(bytes)),
+            "a difference at byte {index} was reported equal"
+        );
+    }
+}

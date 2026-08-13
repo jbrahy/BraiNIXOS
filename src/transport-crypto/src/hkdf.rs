@@ -84,6 +84,7 @@ fn copy_block(output: &mut [u8], written: usize, block: &[u8; HMAC_OUTPUT_BYTES]
     let end = written.saturating_add(take);
     match (output.get_mut(written..end), block.get(..take)) {
         (Some(destination), Some(source)) => destination.copy_from_slice(source),
+        // COVERAGE-EXEMPT: `take` is computed as min(remaining, HMAC_OUTPUT_BYTES) and `end` as written + take, so both slices are in range by construction. The arm keeps copy_block total rather than indexing.
         _ => return output.len(),
     }
     end

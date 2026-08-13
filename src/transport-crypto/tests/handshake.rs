@@ -581,3 +581,55 @@ fn a_default_server_handshake_is_a_new_one() {
         "the slot is recorded at derive, not at identify"
     );
 }
+
+/// The handshake is a state machine, and calling a step out of order must deny
+/// rather than proceed on stale material. Coverage showed both WrongState arms
+/// had never executed.
+#[test]
+fn a_client_that_accepts_a_server_hello_twice_denies_the_second() {
+    let mut table = common::table_with_one_client();
+    let mut credential = common::enroll(&common::ENROLLED_MATERIAL, CredentialRole::Client, 0);
+    let (mut client, hello) = ClientHandshake::start(&credential, &common::CLIENT_NONCE);
+    let mut server = ServerHandshake::new();
+    let matched = server.identify(&hello, &table).expect("identifies");
+    let server_hello = server
+        .derive(matched, &common::SERVER_NONCE)
+        .expect("derives");
+
+    let (auth, _) = client
+        .accept_server_hello(&server_hello, &mut credential)
+        .expect("the first acceptance succeeds");
+    let _ = server.accept_client_auth(&auth, &mut table);
+
+    assert_eq!(
+        client
+            .accept_server_hello(&server_hello, &mut credential)
+            .err(),
+        Some(TransportCryptoError::WrongState),
+        "a second ServerHello must not re-derive a session"
+    );
+}
+
+#[test]
+fn a_server_that_accepts_client_auth_twice_denies_the_second() {
+    let mut table = common::table_with_one_client();
+    let mut credential = common::enroll(&common::ENROLLED_MATERIAL, CredentialRole::Client, 0);
+    let (mut client, hello) = ClientHandshake::start(&credential, &common::CLIENT_NONCE);
+    let mut server = ServerHandshake::new();
+    let matched = server.identify(&hello, &table).expect("identifies");
+    let server_hello = server
+        .derive(matched, &common::SERVER_NONCE)
+        .expect("derives");
+    let (auth, _) = client
+        .accept_server_hello(&server_hello, &mut credential)
+        .expect("the client accepts");
+
+    server
+        .accept_client_auth(&auth, &mut table)
+        .expect("the first acceptance succeeds");
+
+    assert!(
+        server.accept_client_auth(&auth, &mut table).is_err(),
+        "replaying the ClientAuth must not establish a second session"
+    );
+}

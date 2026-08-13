@@ -179,6 +179,7 @@ impl RecordSealer {
             return Err(TransportCryptoError::PayloadExceedsRecordPlaintext);
         }
         if self.sequence.is_exhausted() {
+            // COVERAGE-EXEMPT: same as the opener's: 2^32 records on a single channel is not reachable in a test, and the guard is what prevents nonce reuse.
             return Err(TransportCryptoError::SequenceExhausted);
         }
         let plaintext_length = frame_plaintext(payload, out)?;
@@ -310,6 +311,7 @@ impl RecordOpener {
         scratch: &'a mut [u8],
     ) -> Result<OpenedRecord<'a>, TransportCryptoError> {
         if self.sequence.is_exhausted() {
+            // COVERAGE-EXEMPT: exhausting a u32 sequence needs 2^32 records sealed on one channel, which no test can drive in bounded time. The guard is what stops nonce reuse after wrap, so it stays.
             return Err(TransportCryptoError::SequenceExhausted);
         }
         let nonce = self.sequence.nonce();
@@ -397,6 +399,7 @@ fn verify_tag(
     let computed = compute_tag(mac_key, authenticated);
     let mut received = [0u8; POLY1305_TAG_BYTES];
     if record.tag.len() != POLY1305_TAG_BYTES {
+        // COVERAGE-EXEMPT: the BSP decoder that produced this DataRecord already fixed the tag at POLY1305_TAG_BYTES, so the length check cannot fail here. Kept so this function is total for any DataRecord, including one a future decoder builds differently.
         return Err(TransportCryptoError::AuthenticationFailed);
     }
     received.copy_from_slice(record.tag);

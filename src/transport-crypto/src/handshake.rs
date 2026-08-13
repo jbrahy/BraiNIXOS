@@ -273,6 +273,7 @@ impl ServerHandshake {
     /// §6.2's monotonic compare-and-swap, run only after row H5 passed.
     fn commit_chain(&mut self, table: &mut CredentialTable) {
         let (Some(scratch), Some(matched)) = (self.scratch.take(), self.matched.as_ref()) else {
+            // COVERAGE-EXEMPT: commit_chain is called only after row H5 passed, which is exactly the condition that leaves scratch and matched populated.
             return;
         };
         if let Some(slot) = table.slot_mut(matched.slot) {
@@ -284,6 +285,7 @@ impl ServerHandshake {
     /// session `ESTABLISHED`.
     fn establish(&mut self) -> Result<EstablishedSession, TransportCryptoError> {
         let (Some(secrets), Some(matched)) = (self.secrets.take(), self.matched.take()) else {
+            // COVERAGE-EXEMPT: establish() runs only after accept_client_auth has confirmed row H5, which requires both secrets and matched to be Some. Defence in depth against a future path that reaches establish earlier.
             return Err(TransportCryptoError::WrongState);
         };
         let role = CredentialRole::from_wire(matched.role)?;
