@@ -138,6 +138,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-servd"
+version = "0.1.0"
+dependencies = [
+ "brainix-bsp",
+]
+
+[[package]]
 name = "brainix-shell"
 version = "0.1.0"
 dependencies = [

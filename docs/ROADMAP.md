@@ -168,11 +168,13 @@ never actually being checked:
 - A **line-coverage gate** now holds every uncovered line in the seven library crates to a
   `COVERAGE-EXEMPT:` marker with a stated reason. 118 lines are exempt; zero are unjustified.
 
-**Two consequences for the numbers this document quotes.** `tools/proof-coverage` reports **50 Kani
+**One consequence for the numbers this document quotes.** `tools/proof-coverage` reports **50 Kani
 proofs**, and it counts harnesses that *exist* — eight of those do not run in CI. Read it as 42 running
-plus 8 recorded-and-excluded until X-T5 splits the two. And **no fuzz target has ever executed in CI**
-(P2-T10), so every "Verify: fuzz soak" criterion in this document remains unsatisfied, including the ones
-whose tasks are marked DONE.
+plus 8 recorded-and-excluded until X-T5 splits the two.
+
+**The fuzz targets do now run** (P2-T10, closed 2026-08-14): eleven targets, twenty seconds each, seeded
+by the checked-in corpora. That is a smoke test, and this document's "Verify: fuzz soak" criteria are
+still unmet — the difference between the two words is the whole reason that row existed.
 
 ---
 
@@ -531,7 +533,7 @@ directories exists today**, and until they do BraiNIX has components without a s
 
 | # | Task | Deliverable | Deps | Why it is next |
 |---|---|---|---|---|
-| A1 | **P2-T4** | `src/servers/servd/` — accept via `transportd`, session manager, per-client frozen capability set, both session types decided at accept | T1, T2, T3, T5 — **all done** | The head of the chain. Every other row waits on it. |
+| A1 | **P2-T4** | `src/servers/servd/` — accept via `transportd`, session manager, per-client frozen capability set, both session types decided at accept | T1, T2, T3, T5 — **all done** | **STARTED 2026-08-14.** The host-testable half landed: the §9.1 fixed session pool, the three admission ceilings counting half-open handshakes (`INV-SERVE-003`), and generation-tagged handles so a released slot is unreachable forever. 18 tests, 100% line coverage, **zero exemptions**. What remains needs a kernel: the `transportd` accept, the minted `CapServe`/`CapAdmin`, and the slot's directional keys and `prompt_buf`. |
 | A2 | **P3-T2** | `WEIGHTS_REGION` / `KV_REGION` reserved regions in `memory/`, **and the 4 KiB → 16 KiB page fix** | none | `virtual_address_layout.rs` hardcodes 4096 against a 16 KiB platform — an `INV-MEM-009` defect sitting in the file the regions land in. |
 | A3 | **P3-T3a** | `src/servers/modeld/` — one-shot loader hosting the finished `src/bxw1/` parser, exits before `inferd` starts | A2, P3-T3, P3-T5 | Nothing holds storage authority or a writable weights capability while the system serves. |
 | A4 | **P3-T7** | `src/servers/inferd/` — the confined tenant wrapping the finished `src/transformer/` | A1, A2, P3-T6 | **Covers INV-MODEL**, one of the three uncovered invariants. |
@@ -558,7 +560,7 @@ and two of them block *honesty*, not features.
 
 | # | Task | What is wrong today |
 |---|---|---|
-| B1 | **P2-T10** — fuzz targets into CI | Eleven targets and their corpora are committed; `grep -c "cargo fuzz" .github/workflows/ci.yml` returns **0**. Every "fuzz soak" criterion in this document, including on DONE rows, is unmet. The cost is a CI job, not a corpus. |
+| B1 | ~~**P2-T10** — fuzz targets into CI~~ | **DONE 2026-08-14.** A `Fuzz Smoke` job runs all eleven targets for twenty seconds each, seeded by the checked-in corpora. Two things were needed, not one: `fuzz/.cargo/config.toml` pointed its vendored source at an absolute path that existed on one laptop, so the crate could not resolve dependencies anywhere else. **Twenty seconds is a smoke test and nothing may cite it as a soak** — the soak criteria in this document stay unmet until something runs long enough to deserve the word. |
 | B2 | **X-T4** — in-tree SHA-256 and ChaCha20 | `sha2` and `chacha20` are still the vendored crates, so the serving transport **does not satisfy the dependency-closure rule**. With the Ed25519 stack a permanent named exception, these two symmetric primitives with published test vectors are what remains of the crypto burn-down. |
 | B3 | **X-T5** *(new)* — make the proof tracker distinguish **runs** from **exists** | `tools/proof-coverage` reports 50 harnesses; 8 are behind `long-proofs` and never execute. A number that counts unrun proofs is exactly the unfalsifiable claim the north star forbids. Also: attack the cost problem itself — the 96-byte ADT harnesses and the AEAD/hash harnesses are excluded, not solved. |
 | B4 | **X-T2** — clippy burn-down so it can gate | Clippy is green on both host architectures and the bare-metal target as of 2026-08-13; the remaining suppressions are scope-allows on the frozen reference and the orphaned trees. Removing those is what lets clippy become a gate rather than a habit. |
