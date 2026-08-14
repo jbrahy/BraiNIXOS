@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "src/adt",
+    "src/sha256",
     "src/adt-verify",
     "src/bsp",
     "src/bsp-verify",

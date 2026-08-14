@@ -209,6 +209,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-sha256"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "brainix-shell"
 version = "0.1.0"
 dependencies = [
