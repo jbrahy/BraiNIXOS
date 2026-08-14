@@ -60,9 +60,13 @@ impl Granule {
     }
 
     /// Whether an address is granule-aligned.
+    ///
+    /// `is_multiple_of` rather than `%`: the kernel's lints refuse a bare
+    /// remainder, and the named form says what the test is for rather than
+    /// leaving a reader to recognise the idiom.
     #[must_use]
     pub const fn is_aligned(self, address: u64) -> bool {
-        address % self.bytes() == 0
+        address.is_multiple_of(self.bytes())
     }
 }
 
