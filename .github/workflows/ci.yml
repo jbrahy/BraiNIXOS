@@ -391,62 +391,66 @@ jobs:
             --flags not-need-init,startup-clear \
             --daemon
 
-      # This invocation mirrors docker/test.sh, which is the one that has
-      # actually booted this kernel. The version it replaces produced a
-      # zero-byte boot log -- not a failed assertion, no output at all -- and
-      # differed from the working one in three ways that each explain silence:
+      # Every flag here is the residue of a defect this job actually had, and
+      # the whole step is built so the next one names itself.
       #
-      #   * `-nographic` **and** `-serial stdio`. `-nographic` already routes
-      #     the serial port to stdio; naming stdio a second time makes two
-      #     character devices claim it.
-      #   * `-cdrom` rather than an IDE drive with `-boot order=c`. GRUB writes
-      #     its own messages to the VGA console, which `-nographic` discards,
-      #     so a boot that never reaches the kernel is silent by construction:
-      #     the serial log stays empty and says nothing about why.
-      #   * no `+rdrand,+rdseed`. The kernel seeds its CSPRNG from RDRAND on
-      #     this platform.
-      # The serial port writes to a FILE, and QEMU's own stdout and stderr go
-      # to a second one.
+      #   * `-serial file:` -- serial output cannot be lost to a pipe or a
+      #     signal. Piping `-nographic` into `tee` conflated the guest's serial
+      #     port with the emulator's diagnostics and then lost both, which is
+      #     why this job's log was zero bytes on every run in its history.
+      #   * NOT `-nographic` with `-serial stdio` -- `-nographic` already routes
+      #     serial to stdio, so naming stdio again makes two character devices
+      #     claim it and QEMU exits before executing an instruction.
+      #   * `+rdrand,+rdseed` -- the kernel seeds its CSPRNG from RDRAND.
+      #   * `-debugcon` on 0x402 -- SeaBIOS's own log. "No bootable device" is
+      #     otherwise written to a VGA console nothing captures, and is
+      #     indistinguishable from a kernel that booted silently.
+      #   * `-d guest_errors,cpu_reset` -- a triple fault dumps the register
+      #     state that caused it instead of exiting quietly.
+      #   * the exit code is reported, not swallowed: 124 means the guest ran
+      #     the full timeout, 0 means QEMU exited on its own, and with
+      #     `-no-reboot` those are different bugs.
       #
-      # Piping `-nographic` into `tee` conflated the two streams and then lost
-      # both: this job's boot log has been zero bytes on every run, which
-      # reports identically whether the kernel booted silently, GRUB refused
-      # the image, or QEMU exited on a bad flag before executing an
-      # instruction. It was in fact the last of those, and the evidence for it
-      # was in the message QEMU printed and the pipeline dropped.
-      #
-      # `-serial file:` cannot be lost to a pipe or a signal, and keeping the
-      # emulator's own diagnostics separate means the next failure names
-      # itself. Both files are uploaded.
-      - name: Boot kernel in QEMU (headless, 30s timeout)
-        timeout-minutes: 2
+      # Two boot paths are attempted because they are not equivalent across
+      # QEMU/SeaBIOS versions: an IDE disk with `-boot order=c`, which is what
+      # docker/test.sh uses and what boots this ISO locally, and a CD-ROM with
+      # `-boot order=d`, which is the canonical form for a grub-mkrescue image.
+      # The second runs only if the first produced no banner.
+      - name: Boot kernel in QEMU (headless, 30s per attempt)
+        timeout-minutes: 4
         run: |
           ls -l brainix.iso
-          : > /tmp/boot.log
-          rc=0
-          timeout 30 qemu-system-x86_64 \
-            -drive file=brainix.iso,format=raw,if=ide \
-            -boot order=c \
-            -machine q35,accel=tcg \
-            -cpu qemu64,+smep,+smap,+rdrand,+rdseed \
-            -m 512M \
-            -display none \
-            -no-reboot \
-            -serial file:/tmp/boot.log \
-            -device virtio-net-pci,netdev=net0 \
-            -netdev user,id=net0 \
-            -chardev socket,id=chrtpm,path=/tmp/swtpm-test.sock \
-            -tpmdev emulator,id=tpm0,chardev=chrtpm \
-            -device tpm-tis,tpmdev=tpm0 \
-            -d guest_errors,cpu_reset -D /tmp/qemu-debug.log \
-            > /tmp/qemu.log 2>&1 || rc=$?
-          echo "===== qemu exit code: ${rc} (124 = timeout, 0 = exited on its own) ====="
-          echo "===== qemu stdout/stderr ====="
-          cat /tmp/qemu.log
-          echo "===== qemu -d guest_errors,cpu_reset (first 120 lines) ====="
-          head -120 /tmp/qemu-debug.log || true
-          echo "===== serial ($(wc -c < /tmp/boot.log) bytes) ====="
-          cat /tmp/boot.log
+          boot() {
+            local label="$1"; shift
+            echo "===================== attempt: ${label} ====================="
+            : > /tmp/boot.log; : > /tmp/bios.log; : > /tmp/qemu-debug.log
+            local rc=0
+            timeout 30 qemu-system-x86_64 \
+              "$@" \
+              -machine q35,accel=tcg \
+              -cpu qemu64,+smep,+smap,+rdrand,+rdseed \
+              -m 512M \
+              -display none \
+              -no-reboot \
+              -serial file:/tmp/boot.log \
+              -debugcon file:/tmp/bios.log \
+              -global isa-debugcon.iobase=0x402 \
+              -device virtio-net-pci,netdev=net0 \
+              -netdev user,id=net0 \
+              -chardev socket,id=chrtpm,path=/tmp/swtpm-test.sock \
+              -tpmdev emulator,id=tpm0,chardev=chrtpm \
+              -device tpm-tis,tpmdev=tpm0 \
+              -d guest_errors,cpu_reset -D /tmp/qemu-debug.log \
+              > /tmp/qemu.log 2>&1 || rc=$?
+            echo "--- qemu exit code: ${rc}  (124 = ran to the timeout)"
+            echo "--- qemu stdout/stderr:"; cat /tmp/qemu.log
+            echo "--- firmware (SeaBIOS), last 30 lines:"; tail -30 /tmp/bios.log || true
+            echo "--- guest errors / cpu resets, first 60 lines:"; head -60 /tmp/qemu-debug.log || true
+            echo "--- serial ($(wc -c < /tmp/boot.log) bytes):"; cat /tmp/boot.log
+            grep -q "BraiNIX: boot complete" /tmp/boot.log
+          }
+          boot "IDE disk, boot order=c" -drive file=brainix.iso,format=raw,if=ide -boot order=c \
+            || boot "CD-ROM, boot order=d" -cdrom brainix.iso -boot order=d
 
       - name: Assert boot success
         run: |
@@ -463,6 +467,7 @@ jobs:
             /tmp/boot.log
             /tmp/qemu.log
             /tmp/qemu-debug.log
+            /tmp/bios.log
 
   # ---------------------------------------------------------------------------
   # 6. Security scan — CVE results to GitHub Security tab
