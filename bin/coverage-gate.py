@@ -58,6 +58,7 @@ CRATES = [
     "brainix-bsp-client",
     "brainix-datapath",
     "brainix-sha256",
+    "brainix-perf-baseline",
 ]
 
 # Whole files excluded from measurement. Each entry names why it cannot be

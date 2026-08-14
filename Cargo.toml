@@ -22,6 +22,7 @@ members = [
     "src/servd-verify",
     "tools/bsp-client",
     "tools/datapath",
+    "tools/perf-baseline",
     "src/capability-verify",
     "src/ipc-verify",
     "userland/shell/0.01",

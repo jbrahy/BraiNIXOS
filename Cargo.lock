@@ -195,6 +195,10 @@ name = "brainix-modeld"
 version = "0.1.0"
 
 [[package]]
+name = "brainix-perf-baseline"
+version = "0.1.0"
+
+[[package]]
 name = "brainix-servd"
 version = "0.1.0"
 dependencies = [
