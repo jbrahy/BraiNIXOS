@@ -311,6 +311,11 @@ jobs:
           # before the firmware, the hardware, or `gpud` exists.
           - name: dart
             args: --package brainix-dart-verify
+          # Bounded admission (INV-SERVE-003) over an arbitrary interleaving of
+          # acquire, release and expire, rather than the boundaries a test
+          # author thought to walk.
+          - name: servd
+            args: --package brainix-servd-verify
     steps:
       # Kani is installed BEFORE checkout, deliberately.
       #

@@ -331,6 +331,12 @@ fn map_proofs_to_invariants(
 fn infer_invariant_from_proof(proof_name: &str) -> Option<String> {
     let lower = proof_name.to_lowercase();
 
+    // Bounded admission. INV-SERVE-003's ceilings are what stop an
+    // unauthenticated peer from consuming the session pool.
+    if lower.starts_with("servd_admission_") {
+        return Some("INV-SERVE".to_string());
+    }
+
     // The IOMMU confinement. INV-GPU's structural control is INV-DEV-006 -- a
     // driver cannot widen its own DMA window -- and the obligation belongs to
     // the confinement rather than to any driver (decision #15).

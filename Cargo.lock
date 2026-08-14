@@ -183,6 +183,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-servd-verify"
+version = "0.1.0"
+dependencies = [
+ "brainix-bsp",
+ "brainix-servd",
+]
+
+[[package]]
 name = "brainix-shell"
 version = "0.1.0"
 dependencies = [
