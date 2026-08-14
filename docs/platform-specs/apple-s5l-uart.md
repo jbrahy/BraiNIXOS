@@ -184,3 +184,29 @@ off at entry (§4), so a physical address is directly usable.
   further configuration. Assumed yes (§1) on the strength of m1n1 using the same UART for its console;
   unverified.
 - **OQ-4** This file is not version-stamped. See the header.
+- **OQ-5** *(raised 2026-08-14, and it outranks the rest of this list)* **Whether the s5l UART reaches the
+  USB-C SBU pins at all on this machine, or whether debug serial is routed over DockChannel instead.**
+  Published accounts of getting serial out of modern Apple Silicon state that these machines **default to
+  DockChannel**, not the legacy UART, and that recovering legacy-UART output from macOS requires SIP off,
+  boot-arg filtering off, `serial=3`, **and** `serial-device=<uart0 AAPL,phandle>` — the last because
+  Apple rewrote `serial_init` in macOS 15 and deleted the `use-legacy-uart=1` argument that used to do it.
+  Sources: <https://gist.github.com/dhinakg/3fcd9ad43c82c96964b4f64eb05e6a5e> and
+  <https://asahilinux.org/docs/hw/soc/serial-debug/>, both fetched 2026-08-14.
+
+  **Why this is a fact about our payload and not only about macOS.** Those boot-args configure *XNU's*
+  choice of console. BraiNIX writes `UTXH` directly, so no boot-arg governs us. What is genuinely
+  unresolved is the layer below: whether the SoC's debug-serial mux presents the **s5l UART** or
+  **DockChannel** to the Type-C SBU pins after `macvdmtool serial`, on a `T6020`. If it is DockChannel,
+  a correct `UTXH` write produces **no output at the host**, and AS-1a's exit criterion fails in a way
+  indistinguishable from OQ-1 and OQ-2 being wrong.
+
+  **Measured here, and it distinguishes nothing yet:** `macvdmtool serial` succeeds on this rig and
+  `/dev/cu.debug-console` reads zero bytes across two full reboots of a stock macOS 15.3.1 mini. That is
+  the *expected* reading whether the answer to this question is DockChannel **or** legacy-UART-but-macOS-
+  is-silent, so it is not evidence either way. The experiment that discriminates is running code that
+  writes `UTXH` — m1n1 or our own stub — after the Permissive Security downgrade.
+
+  **Consequence for the plan:** this raises the value of a second, independent first-light output path
+  (ROADMAP Track C row C7, framebuffer via `boot_args.video`), because it means a silent console at
+  AS-1a's hardware gate has *four* candidate causes rather than three, and the framebuffer path shares
+  none of them.

@@ -664,7 +664,7 @@ this project to verify and the discipline `INV-PARSE-001` already demands.
 | C4 | **AS-4a1** *(new slice)* — RTKit + ANS2 codecs | Mailbox message encode/decode and the ANS2 command/completion structures, as fail-closed parsers with fuzz targets | Talking to the co-processor |
 | C5 | **AS-4b1** — PCIe/NIC descriptor formats | **STARTED 2026-08-14**: `src/pcie-config/` walks the capability list with three independent termination bounds and two Kani proofs over symbolic pointers — the cyclic-list termination the tier table requires. PCI-SIG's layout, so no clean-room spec is needed. NIC descriptors remain. | Link training, TX/RX |
 | C6 | **AS-1c** — the kernel crate goes aarch64 | **UNSTARTED, and the largest unnamed item in this plan until 2026-08-14.** `arch/aarch64/` under `src/kernel`, cfg gates over the module tree, the second bare-metal target in `.cargo` and in CI, with the x86-64 reference still building beside it (#26). It compiles or it does not, and that answer is available on a laptop. | Whether any of it executes — which is AS-1's serial banner |
-| C7 | **AS-1a2** *(new slice, proposed 2026-08-14 — needs owner sign-off, because it changes a written exit criterion)* — **framebuffer first light** | The `video` field of `boot_args` — the same structure AS-0-T4 already parses and whose module doc records that it deliberately skips this field — plus a font blitter into the framebuffer iBoot hands us. Both are pure functions over bytes, so both are unit-tested and fuzzed like every other firmware-supplied structure (`INV-PARSE-001`). | Whether the framebuffer base iBoot reports is where the pixels actually are |
+| C7 | **AS-1a2** *(new slice, proposed 2026-08-14 — needs owner sign-off, because it changes a written exit criterion; **re-rated upward the same day**, see OQ-5 below)* — **framebuffer first light** | The `video` field of `boot_args` — the same structure AS-0-T4 already parses and whose module doc records that it deliberately skips this field — plus a font blitter into the framebuffer iBoot hands us. Both are pure functions over bytes, so both are unit-tested and fuzzed like every other firmware-supplied structure (`INV-PARSE-001`). | Whether the framebuffer base iBoot reports is where the pixels actually are |
 
 **C3 is the highest-value row in this table and it is not obvious why.** AS-5-T0 precondition 2 — a Kani
 proof that the DART backend's IOMMU trait admits no widening operation — is one of the five **signed,
@@ -672,7 +672,20 @@ unwaivable** acceptance criteria of the TCB-AS/GPU exception, and it is a proof 
 It can be discharged on a laptop, years before any GPU firmware exists to be confined. Landing C3 turns
 one of the five preconditions green ahead of the hardware it protects.
 
-**C7 exists because the cable does not.** Measured 2026-08-14: there is **no debug UART cable** — the
+**C7's justification changed on the day it was written, and got stronger.** It was proposed because no
+debug cable was present. The cable turned out to be unnecessary — an Apple Silicon host plus `macvdmtool`
+gives a serial console over an ordinary SuperSpeed cable, and that console now works on this rig. But
+proving the console *exists* is not proving it **carries our bytes**: published accounts say modern Apple
+Silicon routes debug serial over **DockChannel** rather than the legacy s5l UART, and BraiNIX's stub
+writes `UTXH` directly. Recorded as **OQ-5** in
+[`platform-specs/apple-s5l-uart.md`](platform-specs/apple-s5l-uart.md), where it now outranks the other
+open questions. Two full reboots of the stock macOS mini read zero bytes, which is the expected result
+under *either* answer and therefore discriminates nothing — the experiment that settles it is running code
+that writes `UTXH`, after the Permissive Security downgrade. **So a silent console at AS-1a's hardware
+gate now has four candidate causes, and the framebuffer path shares none of them.** That is a better
+argument for C7 than the one it was proposed on.
+
+~~**C7 exists because the cable does not.**** Measured 2026-08-14: there is **no debug UART cable** — the
 development laptop reports zero USB devices, no connected Thunderbolt device, and no USB-serial node. AS-1a
 transmits its banner by writing s5l UART MMIO, and with no cable those bytes leave the SoC on SBU pins that
 nothing is listening to. m1n1 can still chainload over an ordinary USB-C cable, because m1n1 speaks CDC-ACM
@@ -681,7 +694,7 @@ and has no USB stack. C7 gives first light a second, cable-free output path. **I
 cable** — break-glass PSK enrollment is serial and stays serial (`INV-BOOT-008`), so the cable is required
 for a deployment even after C7 lands. Order it; just do not wait on it.
 [`operations/APPLE_SILICON_BRINGUP_RIG.md`](operations/APPLE_SILICON_BRINGUP_RIG.md) §3a–3b carries the
-full finding.
+full finding.~~ — **superseded by the paragraph above; the cable premise was wrong.**
 
 **C6 is the row that unblocks the other track.** C3 turns a signed GPU precondition green years early;
 **C6 is what eight Track A rows are actually waiting for.** Every one of them ends "and the rest needs a
