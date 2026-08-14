@@ -61,6 +61,7 @@ CRATES = [
     "brainix-perf-baseline",
     "brainix-aarch64-mmu",
     "brainix-platform-select",
+    "brainix-pcie-config",
 ]
 
 # Whole files excluded from measurement. Each entry names why it cannot be

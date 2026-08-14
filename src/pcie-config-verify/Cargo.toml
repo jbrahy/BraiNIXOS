@@ -1,0 +1,12 @@
+[package]
+name = "brainix-pcie-config-verify"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Kani proof that the capability walker terminates on any config space"
+
+[dependencies]
+brainix-pcie-config = { path = "../pcie-config" }
+
+[lints]
+workspace = true

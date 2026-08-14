@@ -206,6 +206,17 @@ name = "brainix-modeld"
 version = "0.1.0"
 
 [[package]]
+name = "brainix-pcie-config"
+version = "0.1.0"
+
+[[package]]
+name = "brainix-pcie-config-verify"
+version = "0.1.0"
+dependencies = [
+ "brainix-pcie-config",
+]
+
+[[package]]
 name = "brainix-perf-baseline"
 version = "0.1.0"
 
