@@ -381,27 +381,48 @@ jobs:
       #     the serial log stays empty and says nothing about why.
       #   * no `+rdrand,+rdseed`. The kernel seeds its CSPRNG from RDRAND on
       #     this platform.
+      # The serial port writes to a FILE, and QEMU's own stdout and stderr go
+      # to a second one.
+      #
+      # Piping `-nographic` into `tee` conflated the two streams and then lost
+      # both: this job's boot log has been zero bytes on every run, which
+      # reports identically whether the kernel booted silently, GRUB refused
+      # the image, or QEMU exited on a bad flag before executing an
+      # instruction. It was in fact the last of those, and the evidence for it
+      # was in the message QEMU printed and the pipeline dropped.
+      #
+      # `-serial file:` cannot be lost to a pipe or a signal, and keeping the
+      # emulator's own diagnostics separate means the next failure names
+      # itself. Both files are uploaded.
       - name: Boot kernel in QEMU (headless, 30s timeout)
         timeout-minutes: 2
         run: |
+          ls -l brainix.iso
+          : > /tmp/boot.log
           timeout 30 qemu-system-x86_64 \
             -drive file=brainix.iso,format=raw,if=ide \
             -boot order=c \
             -machine q35,accel=tcg \
             -cpu qemu64,+smep,+smap,+rdrand,+rdseed \
             -m 512M \
-            -nographic \
+            -display none \
+            -no-reboot \
+            -serial file:/tmp/boot.log \
             -device virtio-net-pci,netdev=net0 \
             -netdev user,id=net0 \
             -chardev socket,id=chrtpm,path=/tmp/swtpm-test.sock \
             -tpmdev emulator,id=tpm0,chardev=chrtpm \
             -device tpm-tis,tpmdev=tpm0 \
-            2>&1 | tee /tmp/boot.log || true
+            > /tmp/qemu.log 2>&1 || true
+          echo "===== qemu stdout/stderr ====="
+          cat /tmp/qemu.log
+          echo "===== serial ($(wc -c < /tmp/boot.log) bytes) ====="
+          cat /tmp/boot.log
 
       - name: Assert boot success
         run: |
           grep -q "BraiNIX: boot complete" /tmp/boot.log || \
-            (echo "FAIL: boot complete message not found" && cat /tmp/boot.log && exit 1)
+            (echo "FAIL: boot complete message not found" && exit 1)
           echo "PASS: kernel booted successfully"
 
       - name: Upload boot log
@@ -409,7 +430,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: boot-log
-          path: /tmp/boot.log
+          path: |
+            /tmp/boot.log
+            /tmp/qemu.log
 
   # ---------------------------------------------------------------------------
   # 6. Security scan — CVE results to GitHub Security tab
