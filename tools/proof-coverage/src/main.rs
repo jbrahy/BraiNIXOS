@@ -331,6 +331,14 @@ fn map_proofs_to_invariants(
 fn infer_invariant_from_proof(proof_name: &str) -> Option<String> {
     let lower = proof_name.to_lowercase();
 
+    // The auditor. INV-AUDIT is "observes and reports and does nothing else",
+    // and its record is where that claim is kept honest: bounded pressure
+    // (INV-AUD-003) and a decode that refuses rather than inventing an event
+    // (INV-AUD-001).
+    if lower.starts_with("auditd_audit_") {
+        return Some("INV-AUDIT".to_string());
+    }
+
     // The confined tenant. INV-MODEL's content is the capability manifest and
     // the per-session KV binding: "the model physically cannot name a
     // capability it was not granted", and no session can name another's cache.

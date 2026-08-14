@@ -302,6 +302,10 @@ jobs:
           # value we did not.
           - name: inferd
             args: --package brainix-inferd-verify
+          # The audit record: bounded pressure, and a decode that refuses over
+          # every 23-byte string rather than assembling an event from one.
+          - name: auditd
+            args: --package brainix-auditd-verify
     steps:
       # Kani is installed BEFORE checkout, deliberately.
       #

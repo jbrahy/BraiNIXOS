@@ -42,6 +42,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-auditd-verify"
+version = "0.1.0"
+dependencies = [
+ "brainix-auditd",
+]
+
+[[package]]
 name = "brainix-bootloader"
 version = "0.1.0"
 dependencies = [

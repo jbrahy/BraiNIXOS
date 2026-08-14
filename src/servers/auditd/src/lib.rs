@@ -11,6 +11,8 @@
 #![no_std]
 #![deny(unsafe_code)]
 
+pub mod event;
+
 use brainix_libsyscall::syscall_audit_read;
 
 /// Capability slot index for CapAuditRead in auditd's CSpace.
