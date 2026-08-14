@@ -97,6 +97,63 @@ later macOS update as a re-qualification event** ([`../ROADMAP.md`](../ROADMAP.m
 
 ---
 
+## 1a. Create the BraiNIX volume group *(added 2026-08-14)*
+
+**Do this instead of taking over the machine** when the mini is doing anything else. The boot policy on
+Apple Silicon is **per volume group**, so BraiNIX gets its own policy and the working install keeps Full
+Security. Deleting the volume group undoes all of it.
+
+### 1a.1 Carve the volume — SSH is fine, non-destructive, instant
+
+```
+sudo diskutil apfs addVolume disk3 APFS BraiNIX
+```
+
+Shares free space with the container; no repartitioning. On this rig it became `disk3s7`, mounted at
+`/Volumes/BraiNIX`.
+
+### 1a.2 Fetch the installer
+
+```
+sudo softwareupdate --list-full-installers
+sudo softwareupdate --fetch-full-installer --full-installer-version <oldest offered>
+```
+
+**Take the oldest version Apple still offers.** System firmware is global to the machine and cannot be
+downgraded, so this choice is permanent — see §0a's firmware-pin decision. On this rig the oldest was
+Sequoia 15.7.5 (24G624) against a machine running 15.3.1.
+
+### 1a.3 Run the installer — **GUI only, and this is not a preference**
+
+`startosinstall` **has no `--volume` flag.** Apple removed it; `--usage` on the Sequoia installer lists
+`--eraseinstall`, `--newvolumename` and `--preservecontainer`, and nothing that targets an existing
+volume. `--eraseinstall` does what it says. **There is no supported CLI path to install macOS onto a
+second volume in the same container**, so this step needs a human at a logged-in GUI session — physically
+or over Screen Sharing.
+
+It also cannot be launched from SSH into an empty console: `launchctl asuser` fails with
+`OSLaunchdErrorDomain Code=125` when no one is logged in, and `stat -f %Su /dev/console` reporting `root`
+is how you tell.
+
+1. Log in on the target at the console or over Screen Sharing.
+2. Open `/Applications/Install macOS <name>.app`, Continue, agree to the license.
+3. **Click "Show All Disks…" and select `BraiNIX`.**
+
+   > **The trap.** The default destination is the *current* system volume. Clicking through without
+   > "Show All Disks…" upgrades the production install instead of creating the second volume group — no
+   > data loss, but the whole point of §1a is gone and the firmware moves anyway.
+
+4. Install. The machine reboots, installs, and comes up in Setup Assistant **on the new volume**.
+5. Create a **local administrator** account. §2 needs those credentials, and a compromised or absent admin
+   account is why 1TR refuses the downgrade.
+
+### 1a.4 Record the result
+
+Update §0a's table with the firmware version the install produced. From that point Risk 3 applies and
+every macOS update is a re-qualification event.
+
+---
+
 ## 2. Downgrade the volume to Permissive Security
 
 **Physical presence required.** Once per machine.

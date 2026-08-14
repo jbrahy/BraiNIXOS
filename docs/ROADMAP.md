@@ -762,7 +762,12 @@ its firmware at first contact, and the measured bandwidth baseline, is in
       downgraded, and deleting the volume group undoes all of it. `disk3s7` created; macOS 15.7.5 fetching.
 - [ ] BraiNIX's volume group downgraded to **Permissive Security** via `bputil` from One True Recovery.
       Requires local admin credentials and physical presence. This is also why **fully headless
-      provisioning is not available** on this platform. *Blocked on the 15.7.5 install completing.*
+      provisioning is not available** on this platform. *Blocked on the 15.7.5 install, which is itself
+      blocked on a human: `startosinstall` **has no `--volume` flag** — Apple removed it, leaving no
+      supported CLI path to install macOS onto a second volume in the same container. The GUI installer
+      must be driven from a logged-in session, and its destination picker defaults to the **production**
+      volume, so "Show All Disks…" is a required click rather than an optional one. See
+      [`operations/APPLE_SILICON_BRINGUP_RIG.md`](operations/APPLE_SILICON_BRINGUP_RIG.md) §1a.3.*
 - [x] **A serial console to the mini.** **Working 2026-08-14, and it needed no debug cable.** With an
       Apple Silicon host, an ordinary **SuperSpeed USB-C cable** plus Asahi's `macvdmtool` puts both ends
       into serial mode over USB-PD VDMs; the console is `/dev/cu.debug-console`. Both ends must be in the
