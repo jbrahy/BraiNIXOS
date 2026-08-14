@@ -344,6 +344,9 @@ jobs:
           cp target/x86_64-unknown-none/release/brainix iso/boot/kernel.elf
           cp target/x86_64-unknown-none/release/brainix-shell iso/boot/shell.elf
           cat > iso/boot/grub/grub.cfg << 'GRUBEOF'
+          serial --unit=0 --speed=115200
+          terminal_output serial console
+          terminal_input serial console
           set timeout=0
           menuentry "BraiNIX" {
               multiboot2 /boot/brainix-bootloader
@@ -420,6 +423,7 @@ jobs:
         run: |
           ls -l brainix.iso
           : > /tmp/boot.log
+          rc=0
           timeout 30 qemu-system-x86_64 \
             -drive file=brainix.iso,format=raw,if=ide \
             -boot order=c \
@@ -434,9 +438,13 @@ jobs:
             -chardev socket,id=chrtpm,path=/tmp/swtpm-test.sock \
             -tpmdev emulator,id=tpm0,chardev=chrtpm \
             -device tpm-tis,tpmdev=tpm0 \
-            > /tmp/qemu.log 2>&1 || true
+            -d guest_errors,cpu_reset -D /tmp/qemu-debug.log \
+            > /tmp/qemu.log 2>&1 || rc=$?
+          echo "===== qemu exit code: ${rc} (124 = timeout, 0 = exited on its own) ====="
           echo "===== qemu stdout/stderr ====="
           cat /tmp/qemu.log
+          echo "===== qemu -d guest_errors,cpu_reset (first 120 lines) ====="
+          head -120 /tmp/qemu-debug.log || true
           echo "===== serial ($(wc -c < /tmp/boot.log) bytes) ====="
           cat /tmp/boot.log
 
@@ -454,6 +462,7 @@ jobs:
           path: |
             /tmp/boot.log
             /tmp/qemu.log
+            /tmp/qemu-debug.log
 
   # ---------------------------------------------------------------------------
   # 6. Security scan — CVE results to GitHub Security tab
