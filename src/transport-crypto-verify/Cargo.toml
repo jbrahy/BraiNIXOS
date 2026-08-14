@@ -5,6 +5,13 @@ edition.workspace = true
 license.workspace = true
 description = "Kani proof harnesses for the BSP v2 PSK key schedule and AEAD record layer (P2-T2)"
 
+[features]
+# The six harnesses that drive a hash or an AEAD over symbolic bytes, none of
+# which has been observed to terminate. Off by default so that CI runs the
+# proofs that finish; see the crate documentation's "The cost bound" for the
+# measurements and for exactly what is not proved on a pull request.
+long-proofs = []
+
 [dependencies]
 brainix-bsp = { path = "../bsp" }
 brainix-transport-crypto = { path = "../transport-crypto" }

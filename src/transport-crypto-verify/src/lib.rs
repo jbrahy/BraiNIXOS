@@ -54,6 +54,45 @@
 //!    instead, with seeds whose `key_selector` genuinely matches an enrolled
 //!    credential.
 //!
+//! # The cost bound: six harnesses are behind `long-proofs` and not in CI
+//!
+//! The bounds above were chosen to keep these harnesses "in reach". Measured,
+//! they are not. Every harness in this crate was run on an M2 Pro with a
+//! 700-second cap, and **six of the ten did not finish**:
+//!
+//! | Harness | Verdict |
+//! |---|---|
+//! | `record_open_never_panics_on_any_short_stream` | no verdict in 700s |
+//! | `record_open_respects_the_caller_scratch_buffer` | no verdict in 700s |
+//! | `record_seal_stays_within_the_caller_buffer` | no verdict in 700s |
+//! | `ratchet_resolve_lands_at_the_declared_position` | no verdict in 700s |
+//! | `ratchet_commit_advances_by_exactly_one` | no verdict in 700s |
+//! | `ratchet_advance_is_monotone_and_erases_the_retired_key` | no verdict in 700s |
+//! | [`proofs::transport_crypto_ratchet_window_denies_outside_the_catch_up_bound`] | **4.6s** |
+//! | [`proofs::transport_crypto_ratchet_commit_refuses_to_move_backwards`] | passes |
+//! | [`proofs::transport_crypto_constant_time_eq_agrees_with_equality`] | passes |
+//! | [`proofs::transport_crypto_secret_compares_exactly_and_zeroizes_completely`] | passes |
+//!
+//! The six are exactly the harnesses that drive a **hash or an AEAD over
+//! symbolic bytes**. A concrete key makes the keystream constant-foldable, but
+//! Poly1305 over a symbolic stream, and HMAC-SHA256 over a chain key the
+//! ratchet has already advanced once, are not; a concrete chain key did not
+//! rescue the advance harness either. They are behind the `long-proofs`
+//! feature, off by default.
+//!
+//! The four that remain are not a token set — the window proof quantifies over
+//! **every** `u64` pair, and the two comparison proofs over every 16- and
+//! 32-byte array — but what is **not** gated by CI is worth stating without
+//! euphemism: **no proof of `open` or `seal` runs on a pull request.** The
+//! record layer's protection on every commit is its tests, its RFC
+//! known-answer vectors, and its fuzz target.
+//!
+//! Run the excluded set deliberately, with a long budget:
+//!
+//! ```text
+//! cargo kani -p brainix-transport-crypto-verify --features long-proofs
+//! ```
+//!
 //! # The constant-time tag comparison is **not** proved here, and why
 //!
 //! §4.2 row R2 requires the Poly1305 tag comparison to be constant-time, and
@@ -140,13 +179,20 @@ pub const DIRECTION_MATERIAL: [u8; 64] = [
 
 #[cfg(kani)]
 mod proofs {
+    #[cfg(feature = "long-proofs")]
     use brainix_bsp::record::{RECORD_LENGTH_PREFIX_BYTES, RECORD_TAG_BYTES};
-    use brainix_bsp::{BSP_MAX_RECORD_PLAINTEXT, LEN_CHAIN_KEY, LEN_DIR_KEYS, MAX_CHAIN_CATCHUP};
+    #[cfg(feature = "long-proofs")]
+    use brainix_bsp::BSP_MAX_RECORD_PLAINTEXT;
+    #[cfg(feature = "long-proofs")]
+    use brainix_bsp::LEN_DIR_KEYS;
+    use brainix_bsp::{LEN_CHAIN_KEY, MAX_CHAIN_CATCHUP};
+    use brainix_transport_crypto::{constant_time_eq, ChainState, Secret, TransportCryptoError};
+    #[cfg(feature = "long-proofs")]
     use brainix_transport_crypto::{
-        constant_time_eq, ChainState, DirectionKeys, RecordOpener, RecordSealer, Secret,
-        TransportCryptoError, MAX_SEALED_RECORD_BYTES,
+        DirectionKeys, RecordOpener, RecordSealer, MAX_SEALED_RECORD_BYTES,
     };
 
+    #[cfg(feature = "long-proofs")]
     use crate::{DIRECTION_MATERIAL, RESOLVE_DISTANCE_BOUND, SEAL_PAYLOAD_LEN, STREAM_LEN};
 
     // Every harness that runs a keystream or a hash carries an explicit
@@ -156,17 +202,22 @@ mod proofs {
     // **66** is one past the longest counted loop anywhere in the reachable
     // model: the 64-element `GenericArray` initialisation that `sha2` and
     // `chacha20` use for their block buffers. It therefore covers every harness
-    // that can reach a keystream or a hash — which is both record harnesses and
-    // every ratchet harness that can run an advance. The first draft used 4 for
-    // the ratchet, reasoning only about the catch-up walk's own trip count, and
+    // that can reach a keystream or a hash — the record harnesses and every
+    // ratchet harness that can run an advance. The first draft used 4 for the
+    // ratchet, reasoning only about the catch-up walk's own trip count, and
     // Kani reported unwinding-assertion failures: the visible failure the
-    // mechanism exists to produce rather than a silent false success.
+    // mechanism exists to produce rather than a silent false success. Every
+    // harness that needs 66 is now behind `long-proofs`, because none of them
+    // terminates.
     //
-    // `transport_crypto_ratchet_commit_refuses_to_move_backwards` keeps **4**.
-    // Its constraint makes the advance branch infeasible, so no hash is in its
-    // model and the walk it does bound is `RESOLVE_DISTANCE_BOUND + 2`. It
-    // verifies at that bound, which is itself evidence that the losing branch
-    // really does return before any key derivation runs.
+    // **4** is for the two harnesses whose constraint makes the advance branch
+    // infeasible, so no hash is in their model:
+    // `transport_crypto_ratchet_commit_refuses_to_move_backwards`, and
+    // `transport_crypto_ratchet_window_denies_outside_the_catch_up_bound`,
+    // which was written at 66 and inherited the record harnesses' cost for a
+    // derivation it never runs — at 4 it verifies in 4.6s. That it verifies at
+    // all at this bound is itself evidence that the denying branch really does
+    // return before any key derivation.
     //
     // **34** is one past a 32-byte scan, for the two harnesses that only
     // compare and zeroize.
@@ -175,6 +226,7 @@ mod proofs {
     const TAG_WIDTH: usize = 16;
 
     /// A fresh key set built from the concrete material.
+    #[cfg(feature = "long-proofs")]
     fn keys() -> DirectionKeys {
         DirectionKeys::from_material(Secret::<LEN_DIR_KEYS>::from_bytes(DIRECTION_MATERIAL))
     }
@@ -184,6 +236,7 @@ mod proofs {
     /// A variant outside this set would be a new observable a peer can
     /// distinguish, which is a change to §4.2's residual-observable list rather
     /// than an implementation detail.
+    #[cfg(feature = "long-proofs")]
     fn is_expected_open_failure(error: TransportCryptoError) -> bool {
         matches!(
             error,
@@ -213,6 +266,7 @@ mod proofs {
     ///
     /// The forty bytes are a bound, not a proof about a real record: see the
     /// crate documentation for what that leaves unproven.
+    #[cfg(feature = "long-proofs")]
     #[kani::proof]
     #[kani::unwind(66)]
     fn transport_crypto_record_open_never_panics_on_any_short_stream() {
@@ -261,6 +315,7 @@ mod proofs {
     /// prefix could legally declare and proves the call still returns without
     /// writing outside it — Kani's own bounds check is what would catch the
     /// overrun, and the assertion is that no path reaches one.
+    #[cfg(feature = "long-proofs")]
     #[kani::proof]
     #[kani::unwind(66)]
     fn transport_crypto_record_open_respects_the_caller_scratch_buffer() {
@@ -287,6 +342,7 @@ mod proofs {
     /// hold the framing it denies, and a denied seal leaves the sequence where
     /// it was — a sender that advanced its nonce on a failed seal would skip a
     /// position the receiver still expects.
+    #[cfg(feature = "long-proofs")]
     #[kani::proof]
     #[kani::unwind(66)]
     fn transport_crypto_record_seal_stays_within_the_caller_buffer() {
@@ -345,7 +401,7 @@ mod proofs {
     /// and there is no arithmetic on the way that could wrap a far-ahead
     /// position back into the window.
     #[kani::proof]
-    #[kani::unwind(66)]
+    #[kani::unwind(4)]
     fn transport_crypto_ratchet_window_denies_outside_the_catch_up_bound() {
         let persisted: u64 = kani::any();
         let requested: u64 = kani::any();
@@ -387,6 +443,7 @@ mod proofs {
     /// The persisted state is **not** touched: `resolve` walks into scratch, and
     /// the counter it started from is asserted unchanged. §6.2 makes that the
     /// difference between a ratchet and a remote kill switch.
+    #[cfg(feature = "long-proofs")]
     #[kani::proof]
     #[kani::unwind(66)]
     fn transport_crypto_ratchet_resolve_lands_at_the_declared_position() {
@@ -457,6 +514,7 @@ mod proofs {
     /// derived from, plus one — and that this is strictly greater than what was
     /// there before, so the chain is monotone under every interleaving of two
     /// concurrent handshakes.
+    #[cfg(feature = "long-proofs")]
     #[kani::proof]
     #[kani::unwind(66)]
     fn transport_crypto_ratchet_commit_advances_by_exactly_one() {
@@ -485,18 +543,31 @@ mod proofs {
 
     /// **A scratch advance is strictly monotone and destroys what it left.**
     ///
-    /// One step, over an arbitrary starting position and an arbitrary chain
-    /// key. Proves the counter moves forward by exactly one and that the buffer
-    /// the advance retired is returned already zeroized — §6.1's
-    /// `zeroize(CK_n)` as a checked fact rather than a claim. Forward secrecy
-    /// buys nothing unless the old key is actually gone.
+    /// One step, over an arbitrary starting position. Proves the counter moves
+    /// forward by exactly one and that the buffer the advance retired is
+    /// returned already zeroized — §6.1's `zeroize(CK_n)` as a checked fact
+    /// rather than a claim. Forward secrecy buys nothing unless the old key is
+    /// actually gone.
+    ///
+    /// **The chain key is concrete**, as it is in every other ratchet harness
+    /// here. It was symbolic, which made the advance a symbolic HMAC-SHA256 and
+    /// stalled the Kani job for twenty-five minutes with no verdict. Neither
+    /// property this harness states reads the key's bytes, so nothing was lost
+    /// by fixing it — but it did not rescue the harness either: with a concrete
+    /// key it still returned no verdict in 700s, which is why it sits behind
+    /// `long-proofs`. The change is kept because a symbolic hash is strictly
+    /// further out of reach than a concrete one, and whoever next attacks this
+    /// cost should start from the cheaper of the two.
+    ///
+    /// **Behind `long-proofs`, and not in CI** — see the crate documentation's
+    /// *The cost bound*.
+    #[cfg(feature = "long-proofs")]
     #[kani::proof]
     #[kani::unwind(66)]
     fn transport_crypto_ratchet_advance_is_monotone_and_erases_the_retired_key() {
         let start: u64 = kani::any();
         kani::assume(start < u64::MAX);
-        let material: [u8; LEN_CHAIN_KEY] = kani::any();
-        let state = ChainState::at(Secret::<LEN_CHAIN_KEY>::from_bytes(material), start);
+        let state = ChainState::at(Secret::<LEN_CHAIN_KEY>::zero(), start);
         let mut scratch = state.scratch();
         kani::assert(
             scratch.counter() == start,

@@ -1286,6 +1286,30 @@ table is not thereby Reduced tier; it is **unassessed**, and assessing it is a p
 | `gpud` | Reduced | Confining the GPU is DART's job (TCB-AS/GPU precondition 2), not the driver's. Proving `gpud` correct instead of proving the confinement would invert the rule. Both parsers it hosts — GPU completion records and the RTKit mailbox — are Full tier in the rows above. |
 | PCIe driver | Reduced | Capability-bounded; enumeration and config-space access are bounded by the granted window. Its config-space and capability-chain walkers are hostile-input parsers and are Full tier separately — a malicious device can present a cyclic capability list, and the walker must terminate and deny rather than loop. |
 
+
+> **2026-08-13 — a Kani harness exists is not a Kani harness runs.** Recorded here rather than silently
+> edited, because §15's `INV-PARSE-002` and the Full-tier artifact list above are both read as claims
+> about what CI enforces.
+>
+> Measured on an M2 Pro with a 700-second cap per harness, **eight harnesses across two Full-tier
+> components return no verdict**: in `adt-verify`, the two over the 96-byte nested blob
+> (`adt_traversal_terminates_on_all_inputs`, `adt_path_resolution_never_panics_on_an_arbitrary_path`);
+> in `transport-crypto-verify`, the three record harnesses over `open`/`seal` and the three ratchet
+> harnesses that run an advance. They are the harnesses that drive a hash, an AEAD, or a 96-byte
+> symbolic buffer, and Kani's cost on those is dominated by symbolic execution rather than by the
+> unwind bound, so tightening the bound does not reach them.
+>
+> Each is now behind a `long-proofs` cargo feature, off by default, so CI runs the proofs that finish
+> — five in `adt-verify`, four in `transport-crypto-verify`, plus the BSP, IPC and capability sets in
+> full. The excluded harnesses stay in the tree, with their measurements, and are run deliberately with
+> a budget.
+>
+> **The gap, stated as a gap:** no proof of the ADT child iterator, the depth counter, path resolution,
+> or of `RecordOpener::open` and `RecordSealer::seal` runs on a pull request. Those paths are held by
+> tests, RFC known-answer vectors and fuzz targets until the cost problem is solved. This is the same
+> ruling the Prusti note above applies -- an artifact that cannot be produced is a stated gap, never a
+> downgrade -- extended to an artifact that exists but cannot be *run*.
+
 ---
 
 # Traceability Guidance

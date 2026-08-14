@@ -187,9 +187,56 @@ jobs:
   # ---------------------------------------------------------------------------
   # 4. Formal verification — Kani on the capability-verify and adt-verify crates
   # ---------------------------------------------------------------------------
+  # One job per proof package, run in parallel, rather than six `cargo kani`
+  # steps in a row.
+  #
+  # Two reasons, both learned from run 31721650927. Sequentially, one harness
+  # that does not converge starves every package behind it: that run spent
+  # twenty-seven minutes inside a single ADT harness and never reached the BSP,
+  # transport-crypto or IPC proofs at all, so a green-looking backlog of work
+  # was simply never checked. And the failure it did produce read "the runner
+  # has received a shutdown signal", which looks like infrastructure rather
+  # than proof cost.
+  #
+  # Split, each package gets its own runner and its own clock, `fail-fast:
+  # false` lets the others finish and report, and the job name says which
+  # package the timeout belongs to.
   kani:
-    name: Kani Verification
+    name: Kani Verification (${{ matrix.name }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The capability model, including the serving-era types (P2-T5).
+          - name: capability
+            args: --package brainix-capability-verify
+          # The Apple Device Tree decoder (AS-0-T3).
+          - name: adt
+            args: --package brainix-adt-verify
+          # The no-allocation harness installs a global allocator, so it runs
+          # on its own. See src/adt-verify/src/lib.rs for why it is gated.
+          - name: adt-no-allocation
+            args: >-
+              --package brainix-adt-verify --features deny-allocation
+              --harness adt_decoder_performs_no_allocation
+          # The two network-facing crates: the BSP v2 wire decoder and the PSK
+          # key schedule plus AEAD record layer. Both are Full tier under
+          # SECURITY_INVARIANTS.md §16 and are the outermost attack surface in
+          # the system.
+          - name: bsp
+            args: --package brainix-bsp-verify
+          - name: transport-crypto
+            args: --package brainix-transport-crypto-verify
+          # Replaces the former Prusti job. That job pointed at
+          # src/brainix-ipc-core/, a shim whose contracts were tautologies about
+          # a hand-written copy of the IPC path that nothing in the tree called
+          # -- and which had never once executed, because its annotations gated
+          # on a feature its manifest never declared. These harnesses run
+          # against the real perform_rendezvous.
+          - name: ipc
+            args: --package brainix-ipc-verify
     steps:
       # Kani is installed BEFORE checkout, deliberately.
       #
@@ -214,32 +261,8 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      - name: Kani — capability model, including the serving-era types (P2-T5)
-        run: cargo kani --package brainix-capability-verify
-      - name: Kani — Apple Device Tree decoder (AS-0-T3)
-        run: cargo kani --package brainix-adt-verify
-      # The no-allocation harness installs a global allocator, so it runs on its
-      # own. See src/adt-verify/src/lib.rs for why it is feature-gated.
-      - name: Kani — ADT decoder performs no allocation
-        run: >-
-          cargo kani --package brainix-adt-verify
-          --features deny-allocation
-          --harness adt_decoder_performs_no_allocation
-      # The two network-facing crates: the BSP v2 wire decoder and the PSK key
-      # schedule plus AEAD record layer. Both are Full tier under
-      # SECURITY_INVARIANTS.md §16 and are the outermost attack surface in the
-      # system.
-      - name: Kani — BSP v2 wire decoder (P2-T3)
-        run: cargo kani --package brainix-bsp-verify
-      - name: Kani — BSP v2 transport cryptography (P2-T2)
-        run: cargo kani --package brainix-transport-crypto-verify
-      # Replaces the former Prusti job. That job pointed at src/brainix-ipc-core/,
-      # a shim whose contracts were tautologies about a hand-written copy of the
-      # IPC path that nothing in the tree called -- and which had never once
-      # executed, because its annotations gated on a feature its manifest never
-      # declared. These harnesses run against the real perform_rendezvous.
-      - name: Kani — IPC rendezvous capability transfer (INV-IPC-002/005)
-        run: cargo kani --package brainix-ipc-verify
+      - name: Kani — ${{ matrix.name }}
+        run: cargo kani ${{ matrix.args }}
 
   # ---------------------------------------------------------------------------
   # 5. QEMU integration test — boots kernel, asserts serial output

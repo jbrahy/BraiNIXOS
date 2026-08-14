@@ -12,7 +12,7 @@
 //! `src/capability-verify/` does for the kernel's capability subsystem. It adds
 //! no code to `brainix-adt` and changes none.
 //!
-//! # The bound, stated honestly
+//! # The first bound: length
 //!
 //! Kani is a **bounded** model checker. It cannot verify a `&[u8]` of unbounded
 //! length, so every harness over a blob fixes the blob's length to a constant
@@ -52,6 +52,76 @@
 //! all six `u64` fields of a translation, and
 //! [`proofs::adt_cell_counts_enforce_the_specification_bounds`] over both
 //! `u32` cell counts.
+//!
+//! # The second bound: shape, and why it exists
+//!
+//! Three harnesses take a blob whose **structure** is concrete and whose
+//! **content** is symbolic: the node headers, the 32-byte property name fields
+//! and the property length words are written by the harness, while the
+//! property values stay arbitrary. They are
+//! [`proofs::adt_every_read_stays_within_the_supplied_buffer`],
+//! `proofs::adt_traversal_terminates_on_all_inputs` and
+//! `proofs::adt_path_resolution_never_panics_on_an_arbitrary_path`.
+//!
+//! **This bound is not a preference; it is what makes them finish.** Solver
+//! cost here rises steeply with the unwind bound, and the longest loop in the
+//! decoder is the scan for the NUL inside a property's fixed 32-byte name
+//! field, which needs 33 iterations. A harness that reaches a name over a
+//! fully symbolic blob therefore needs `unwind(34)`, and at that bound none of
+//! these three completed: measured on this repository, the 12-byte reject-only
+//! harness alone took 338s at `unwind(34)` against 6s at `unwind(3)`, and the
+//! path-resolution harness ran for 27 minutes in CI without finishing, until
+//! the runner was reclaimed. Proofs that never terminate are not a gate; they
+//! are a job that always fails.
+//!
+//! Fixing the structure makes those scans short, so these harnesses run at
+//! `unwind(6)` to `unwind(10)` and complete in seconds to a couple of minutes.
+//!
+//! **What the shape gives up, and what still covers it.** The header fields and
+//! name-field bytes are not quantified over in those three. They *are*
+//! quantified over in
+//! [`proofs::adt_parse_never_panics_on_any_twelve_byte_input`] and
+//! [`proofs::adt_parse_never_panics_on_any_forty_eight_byte_input`], which
+//! stay fully symbolic — every count, every name byte, every length word — and
+//! which are the harnesses that carry the headline "does not panic on hostile
+//! input" property. The split is: *parse* is proved against arbitrary bytes;
+//! the *accessors and the walk* are proved against arbitrary content in a
+//! fixed shape. Neither statement is the other, and neither is stated more
+//! broadly than it holds.
+//!
+//! # The third bound: cost, and what is not run in CI
+//!
+//! Two harnesses are behind the **`long-proofs`** feature and do not run on a
+//! pull request: `adt_traversal_terminates_on_all_inputs` and
+//! `adt_path_resolution_never_panics_on_an_arbitrary_path`. Both are the ones
+//! that parse the 96-byte nested blob.
+//!
+//! **They are excluded because they have never been observed to terminate.**
+//! Measured on an M2 Pro, with the shape above and a four-slot traversal stack:
+//! parsing the nested blob *alone*, with no walk and no accessor call, takes
+//! 264s; each of the two harnesses was killed at 12.5 minutes with no verdict,
+//! at unwind bounds of 6 and 10, and again with the symbolic content reduced to
+//! a single byte per node. Kani's cost here is dominated by symbolic execution
+//! over a 96-byte buffer, and lowering the unwind bound does not reach it.
+//!
+//! What that costs, stated plainly: **the child iterator, the depth counter and
+//! path resolution have no proof running in CI.** They have tests and a fuzz
+//! target, and they are the reason `NESTED_BLOB_LEN` exists, but the gate on
+//! every pull request is the five harnesses that finish. A proof that does not
+//! terminate is not a gate; leaving it in the job only converts every run into
+//! a timeout, which is what it did before this feature existed (CI run
+//! 31721650927 spent 27 minutes inside the path harness and never reached the
+//! BSP, transport-crypto or IPC proofs at all).
+//!
+//! They are kept in the tree, not deleted, because they state the property that
+//! is wanted, and because the cost may not be permanent — a tighter shape, a
+//! different solver, or a Kani release with better symex could bring them into
+//! reach. Run them deliberately, with a budget, and expect to wait:
+//!
+//! ```text
+//! cargo kani -p brainix-adt-verify --features long-proofs \
+//!     --harness adt_traversal_terminates_on_all_inputs
+//! ```
 
 #![deny(unsafe_code)]
 // kani is a cfg set by the Kani verification tool's dedicated CI image.
@@ -112,27 +182,43 @@ mod allocation {
 
 #[cfg(kani)]
 mod proofs {
-    use brainix_adt::{
-        AddressRange, CellCounts, DeviceTree, Node, RangesEntry, MAX_PATH_NODES, MAX_TREE_DEPTH,
-    };
+    use brainix_adt::{AddressRange, CellCounts, DeviceTree, Node, RangesEntry};
+    #[cfg(feature = "long-proofs")]
+    use brainix_adt::{MAX_PATH_NODES, MAX_TREE_DEPTH};
 
-    use crate::{BOUNDED_BLOB_LEN, NESTED_BLOB_LEN, SMALL_BLOB_LEN};
+    #[cfg(feature = "long-proofs")]
+    use crate::NESTED_BLOB_LEN;
+    use crate::{BOUNDED_BLOB_LEN, SMALL_BLOB_LEN};
 
-    // Every harness that touches a property record carries `#[kani::unwind(34)]`.
-    // The attribute takes an integer literal, so the number cannot be given a
-    // name; it is explained once here.
+    // Every harness carries an explicit `#[kani::unwind(N)]`. The attribute
+    // takes an integer literal, so the numbers cannot be given names; they are
+    // explained once here.
     //
-    // The longest loop the decoder runs on a blob of these lengths is the scan
-    // for the NUL inside a property's fixed 32-byte name field, which needs 33
-    // iterations, so 34 is one past it. Every other loop is shorter: the
-    // structural walk's visit budget is `blob.len() / 8 + 1` (7 at 48 bytes, 13
-    // at 96), and the property walk is bounded by a count the minimum-space test
-    // has already capped at 1 or 2. If any loop needed more, Kani would report
-    // an unwinding-assertion failure rather than a false success.
+    // Each N is the smallest value at which the harness verifies, and it is
+    // chosen by measurement rather than by argument, because solver cost rises
+    // steeply with it -- the 12-byte harness takes 6s at 3 and 338s at 34. Too
+    // small is not a silent unsoundness: Kani reports an unwinding-assertion
+    // failure for a loop that could run past the bound, which is how each of
+    // these numbers was found.
+    //
+    // **3** covers the two fully symbolic parse harnesses. Neither reaches a
+    // property name, so the longest loop either runs is the property walk,
+    // which the minimum-space test caps at one record at these lengths.
+    //
+    // **6, 8 and 10** cover the three shaped harnesses -- see the crate
+    // documentation's *The second bound*. The scan for the NUL in a 32-byte
+    // name field would need 33, which is exactly why those harnesses write the
+    // name field rather than leaving it symbolic; what remains is the walk
+    // (2 nodes), the value scan (4 bytes) and the path walk (4 components).
 
-    /// Capacity of the harness's own traversal stack. The blob lengths proved
-    /// here cannot encode more nodes than this.
-    const TRAVERSAL_STACK_LEN: usize = 16;
+    /// Capacity of the harness's own traversal stack.
+    ///
+    /// Four, not sixteen: the shaped nested blob the traversal harness walks
+    /// holds exactly two nodes, so four is the tree's size with margin, and the
+    /// stack is symbolically indexed inside an unrolled loop — every unused
+    /// slot is paid for on every path.
+    #[cfg(feature = "long-proofs")]
+    const TRAVERSAL_STACK_LEN: usize = 4;
 
     /// Whether `part` is a sub-slice of `blob`.
     ///
@@ -196,7 +282,7 @@ mod proofs {
     ///
     /// The cheap tier. It completes where the wider harnesses may not.
     #[kani::proof]
-    #[kani::unwind(34)]
+    #[kani::unwind(3)]
     fn adt_parse_never_panics_on_any_twelve_byte_input() {
         let blob: [u8; SMALL_BLOB_LEN] = kani::any();
         let outcome = DeviceTree::parse(&blob);
@@ -219,7 +305,7 @@ mod proofs {
     /// explicit assertion adds the decoder's own contract, that a tree never
     /// claims more bytes than the buffer holds.
     #[kani::proof]
-    #[kani::unwind(34)]
+    #[kani::unwind(3)]
     fn adt_parse_never_panics_on_any_forty_eight_byte_input() {
         let blob: [u8; BOUNDED_BLOB_LEN] = kani::any();
         if let Ok(tree) = DeviceTree::parse(&blob) {
@@ -246,10 +332,16 @@ mod proofs {
     /// Kani's own out-of-bounds check covers reads the decoder performs
     /// internally; these assertions cover the slices it *returns*, which the
     /// caller will read later and which no internal check constrains.
+    ///
+    /// **Shaped, not arbitrary** — see the crate documentation's *The second
+    /// bound* for why, and for what the fully arbitrary harnesses above still
+    /// cover. The node header and the property's name field are concrete; the
+    /// length word and the value are symbolic, so every accessor here runs on
+    /// content it cannot predict.
     #[kani::proof]
-    #[kani::unwind(34)]
+    #[kani::unwind(6)]
     fn adt_every_read_stays_within_the_supplied_buffer() {
-        let blob: [u8; BOUNDED_BLOB_LEN] = kani::any();
+        let blob = shaped_blob();
         let tree = match DeviceTree::parse(&blob) {
             Ok(tree) => tree,
             Err(_) => return,
@@ -278,16 +370,75 @@ mod proofs {
         read_every_property(&blob, root);
     }
 
+    /// Writes one node at `at`: a concrete header declaring one property and
+    /// `child_count` children, a concrete `name` name-field, a concrete length
+    /// word of 4, and a **symbolic** four-byte value. Returns the offset just
+    /// past it.
+    ///
+    /// Forty-eight bytes: 8 header + 32 name field + 4 length word + 4 value.
+    /// Everything but the value is structure, and structure is what the shaped
+    /// harnesses hold fixed — see the crate documentation's *The second bound*.
+    fn write_shaped_node(blob: &mut [u8], at: usize, child_count: u8) -> usize {
+        let put = |blob: &mut [u8], offset: usize, byte: u8| {
+            if let Some(slot) = blob.get_mut(at.saturating_add(offset)) {
+                *slot = byte;
+            }
+        };
+        put(blob, 0, 1);
+        put(blob, 4, child_count);
+        put(blob, 8, b'n');
+        put(blob, 9, b'a');
+        put(blob, 10, b'm');
+        put(blob, 11, b'e');
+        put(blob, 40, 4);
+        let value: [u8; 4] = kani::any();
+        put(blob, 44, value[0]);
+        put(blob, 45, value[1]);
+        put(blob, 46, value[2]);
+        put(blob, 47, value[3]);
+        at.saturating_add(SHAPED_NODE_LEN)
+    }
+
+    /// Bytes one shaped node occupies: 8 header + 32 name field + 4 length
+    /// word + 4 value.
+    const SHAPED_NODE_LEN: usize = 48;
+
+    /// The smallest well-formed tree: one node, one `name` property, no
+    /// children. Structure concrete, record content symbolic.
+    fn shaped_blob() -> [u8; BOUNDED_BLOB_LEN] {
+        let mut blob = [0u8; BOUNDED_BLOB_LEN];
+        let _ = write_shaped_node(&mut blob, 0, 0);
+        blob
+    }
+
+    /// The smallest nested tree: a parent with one child, each shaped as
+    /// [`write_shaped_node`] writes them.
+    #[cfg(feature = "long-proofs")]
+    fn shaped_nested_blob() -> [u8; NESTED_BLOB_LEN] {
+        let mut blob = [0u8; NESTED_BLOB_LEN];
+        let child = write_shaped_node(&mut blob, 0, 1);
+        let _ = write_shaped_node(&mut blob, child, 0);
+        blob
+    }
+
     /// **No allocation.**
     ///
-    /// The harness runs a full parse-and-read under the deny-allocator in
-    /// [`crate::allocation`]. Any heap allocation on any path — including one
-    /// introduced by a future edit to the decoder — makes that allocator's
-    /// assertion reachable, and Kani reports it. The proof is that it is
-    /// unreachable for every 48-byte input.
+    /// The harness runs a parse-and-read under the deny-allocator in
+    /// [`crate::allocation`]. Any heap allocation on any path it reaches —
+    /// including one introduced by a future edit to the decoder — makes that
+    /// allocator's assertion reachable, and Kani reports it. The proof is that
+    /// it is unreachable.
     ///
     /// This is the machine-checked form of the crate's `#![no_std]`,
     /// zero-dependency claim (`INV-PARSE-001`, `INV-MEM`).
+    ///
+    /// **It does not call `cell_counts`.** That lookup compares against
+    /// `#address-cells`, a fourteen-character name, and a comparison that long
+    /// needs `unwind(15)`; at 16 this harness did not finish in ten minutes,
+    /// against 92s at 6. The paths it drops are two `u32` property reads that
+    /// `read_every_property` below already runs through `as_u32`, so what is
+    /// lost is the lookup by a long name rather than any decoding the harness
+    /// does not otherwise reach.
     ///
     /// Enabled by the `deny-allocation` feature, which also installs the
     /// allocator. Run it with
@@ -295,16 +446,15 @@ mod proofs {
     /// adt_decoder_performs_no_allocation`.
     #[cfg(feature = "deny-allocation")]
     #[kani::proof]
-    #[kani::unwind(34)]
+    #[kani::unwind(6)]
     fn adt_decoder_performs_no_allocation() {
-        let blob: [u8; BOUNDED_BLOB_LEN] = kani::any();
+        let blob = shaped_blob();
         let tree = match DeviceTree::parse(&blob) {
             Ok(tree) => tree,
             Err(_) => return,
         };
         let root = tree.root();
         let _ = root.name();
-        let _ = root.cell_counts();
         let _ = root.find_property(b"reg");
         read_every_property(&blob, root);
     }
@@ -320,12 +470,27 @@ mod proofs {
     /// than of the decoder's internals.
     ///
     /// Termination itself is proved by the unwinding assertions: a loop that
-    /// could run past the harness's 34-iteration unwind bound would be reported
-    /// as an unwinding failure, not silently accepted.
+    /// could run past the harness's unwind bound would be reported as an
+    /// unwinding failure, not silently accepted.
+    ///
+    /// **Shaped, not arbitrary** — the two node headers, both name fields and
+    /// both length words are concrete; only the property values are symbolic.
+    /// See the crate documentation's *The second bound*.
+    ///
+    /// The walk deliberately does **not** read properties. Three nested loops
+    /// -- the walk, the child iterator and a property scan -- unroll
+    /// multiplicatively, and at `unwind(8)` that did not finish in ten minutes.
+    /// What a property read would add here is covered by
+    /// [`adt_every_read_stays_within_the_supplied_buffer`], which does nothing
+    /// else; this harness is about the shape of the walk.
+    ///
+    /// **Behind `long-proofs`, and not in CI** — see the crate documentation's
+    /// *The third bound: cost*.
+    #[cfg(feature = "long-proofs")]
     #[kani::proof]
-    #[kani::unwind(34)]
+    #[kani::unwind(3)]
     fn adt_traversal_terminates_on_all_inputs() {
-        let blob: [u8; NESTED_BLOB_LEN] = kani::any();
+        let blob = shaped_nested_blob();
         let tree = match DeviceTree::parse(&blob) {
             Ok(tree) => tree,
             Err(_) => return,
@@ -351,7 +516,6 @@ mod proofs {
                 node.depth() <= MAX_TREE_DEPTH,
                 "a node reported a depth past the limit",
             );
-            read_every_property(&blob, node);
 
             let children = match node.children() {
                 Ok(children) => children,
@@ -377,23 +541,49 @@ mod proofs {
 
     /// **Path resolution never panics on an arbitrary path.**
     ///
-    /// The path decoder is reachable only through a parsed tree, so it is
-    /// proved here against an arbitrary eight-byte path over an arbitrary
-    /// 48-byte blob. Every separator arrangement of that length is covered,
-    /// including the leading, trailing, empty-component and all-separator
-    /// cases the format rejects. On success the resolved chain is asserted to
-    /// respect the fixed capacity that makes `NodePath` allocation-free.
+    /// The **path** is arbitrary: all 2^32 four-byte strings, so every
+    /// separator arrangement is covered, including the leading, trailing,
+    /// empty-component and all-separator cases the format rejects. The tree it
+    /// resolves against is the shaped nested blob — a parent and one child, so
+    /// that a *successful* resolution is reachable and the harness is not
+    /// vacuously about rejection, with both node names symbolic so a match is
+    /// decided on content the harness did not choose.
+    ///
+    /// **Four bytes, not eight**, because four is the width at which success is
+    /// reachable: a child's name is the NUL-terminated prefix of its `name`
+    /// property's four-byte value, so it is at most three characters, and
+    /// `/abc` is the longest path that can match one. An eight-byte path over
+    /// this tree could only ever be refused, which would make every assertion
+    /// below unreachable and the harness a statement about rejection alone.
+    ///
+    /// On success the resolved chain is asserted to respect the fixed capacity
+    /// that makes `NodePath` allocation-free.
+    ///
+    /// `node_exists` is not called separately: it is `resolve` plus a match on
+    /// the error, so calling it would double the cost of this harness and prove
+    /// nothing `resolve` does not.
+    ///
+    /// **Behind `long-proofs`, and not in CI** — see the crate documentation's
+    /// *The third bound: cost*.
+    #[cfg(feature = "long-proofs")]
     #[kani::proof]
-    #[kani::unwind(34)]
+    #[kani::unwind(10)]
     fn adt_path_resolution_never_panics_on_an_arbitrary_path() {
-        let blob: [u8; BOUNDED_BLOB_LEN] = kani::any();
+        let blob = shaped_nested_blob();
         let tree = match DeviceTree::parse(&blob) {
             Ok(tree) => tree,
             Err(_) => return,
         };
-        let path: [u8; 8] = kani::any();
-        let _ = tree.node_exists(&path);
+        let path: [u8; 4] = kani::any();
         if let Ok(chain) = tree.resolve(&path) {
+            // Vacuity guard: an unsatisfiable cover is reported as a failure,
+            // so this is the "success is reachable" claim above made
+            // machine-checked rather than argued. A chain longer than the root
+            // alone means the walk really did match the child's name.
+            kani::cover!(
+                chain.len() > 1,
+                "no four-byte path reaches the child, so the assertions below never run"
+            );
             kani::assert(chain.len() >= 1, "a resolved path holds no nodes");
             kani::assert(
                 chain.len() <= MAX_PATH_NODES,

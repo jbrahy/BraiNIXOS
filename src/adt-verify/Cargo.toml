@@ -11,6 +11,12 @@ description = "Kani proof harnesses for the Apple Device Tree decoder (AS-0-T3)"
 # Off by default so that a global allocator can never affect the other harnesses.
 deny-allocation = []
 
+# The harnesses over the 96-byte nested blob, which have never been observed to
+# terminate. Off by default so that CI runs the proofs that finish; see the
+# crate documentation's "The third bound: cost" for the measurements and for
+# what is lost by not running them on every pull request.
+long-proofs = []
+
 [dependencies]
 brainix-adt = { path = "../adt" }
 
