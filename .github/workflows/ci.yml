@@ -34,8 +34,17 @@ jobs:
       - name: cargo clippy (bare-metal target)
         run: cargo clippy -p brainix-kernel -p brainix-bootloader --features brainix-kernel/kernel-binary --target x86_64-unknown-none -- -D warnings
 
+      # --target is REQUIRED and its absence is why this step failed with
+      # "can't find crate for `std`" on brainix-adt-verify.
+      #
+      # .cargo/config.toml sets `build.target = "x86_64-unknown-none"`, so a
+      # cargo invocation with no --target builds bare metal, not host. This step
+      # therefore was not a host run at all: it re-checked the excluded crates'
+      # dependencies against a target with no std, and the first std crate in
+      # the workspace -- adt-verify -- could not compile. Naming the runner's
+      # own triple makes the step do what it says.
       - name: cargo clippy (host target)
-        run: cargo clippy --workspace --exclude brainix-capability-verify --exclude brainix-kernel --exclude brainix-bootloader --exclude brainix-ipc-verify --exclude brainix-bootloader-verify -- -D warnings
+        run: cargo clippy --workspace --exclude brainix-capability-verify --exclude brainix-kernel --exclude brainix-bootloader --exclude brainix-ipc-verify --exclude brainix-bootloader-verify --target x86_64-unknown-linux-gnu -- -D warnings
 
   # ---------------------------------------------------------------------------
   # 1. Supply chain audit — runs after style gate
@@ -104,11 +113,15 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-unit-${{ hashFiles('**/Cargo.lock') }}
 
+      # Both steps name the runner's own triple for the same reason the style
+      # job's host clippy step does: .cargo/config.toml sets
+      # `build.target = "x86_64-unknown-none"`, so a bare `cargo test` builds a
+      # std test harness for a target with no std and never runs a test.
       - name: Run capability-verify unit tests (hosted Kani shim)
-        run: cargo test -p brainix-capability-verify --verbose
+        run: cargo test -p brainix-capability-verify --target x86_64-unknown-linux-gnu --verbose
 
       - name: Run kernel security boot tests (host target)
-        run: cargo test -p brainix-kernel --verbose
+        run: cargo test -p brainix-kernel --target x86_64-unknown-linux-gnu --verbose
 
   # ---------------------------------------------------------------------------
   # 3. Kernel cross-compile — verifies no_std bare-metal build
