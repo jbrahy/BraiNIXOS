@@ -90,6 +90,13 @@ name = "brainix-devd-nic"
 version = "0.1.0"
 
 [[package]]
+name = "brainix-inferd"
+version = "0.1.0"
+dependencies = [
+ "brainix-bsp",
+]
+
+[[package]]
 name = "brainix-init"
 version = "0.1.0"
 dependencies = [

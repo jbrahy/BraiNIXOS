@@ -53,6 +53,7 @@ CRATES = [
     "brainix-transformer",
     "brainix-servd",
     "brainix-modeld",
+    "brainix-inferd",
 ]
 
 # Whole files excluded from measurement. Each entry names why it cannot be
