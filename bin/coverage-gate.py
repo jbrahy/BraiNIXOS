@@ -51,6 +51,7 @@ CRATES = [
     "brainix-tokenizer",
     "brainix-tensor",
     "brainix-transformer",
+    "brainix-servd",
 ]
 
 # Whole files excluded from measurement. Each entry names why it cannot be
