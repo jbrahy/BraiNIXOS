@@ -17,6 +17,8 @@
 //! what P2-T4 is not complete without:
 //!
 //! - accepting from `transportd` — there is no IPC here;
+//! - the clock itself: [`Tick`] is a reading someone else takes, because a
+//!   crate with no IPC has no business deciding what time it is;
 //! - minting the per-session capability — `CapServe` and `CapAdmin` are the
 //!   kernel's to grant, and the grant is what freezes a session's type;
 //! - the directional keys, sequence counters, and `prompt_buf` the slot is
@@ -63,8 +65,42 @@
 //! on to an old handle.
 
 use brainix_bsp::{
-    Session, SessionType, LEN_HANDLE, MAX_ADMIN_SESSIONS, MAX_SESSIONS, MAX_SESSIONS_PER_CREDENTIAL,
+    Session, SessionType, HS_TIMEOUT_SECONDS, IDLE_TIMEOUT_SECONDS, LEN_HANDLE, MAX_ADMIN_SESSIONS,
+    MAX_SESSIONS, MAX_SESSIONS_PER_CREDENTIAL,
 };
+
+/// A reading of `servd`'s monotonic clock, in seconds.
+///
+/// Monotonic, not wall time: a clock that can move backwards is a clock an
+/// attacker who can influence it uses to hold a slot forever. Nothing here
+/// converts to a date, because nothing here needs to know one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Tick(u64);
+
+impl Tick {
+    /// A reading at `seconds` since boot.
+    #[must_use]
+    pub const fn from_seconds(seconds: u64) -> Self {
+        Self(seconds)
+    }
+
+    /// The reading, in seconds since boot.
+    #[must_use]
+    pub const fn seconds(&self) -> u64 {
+        self.0
+    }
+
+    /// This reading advanced by `seconds`, saturating.
+    ///
+    /// Saturating rather than checked: a deadline that overflows is a deadline
+    /// at the end of time, which keeps the slot rather than reclaiming it
+    /// early. Reclaiming early would tear down a live session on an arithmetic
+    /// edge, which is a worse failure than holding one slot too long.
+    #[must_use]
+    pub const fn plus_seconds(&self, seconds: u64) -> Self {
+        Self(self.0.saturating_add(seconds))
+    }
+}
 
 /// The credential that authenticated a session, by its enrolled handle.
 ///
@@ -132,6 +168,11 @@ struct Slot {
     credential: Option<CredentialHandle>,
     session_type: SessionType,
     session: Session,
+    /// When this slot is reclaimed if nothing moves it.
+    ///
+    /// `HS_TIMEOUT` from acquisition while the handshake is half-open, then
+    /// `IDLE_TIMEOUT` from the last activity once the session is established.
+    deadline: Tick,
     /// Advanced on every release, so handles issued before it never resolve.
     generation: u32,
 }
@@ -142,6 +183,7 @@ impl Slot {
             credential: None,
             session_type: SessionType::Client,
             session: Session::new(),
+            deadline: Tick::from_seconds(0),
             generation: 0,
         }
     }
@@ -194,6 +236,7 @@ impl SessionSlots {
         &mut self,
         credential: CredentialHandle,
         session_type: SessionType,
+        now: Tick,
     ) -> Result<SlotHandle, AdmissionDenied> {
         if self.live_for_credential(credential) >= MAX_SESSIONS_PER_CREDENTIAL {
             return Err(AdmissionDenied::CredentialLimitReached);
@@ -211,6 +254,7 @@ impl SessionSlots {
             slot.credential = Some(credential);
             slot.session_type = session_type;
             slot.session = Session::new();
+            slot.deadline = now.plus_seconds(u64::from(HS_TIMEOUT_SECONDS));
             return Ok(SlotHandle {
                 index,
                 generation: slot.generation,
@@ -234,6 +278,7 @@ impl SessionSlots {
         slot.credential = None;
         slot.session = Session::new();
         slot.session_type = SessionType::Client;
+        slot.deadline = Tick::from_seconds(0);
         slot.generation = slot.generation.wrapping_add(1);
         Ok(())
     }
@@ -303,6 +348,67 @@ impl SessionSlots {
             .iter()
             .filter(|slot| slot.is_occupied() && slot.session_type == session_type)
             .count()
+    }
+
+    /// Moves a slot from the handshake deadline to the idle one.
+    ///
+    /// Called when the session reaches `ESTABLISHED`. Until then the slot is
+    /// held on `HS_TIMEOUT`, which is what bounds a replayed `ClientHello`.
+    ///
+    /// # Errors
+    ///
+    /// [`SlotError::Stale`] if the handle has been released.
+    pub fn note_established(&mut self, handle: SlotHandle, now: Tick) -> Result<(), SlotError> {
+        let slot = self.resolve_mut(handle)?;
+        slot.deadline = now.plus_seconds(u64::from(IDLE_TIMEOUT_SECONDS));
+        Ok(())
+    }
+
+    /// Postpones an established session's idle deadline.
+    ///
+    /// # Errors
+    ///
+    /// [`SlotError::Stale`] if the handle has been released.
+    pub fn note_activity(&mut self, handle: SlotHandle, now: Tick) -> Result<(), SlotError> {
+        self.note_established(handle, now)
+    }
+
+    /// When this slot is reclaimed if nothing moves it.
+    ///
+    /// # Errors
+    ///
+    /// [`SlotError::Stale`] if the handle has been released.
+    pub fn deadline(&self, handle: SlotHandle) -> Result<Tick, SlotError> {
+        self.resolve(handle).map(|slot| slot.deadline)
+    }
+
+    /// Reclaims every slot whose deadline has passed, and returns how many.
+    ///
+    /// **This is the other half of admission.** The per-credential limit counts
+    /// half-open handshakes precisely so a replayed `ClientHello` cannot
+    /// consume the pool — but a limit with no expiry only bounds how many slots
+    /// one credential holds *at once*, not for how long, so without this the
+    /// attacker holds them forever and the bound protects nobody. BSP v2 §9.1
+    /// says the hold lasts "until `HS_TIMEOUT`"; this is what makes that
+    /// sentence true.
+    ///
+    /// Reclaiming releases the slot, so every handle to it goes stale exactly
+    /// as it would on an orderly teardown. A caller holding one learns from
+    /// [`SlotError::Stale`] rather than from silence.
+    pub fn expire(&mut self, now: Tick) -> usize {
+        let mut reclaimed: usize = 0;
+        for slot in &mut self.slots {
+            if !slot.is_occupied() || slot.deadline > now {
+                continue;
+            }
+            slot.credential = None;
+            slot.session = Session::new();
+            slot.session_type = SessionType::Client;
+            slot.deadline = Tick::from_seconds(0);
+            slot.generation = slot.generation.wrapping_add(1);
+            reclaimed = reclaimed.saturating_add(1);
+        }
+        reclaimed
     }
 
     fn resolve(&self, handle: SlotHandle) -> Result<&Slot, SlotError> {
