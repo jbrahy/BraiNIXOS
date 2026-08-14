@@ -11,7 +11,15 @@ fn main() {
 
     let coverage = map_proofs_to_invariants(&kani_proofs, &fuzz_targets, &invariants);
 
-    print_report(&invariants, &coverage, &kani_proofs, &fuzz_targets);
+    let ci_features = ci_enabled_features(&repo_root);
+
+    print_report(
+        &invariants,
+        &coverage,
+        &kani_proofs,
+        &fuzz_targets,
+        &ci_features,
+    );
 }
 
 fn find_repo_root() -> Option<PathBuf> {
@@ -30,8 +38,61 @@ fn find_repo_root() -> Option<PathBuf> {
 struct Proof {
     name: String,
     file: String,
+    /// The cargo feature this harness is gated behind, if any.
+    ///
+    /// A harness that exists is not a harness that runs. Eight in this tree
+    /// sit behind `long-proofs` because they have never been observed to
+    /// terminate, and counting them as coverage would be a claim nothing can
+    /// falsify -- which the north star forbids in exactly those words.
+    gate: Option<String>,
     #[allow(dead_code)]
     lines: Vec<String>,
+}
+
+impl Proof {
+    /// Whether CI runs this harness.
+    ///
+    /// Ungated harnesses always run. A gated one runs only if some CI step
+    /// enables its feature -- which is read out of the workflow rather than
+    /// assumed, so a harness gated behind a feature nobody enables is reported
+    /// as unrun even though it looks exactly like one that is.
+    fn runs_in_ci(&self, ci_features: &[String]) -> bool {
+        match &self.gate {
+            None => true,
+            Some(gate) => ci_features.iter().any(|enabled| enabled == gate),
+        }
+    }
+}
+
+/// The cargo features `.github/workflows/ci.yml` enables anywhere.
+///
+/// `deny-allocation` and `long-proofs` look identical in the source -- both are
+/// `#[cfg(feature = ...)]` on a `#[kani::proof]`. The difference is that CI has
+/// a job for one and not the other, and that difference lives in the workflow.
+fn ci_enabled_features(repo_root: &Path) -> Vec<String> {
+    let path = repo_root.join(".github/workflows/ci.yml");
+    let Ok(workflow) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut features = Vec::new();
+    for line in workflow.lines() {
+        let mut rest = line;
+        while let Some(at) = rest.find("--features") {
+            let after = &rest[at.saturating_add("--features".len())..];
+            let name: String = after
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == ',')
+                .collect();
+            for feature in name.split(',').filter(|f| !f.is_empty()) {
+                if !features.iter().any(|existing| existing == feature) {
+                    features.push(feature.to_string());
+                }
+            }
+            rest = after;
+        }
+    }
+    features
 }
 
 #[derive(Debug, Clone)]
@@ -92,12 +153,23 @@ fn extract_proofs_from_file(path: &Path, content: &str, proofs: &mut Vec<Proof>)
 
     for (i, line) in lines.iter().enumerate() {
         if line.contains("#[kani::proof]") {
+            // A `#[cfg(feature = "...")]` may sit above the proof attribute or
+            // between it and the function; both orders appear in this tree.
+            let gate_above = lines[i.saturating_sub(3)..i]
+                .iter()
+                .rev()
+                .find_map(|candidate| extract_feature_gate(candidate));
+
             // Look for the function definition in the next few lines
             for j in (i+1)..std::cmp::min(i+10, lines.len()) {
+                let gate_below = lines[(i + 1)..=j]
+                    .iter()
+                    .find_map(|c| extract_feature_gate(c));
                 if let Some(fn_name) = extract_function_name(lines[j]) {
                     let proof = Proof {
                         name: fn_name,
                         file: path.display().to_string(),
+                        gate: gate_above.clone().or(gate_below),
                         lines: vec![content.to_string()],
                     };
                     proofs.push(proof);
@@ -106,6 +178,18 @@ fn extract_proofs_from_file(path: &Path, content: &str, proofs: &mut Vec<Proof>)
             }
         }
     }
+}
+
+/// The feature named by a `#[cfg(feature = "name")]` attribute, if this line is one.
+fn extract_feature_gate(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("#[cfg(") || !trimmed.contains("feature") {
+        return None;
+    }
+    let after = trimmed.split("feature").nth(1)?;
+    let mut quoted = after.split('"');
+    let _before = quoted.next()?;
+    quoted.next().map(std::string::ToString::to_string)
 }
 
 fn extract_function_name(line: &str) -> Option<String> {
@@ -354,6 +438,7 @@ fn print_report(
     coverage: &Coverage,
     kani_proofs: &[Proof],
     fuzz_targets: &[FuzzTarget],
+    ci_features: &[String],
 ) {
     println!("# BraiNIX Proof Coverage Report\n");
 
@@ -368,8 +453,25 @@ fn print_report(
     println!("- **Target (80% bar)**: Need {} more invariants covered\n",
              ((total_invariants as f64 * 0.8) as usize).saturating_sub(covered_invariants));
 
-    println!("- **Kani Proofs**: {}", kani_proofs.len());
+    let running = kani_proofs
+        .iter()
+        .filter(|proof| proof.runs_in_ci(ci_features))
+        .count();
+    let gated = kani_proofs.len().saturating_sub(running);
+    println!("- **Kani Proofs**: {} ({} run in CI, {} gated)", kani_proofs.len(), running, gated);
     println!("- **Fuzz Targets**: {}\n", fuzz_targets.len());
+
+    if gated > 0 {
+        println!("### Harnesses that exist but do not run\n");
+        println!("A harness behind a cargo feature is not part of the gate on a pull");
+        println!("request. Counting one as coverage would be a claim nothing can");
+        println!("falsify, so they are listed here and excluded from the figure above.\n");
+        for proof in kani_proofs.iter().filter(|proof| !proof.runs_in_ci(ci_features)) {
+            let gate = proof.gate.clone().unwrap_or_else(|| "unknown".to_string());
+            println!("- `{}` ({}) — behind `{}`", proof.name, component_label(&proof.file), gate);
+        }
+        println!();
+    }
 
     println!("## Invariant Coverage Details\n");
 
@@ -386,7 +488,14 @@ fn print_report(
         if !proofs.is_empty() {
             println!("  **Kani Proofs** ({}):", proofs.len());
             for proof in proofs {
-                println!("    - `{}` ({})", proof.name, component_label(&proof.file));
+                let mark = match &proof.gate {
+                    Some(gate) if !proof.runs_in_ci(ci_features) => {
+                        format!(" — GATED behind `{gate}`, does not run in CI")
+                    }
+                    Some(gate) => format!(" — behind `{gate}`, enabled by a CI job"),
+                    None => String::new(),
+                };
+                println!("    - `{}` ({}){}", proof.name, component_label(&proof.file), mark);
             }
         }
 
