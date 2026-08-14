@@ -110,6 +110,7 @@ dependencies = [
 name = "brainix-datapath"
 version = "0.1.0"
 dependencies = [
+ "brainix-auditd",
  "brainix-bsp",
  "brainix-bsp-client",
  "brainix-inferd",

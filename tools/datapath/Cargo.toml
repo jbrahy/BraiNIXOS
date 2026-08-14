@@ -10,6 +10,7 @@ brainix-bsp = { path = "../../src/bsp" }
 brainix-bsp-client = { path = "../bsp-client" }
 brainix-inferd = { path = "../../src/servers/inferd" }
 brainix-servd = { path = "../../src/servers/servd" }
+brainix-auditd = { path = "../../src/servers/auditd" }
 brainix-transport-crypto = { path = "../../src/transport-crypto" }
 
 [lints]
