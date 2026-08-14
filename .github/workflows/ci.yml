@@ -333,6 +333,21 @@ jobs:
           GRUBEOF
           grub-mkrescue -o brainix.iso iso/
 
+      # No --create-ek-cert / --create-platform-cert, deliberately.
+      #
+      # Those two are the only flags that invoke swtpm_localca, which writes
+      # its CA state to /var/lib/swtpm-localca -- a root-owned directory on
+      # ubuntu-latest. It failed with "Need read/write rights on statedir
+      # /var/lib/swtpm-localca for user runner", and the message that followed
+      # it, "Error getting next filename: No child processes", made it look
+      # like a swtpm bug rather than a permissions one.
+      #
+      # Nothing here needs them. The certificates exist so that a *remote*
+      # verifier can chain an EK to a manufacturer CA; this job asserts a
+      # serial banner after a measured boot, and BraiNIX does no remote
+      # attestation on any platform (owner decision #24). docker/test.sh, the
+      # harness that has actually booted this kernel, uses `--createek
+      # --overwrite` and nothing else; this now matches it.
       - name: Initialize swtpm (clean state)
         run: |
           rm -rf /tmp/swtpm-test
@@ -342,8 +357,6 @@ jobs:
             --tpmstate /tmp/swtpm-test \
             --createek \
             --decryption \
-            --create-ek-cert \
-            --create-platform-cert \
             --lock-nvram \
             --overwrite
           swtpm socket \
