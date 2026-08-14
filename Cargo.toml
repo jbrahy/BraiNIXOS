@@ -20,6 +20,7 @@ members = [
     "src/dart-verify",
     "src/servd-verify",
     "tools/bsp-client",
+    "tools/datapath",
     "src/capability-verify",
     "src/ipc-verify",
     "userland/shell/0.01",

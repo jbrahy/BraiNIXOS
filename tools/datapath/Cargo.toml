@@ -1,0 +1,16 @@
+[package]
+name = "brainix-datapath"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The host-run serving datapath: the components composed for the first time (P3-T9a)"
+
+[dependencies]
+brainix-bsp = { path = "../../src/bsp" }
+brainix-bsp-client = { path = "../bsp-client" }
+brainix-inferd = { path = "../../src/servers/inferd" }
+brainix-servd = { path = "../../src/servers/servd" }
+brainix-transport-crypto = { path = "../../src/transport-crypto" }
+
+[lints]
+workspace = true

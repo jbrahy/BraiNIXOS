@@ -107,6 +107,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-datapath"
+version = "0.1.0"
+dependencies = [
+ "brainix-bsp",
+ "brainix-bsp-client",
+ "brainix-inferd",
+ "brainix-servd",
+ "brainix-transport-crypto",
+]
+
+[[package]]
 name = "brainix-devd-disk"
 version = "0.1.0"
 
