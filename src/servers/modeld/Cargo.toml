@@ -1,0 +1,11 @@
+[package]
+name = "brainix-modeld"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "modeld: the one-shot weight loader's normative stage sequence and manifest (P3-T3a)"
+
+[dependencies]
+
+[lints]
+workspace = true
