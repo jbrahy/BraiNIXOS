@@ -609,7 +609,7 @@ directories exists today**, and until they do BraiNIX has components without a s
 | A11 | **P3-T8** | Confinement suite — adversarial prompts, zero escalation under any input | A4 | **STARTED 2026-08-14.** Twelve injection prompts carried through a live session; nothing about its authority moves. It asks the type system rather than the model, which is what `INV-MODEL` claims. **A suite that runs them through a real transformer is still owed** and needs the engine, the weights and the loader chain. |
 | A12 | **P2-T6** | Delete `boot/ssh_bridge.rs` and its `static mut` session globals | A1 | Risk 5: the weakest point in the tree until it goes. |
 | A13 | **P3-T0** | Userspace FP/SIMD enablement — FP state save/restore in the context switch, kernel stays soft-float | A4, **AS-1c** | **Re-scoped 2026-08-14: this row is the *context switch*, not the kernels.** Saving and restoring FP state needs a context switch to save it in, so this waits on the aarch64 kernel. The NEON work it was blocking does not, and is now A17. The context-switch ABI is TCB and is reviewed as such. |
-| A14 | **P3-T10** | **Serving performance baseline** | A6, **A16** | **HALF DONE 2026-08-14.** The ceiling is arithmetic now: 7B at Q8 is 7.875 GB/token, so 200 GB/s buys **~25 tokens/second and no more**. Writing it down corrected the obvious claim — Q8 against f16 is **1.78×, not 2×**, because the per-block scales cost 12.5%, and the test asserting 2× failed. The numerator needs the engine running, which is A16, not the kernel. |
+| A14 | **P3-T10** | **Serving performance baseline** | A6, **A16** | **HALF DONE 2026-08-14, and the denominator is now measured rather than assumed.** The ceiling is arithmetic: 7B at Q8 is 7.875 GB/token. The divisor used to be the M2 Pro's 200 GB/s spec figure, buying "~25 tokens/second and no more." **Measured on the target machine the same day: 7.785 tok/s decoding Qwen2.5-Coder-32B Q4_K_M (19.851 GB) under llama.cpp with Metal offload ⇒ ≈155 GB/s achieved.** That makes the honest ceiling **~19.6 tok/s**, and lower again for AS-4c, which is CPU-only where that measurement had the GPU. Read 155 GB/s as an upper reference, not a target: it is generous to us in two directions (GPU present, KV traffic included). Writing the arithmetic down also corrected the obvious claim — Q8 against f16 is **1.78×, not 2×**, because the per-block scales cost 12.5%, and the test asserting 2× failed. The numerator needs the engine running, which is A16, not the kernel. Baseline recorded in [`operations/APPLE_SILICON_BRINGUP_RIG.md`](operations/APPLE_SILICON_BRINGUP_RIG.md) §0a. |
 | A15 | **P3-A** | Phase 3 security audit | A6, A11 | The last audit before hardware. |
 | A16 | *(new slice of **P3-T3a**/**P3-T9a**)* | **A real BXW1 blob and real streamed tokens, host-side.** Run `tools/bxw1-convert` over the checked-out **LiteLlama-460M-1T** in `tools/bxw1-convert/models/`, produce the `.bxw1` and vocab blobs, and drive them through `modeld` → `inferd` → the `src/transformer/` decode loop until tokens come out. | A3, A4, P3-T5, P3-T6 | **Nothing here needs the mini, and it closes three rows' honest caveats at once.** A6 says "streamed tokens are absent, not stubbed"; A11 owes "a suite that runs them through a real transformer"; A14 owes the numerator. All three are owed the same thing: a model that exists. The converter and the 460M weights are already in the tree and **no `.bxw1` has ever been produced** (`find . -name '*.bxw1'` is empty), and `tools/bxw1-run` is named in `Cargo.toml`'s exclude list and does not exist. The blob is a build artifact, never committed — see the note below this table. |
 | A17 | *(new slice of **P3-T4**)* | **NEON tensor kernels.** Aarch64 SIMD matmul and Q8 dequant in `src/tensor/`, behind the same property tests the scalar path already passes. | P3-T4 | **The highest-leverage in-bounds performance work available without hardware, and `grep -rn "neon" src/tensor/src/` returns nothing.** The north star calls NEON out by name and ranks performance above everything but the invariants; the development host *is* aarch64, so these kernels are written, tested and measured on a laptop. Split out of A13 on 2026-08-14 because it was blocked there by a kernel dependency it does not have: kernel FP state matters when `inferd` is a scheduled process, not when the kernels are a host-tested library. Bounded by the invariants exactly as before — no JIT (INV-MEM), fixed scratch, no allocation. |
@@ -664,12 +664,24 @@ this project to verify and the discipline `INV-PARSE-001` already demands.
 | C4 | **AS-4a1** *(new slice)* — RTKit + ANS2 codecs | Mailbox message encode/decode and the ANS2 command/completion structures, as fail-closed parsers with fuzz targets | Talking to the co-processor |
 | C5 | **AS-4b1** — PCIe/NIC descriptor formats | **STARTED 2026-08-14**: `src/pcie-config/` walks the capability list with three independent termination bounds and two Kani proofs over symbolic pointers — the cyclic-list termination the tier table requires. PCI-SIG's layout, so no clean-room spec is needed. NIC descriptors remain. | Link training, TX/RX |
 | C6 | **AS-1c** — the kernel crate goes aarch64 | **UNSTARTED, and the largest unnamed item in this plan until 2026-08-14.** `arch/aarch64/` under `src/kernel`, cfg gates over the module tree, the second bare-metal target in `.cargo` and in CI, with the x86-64 reference still building beside it (#26). It compiles or it does not, and that answer is available on a laptop. | Whether any of it executes — which is AS-1's serial banner |
+| C7 | **AS-1a2** *(new slice, proposed 2026-08-14 — needs owner sign-off, because it changes a written exit criterion)* — **framebuffer first light** | The `video` field of `boot_args` — the same structure AS-0-T4 already parses and whose module doc records that it deliberately skips this field — plus a font blitter into the framebuffer iBoot hands us. Both are pure functions over bytes, so both are unit-tested and fuzzed like every other firmware-supplied structure (`INV-PARSE-001`). | Whether the framebuffer base iBoot reports is where the pixels actually are |
 
 **C3 is the highest-value row in this table and it is not obvious why.** AS-5-T0 precondition 2 — a Kani
 proof that the DART backend's IOMMU trait admits no widening operation — is one of the five **signed,
 unwaivable** acceptance criteria of the TCB-AS/GPU exception, and it is a proof about an **API surface**.
 It can be discharged on a laptop, years before any GPU firmware exists to be confined. Landing C3 turns
 one of the five preconditions green ahead of the hardware it protects.
+
+**C7 exists because the cable does not.** Measured 2026-08-14: there is **no debug UART cable** — the
+development laptop reports zero USB devices, no connected Thunderbolt device, and no USB-serial node. AS-1a
+transmits its banner by writing s5l UART MMIO, and with no cable those bytes leave the SoC on SBU pins that
+nothing is listening to. m1n1 can still chainload over an ordinary USB-C cable, because m1n1 speaks CDC-ACM
+over USB; what cannot cross that link is output from **our** payload, which owns the machine after handoff
+and has no USB stack. C7 gives first light a second, cable-free output path. **It does not retire the
+cable** — break-glass PSK enrollment is serial and stays serial (`INV-BOOT-008`), so the cable is required
+for a deployment even after C7 lands. Order it; just do not wait on it.
+[`operations/APPLE_SILICON_BRINGUP_RIG.md`](operations/APPLE_SILICON_BRINGUP_RIG.md) §3a–3b carries the
+full finding.
 
 **C6 is the row that unblocks the other track.** C3 turns a signed GPU precondition green years early;
 **C6 is what eight Track A rows are actually waiting for.** Every one of them ends "and the rest needs a
@@ -724,18 +736,35 @@ right. **What it does block, permanently until the rig exists:** every claim tha
 ### 1. The rig — owner actions, physical, once per machine
 
 None of this can be done from a repository, and **AS-1's hardware gate cannot open until all of it is
-true**:
+true**. Status measured at the machine on 2026-08-14; the full record, including the machine's identity,
+its firmware at first contact, and the measured bandwidth baseline, is in
+[`operations/APPLE_SILICON_BRINGUP_RIG.md`](operations/APPLE_SILICON_BRINGUP_RIG.md) §0a.
 
-- [ ] Mac mini M2 Pro downgraded to **Permissive Security** via `bputil` from One True Recovery. Requires
-      local admin credentials and physical presence. This is also why **fully headless provisioning is not
-      available** on this platform.
-- [ ] A **debug UART cable** for the s5l console. Until this exists there is no output from a failing boot,
-      and a failing boot is the expected first outcome.
+- [x] **The machine exists and is the reference configuration.** `baby-jesus.local` — `Mac14,12`, M2 Pro,
+      6P+4E, 32 GB, 8 TB internal with 3.3 TB unallocated. Confirmed by measurement, not by assumption.
+- [~] **A second APFS volume group for BraiNIX.** *In progress 2026-08-14.* The mini is **in production
+      use** — it serves Qwen2.5-Coder-32B over `llama-server` on `0.0.0.0:8080` plus a proxy, SMB, screen
+      sharing and ARD — so BraiNIX gets its own volume group rather than the machine. Boot policy on Apple
+      Silicon is per-volume-group, so the working install keeps Full Security while BraiNIX's is
+      downgraded, and deleting the volume group undoes all of it. `disk3s7` created; macOS 15.7.5 fetching.
+- [ ] BraiNIX's volume group downgraded to **Permissive Security** via `bputil` from One True Recovery.
+      Requires local admin credentials and physical presence. This is also why **fully headless
+      provisioning is not available** on this platform. *Blocked on the 15.7.5 install completing.*
+- [ ] A **debug UART cable** for the s5l console. **Measured 2026-08-14: not present** — zero USB devices
+      on the development laptop, no connected Thunderbolt device, no `/dev/cu.usbserial-*`. It blocks
+      AS-1a's banner as written and it blocks break-glass PSK enrollment permanently (`INV-BOOT-008`), so
+      it must be ordered regardless. It does **not** block chainloading, and **C7 (AS-1a2)** proposes a
+      cable-free first-light path so bring-up is not held behind a shipment.
 - [ ] **m1n1** installed as a lab instrument, for register exploration and payload loading.
-- [ ] A **macOS stub install** left on disk — paired recoveryOS and firmware volumes. "Bare metal" means
-      our kernel is the OS, not that Apple software is absent.
-- [ ] The stub's **macOS version pinned and recorded**. Risk 3: every firmware update is a potential
-      breaking change to reverse-engineered structures, with no upstream remedy. Treat any update as a
+- [x] A **macOS stub install** left on disk — paired recoveryOS and firmware volumes. Satisfied twice over:
+      the production install stays, and BraiNIX's own volume group is itself a macOS install.
+- [~] The stub's **macOS version pinned and recorded**. **Owner decision 2026-08-14: bump and pin.** The
+      machine was found at 15.3.1 (24D70) / firmware 11881.81.4, and the oldest installer Apple still
+      offers is **Sequoia 15.7.5 (24G624)**. Firmware is global to the machine and cannot be downgraded, so
+      any second install moves it permanently. The bump was taken deliberately at the one moment it was
+      free — **no hardware fact had been derived from this machine yet**, so there was nothing to
+      re-derive. Sequoia over Tahoe 26.x to avoid a major-generation ABI shift. **Record the resulting
+      firmware version once the install finishes**; from then on Risk 3 applies and every macOS update is a
       re-qualification event.
 
 ### 2. The engineering gates, in order
