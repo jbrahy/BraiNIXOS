@@ -43,6 +43,14 @@ jobs:
       # dependencies against a target with no std, and the first std crate in
       # the workspace -- adt-verify -- could not compile. Naming the runner's
       # own triple makes the step do what it says.
+      # Clippy being green is a fact about today. This is the one that makes it
+      # a fact about tomorrow: every `allow(clippy::...)` in the tree must sit
+      # in the frozen x86-64 reference or in a named file that says why, so the
+      # suppression set cannot grow while the job keeps passing. A lint that is
+      # green because everything noisy is suppressed is a lint nobody runs.
+      - name: Clippy suppressions stay accounted for
+        run: ./bin/lint-suppressions.py
+
       - name: cargo clippy (host target)
         run: cargo clippy --workspace --exclude brainix-capability-verify --exclude brainix-kernel --exclude brainix-bootloader --exclude brainix-ipc-verify --exclude brainix-bootloader-verify --target x86_64-unknown-linux-gnu -- -D warnings
 
