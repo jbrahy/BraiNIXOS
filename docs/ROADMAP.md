@@ -750,11 +750,14 @@ its firmware at first contact, and the measured bandwidth baseline, is in
 - [ ] BraiNIX's volume group downgraded to **Permissive Security** via `bputil` from One True Recovery.
       Requires local admin credentials and physical presence. This is also why **fully headless
       provisioning is not available** on this platform. *Blocked on the 15.7.5 install completing.*
-- [ ] A **debug UART cable** for the s5l console. **Measured 2026-08-14: not present** — zero USB devices
-      on the development laptop, no connected Thunderbolt device, no `/dev/cu.usbserial-*`. It blocks
-      AS-1a's banner as written and it blocks break-glass PSK enrollment permanently (`INV-BOOT-008`), so
-      it must be ordered regardless. It does **not** block chainloading, and **C7 (AS-1a2)** proposes a
-      cable-free first-light path so bring-up is not held behind a shipment.
+- [x] **A serial console to the mini.** **Working 2026-08-14, and it needed no debug cable.** With an
+      Apple Silicon host, an ordinary **SuperSpeed USB-C cable** plus Asahi's `macvdmtool` puts both ends
+      into serial mode over USB-PD VDMs; the console is `/dev/cu.debug-console`. Both ends must be in the
+      **DFU port** — mini: the Thunderbolt port closest to power; 14"/16" MacBook Pro: the one beside
+      MagSafe. Wrong port fails as `VDM failed (reply: 0x05ac8092)` *after* `nop` succeeds, which reads
+      like a cable fault and is not; see [`operations/APPLE_SILICON_BRINGUP_RIG.md`](operations/APPLE_SILICON_BRINGUP_RIG.md)
+      §3.2. Operational consequence worth carrying into deployment: break-glass PSK enrollment
+      (`INV-BOOT-008`) now depends on **a second Apple Silicon Mac**, not on a serial adapter.
 - [ ] **m1n1** installed as a lab instrument, for register exploration and payload loading.
 - [x] A **macOS stub install** left on disk — paired recoveryOS and firmware volumes. Satisfied twice over:
       the production install stays, and BraiNIX's own volume group is itself a macOS install.

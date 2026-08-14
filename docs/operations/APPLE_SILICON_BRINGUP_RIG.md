@@ -90,9 +90,10 @@ later macOS update as a re-qualification event** ([`../ROADMAP.md`](../ROADMAP.m
 | Item | Notes |
 |---|---|
 | Mac mini M2 Pro (`Mac14,12`, `T6020`) | The deployment target. 32 GB. **Confirmed present and measured — see §0a.** |
-| Debug UART cable | Apple Silicon exposes the s5l debug UART over a **USB-C** port. This is not an ordinary USB-C cable — it needs a UART-capable debug cable of the kind the Asahi project documents. **Confirm the exact part and the correct port against current Asahi documentation before ordering**; this file does not assert a part number it has not verified. **Status 2026-08-14: NOT PRESENT.** The development laptop reports zero USB devices, "No device connected" on every Thunderbolt bus, and no USB-serial node under `/dev/cu.*`. See §3a for what that blocks and what it does not. |
-| Host machine | Runs the serial terminal and m1n1's proxy tooling. Any Mac or Linux box with USB-C. |
-| Serial terminal | `picocom`, `screen`, or `minicom` on the host. |
+| ~~Debug UART cable~~ **An ordinary SuperSpeed USB-C cable** | **Corrected 2026-08-14, and this row was wrong in the expensive direction — it would have sent someone shopping for a part they do not need.** No SBU-breakout debug cable is required *when the host is itself an Apple Silicon Mac*. A **USB 3.0 / SuperSpeed (or Thunderbolt) Type-C cable** plus `macvdmtool` puts both ends into serial mode over USB-PD Vendor Defined Messages. What does **not** work is a USB 2.0-only or charge-only cable: serial mode needs the SuperSpeed pins. **Verified working on this rig 2026-08-14.** |
+| Host machine | **Must be an Apple Silicon Mac running macOS** for the `macvdmtool` path. This rig's host is a `Mac15,6` (14" MacBook Pro) on macOS 26.5.2, SIP **enabled** — no SIP downgrade is needed on the host. |
+| `macvdmtool` | Asahi's Apple-Silicon-to-Apple-Silicon VDM utility. Build from source; **a lab instrument, never vendored** (CONTRIBUTING rule 7), so it lives outside the repository. See §3. |
+| Serial terminal | `picocom`, `screen`, or `minicom` on the host, against `/dev/cu.debug-console`. |
 
 ---
 
@@ -128,50 +129,99 @@ later macOS update as a re-qualification event** ([`../ROADMAP.md`](../ROADMAP.m
 
 ---
 
-## 3. Wire the serial console
+## 3. Wire the serial console — via `macvdmtool`
 
-1. Connect the debug UART cable between the host and the mini's UART-capable USB-C port.
-2. On the host, find the device:
+**Rewritten 2026-08-14 against a rig that works.** The previous version of this section assumed a
+breakout debug cable and looked for `/dev/tty.usbmodem*`; both are wrong for the Apple-to-Apple path.
 
-   ```
-   ls /dev/tty.usbmodem*     # macOS
-   ls /dev/ttyACM*           # Linux
-   ```
+### 3.1 Build the tool
 
-3. Open a terminal against it, for example:
+```
+git clone --depth 1 https://github.com/AsahiLinux/macvdmtool.git
+cd macvdmtool && make
+```
 
-   ```
-   picocom -b 115200 /dev/tty.usbmodemXXXX
-   ```
+Needs the Xcode command line tools and nothing else — it compiles one `main.cpp` against CoreFoundation
+and IOKit. **Keep it outside this repository.** It is a lab instrument in exactly the sense CONTRIBUTING
+rule 7 permits: we run it, we do not incorporate it. On this rig it lives in `~/OtherProjects/_tools/`.
 
-**Nothing will print yet.** That is expected: no software on the mini is writing to this UART. The
-console is proven in §5, not here.
+Read the source before running it, as with anything that touches the platform. It opens `AppleHPM` — the
+USB-PD port controller — and sends Apple-SVID Vendor Defined Messages. It executes no subprocess, writes
+no file, and opens no socket.
+
+### 3.2 The ports are not optional, and getting them wrong looks like a different failure
+
+The VDM only works through each machine's **DFU port**:
+
+| Machine | Port |
+|---|---|
+| Mac mini | The Thunderbolt port **closest to the power connector** — the first one after Ethernet, not any of the other three. |
+| 14" / 16" MacBook Pro | The Thunderbolt port **adjacent to MagSafe**, left side. |
+| MacBook Air, 13" MacBook Pro | The rear port. |
+
+**The failure signature, recorded because it cost a round on this rig:** with the cable in the wrong port,
+`macvdmtool nop` **succeeds** — it finds the HPM device, unlocks it, and completes a DBMa mode round-trip
+with exit 0 — and then `serial` fails with `VDM failed (reply: 0x05ac8092)`. That reads like a protocol or
+cable problem and is neither. The discriminator is `debugusb`, which the tool documents as working over
+USB 2.0-only cables: **if `debugusb` fails identically, the cable is fine and the port is wrong.** If
+`debugusb` succeeds where `serial` fails, *then* the cable lacks SuperSpeed pins.
+
+A correct connection also shows up in `system_profiler SPThunderboltDataType` as **`Status: Device
+connected`** on one receptacle. A cable in a non-DFU port reports `No device connected` with a link status
+that is nonetheless not idle.
+
+### 3.3 Enter serial mode
+
+```
+sudo ./macvdmtool serial
+```
+
+Expected, and what this rig printed on success:
+
+```
+Entering DBMa mode... Status: DBMa
+Putting target into serial mode... OK
+Putting local end into serial mode... OK
+Exiting DBMa mode... OK
+```
+
+The console is then `/dev/cu.debug-console` on the host — the same node m1n1 wants as `M1N1DEVICE`.
+
+```
+picocom -b 115200 /dev/cu.debug-console
+```
+
+`serial` does **not** reboot the target. `reboot serial` does; use it when you need to see a boot.
+
+**Nothing will print yet, and that is not a failure.** A mini running ordinary macOS does not write to the
+debug UART, so an idle console is the expected reading. The console is proven in §5, by rebooting
+something that talks. This rig confirmed serial mode came up and then read five seconds of silence from
+`/dev/cu.debug-console`, exactly as predicted.
 
 ---
 
-## 3a. There is no UART cable — what that blocks, and what it does not
+## 3a. What the serial console does and does not cover
 
-**Measured 2026-08-14.** No debug cable is present (§1). Two facts follow, and conflating them would cost
-the project a shopping delay it does not have to take.
+**Status 2026-08-14: the console works** (§3), which retires the "no cable" blocker this section was
+originally written about. What survives is the scope note.
 
-**What it genuinely blocks:**
+- **AS-1a's exit criterion is reachable.** The banner is transmitted by writing s5l UART MMIO registers,
+  those bytes leave the SoC on the port's SBU pins, and `macvdmtool serial` is what puts the far end of
+  the cable in a state to receive them.
+- **Break-glass admin enrollment depends on this path permanently.** `INV-BOOT-008` provisions the
+  break-glass PSK over the serial console and over nothing else, and the ratchet's only out-of-band repair
+  path is that same console ([`../THREAT_MODEL.md`](../THREAT_MODEL.md)). Note the operational consequence
+  of the `macvdmtool` route: **the break-glass path requires a second Apple Silicon Mac and a SuperSpeed
+  cable**, not merely a serial adapter in a drawer. That is a cheaper dependency than a debug cable and a
+  more specific one; a deployment runbook must name it.
+- **The threat-model rule is unchanged.** The serial console grants physical-access authority and must not
+  be present in a production configuration.
 
-- **§5's acceptance test as written**, which is m1n1's own console printing over serial.
-- **AS-1a's exit criterion as written** — the banner is transmitted by writing s5l UART MMIO registers, and
-  those bytes leave the SoC on the port's SBU pins. With no cable they go nowhere.
-- **Break-glass admin enrollment, permanently.** `INV-BOOT-008` provisions the break-glass PSK over the
-  serial console and over nothing else, and the ratchet's only out-of-band repair path is that same
-  console ([`../THREAT_MODEL.md`](../THREAT_MODEL.md)). **The cable is not optional for a deployment**, only
-  for bring-up. Order it regardless of what §3b decides.
+### 3b. The framebuffer alternative — still proposed, no longer urgent
 
-**What it does not block:** the mini can still be chainloaded. m1n1 speaks its console and proxy over
-**USB CDC-ACM on an ordinary USB-C cable** — which is why §3 above looks for `/dev/tty.usbmodem*`, a
-gadget-device pattern, rather than the `/dev/tty.usbserial-*` an FTDI or CP210x cable would present. The
-delivery chain, the Image4 wrapping, the local policy and the chainload can all be exercised without a
-debug cable. What cannot cross that link is output from **our** payload, because chainloading hands the
-machine over and BraiNIX has no USB stack.
-
-### 3b. The framebuffer alternative — proposed, needs owner sign-off
+**Re-rated 2026-08-14.** With the console working, this stops being the thing standing between the project
+and first light and becomes what it should always have been: a second, independent output path that makes
+a silent machine diagnosable. Worth building, not worth blocking on.
 
 iBoot sets up a framebuffer and describes it in the **`video` field of the `boot_args` structure** — the
 same structure AS-0-T4 already parses, whose module doc records that it deliberately does not read
