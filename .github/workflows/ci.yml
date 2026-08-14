@@ -312,9 +312,26 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
 
+      # `dev-build`, and this job is the reason the feature exists.
+      #
+      # A production kernel treats a failed TPM2_Quote at the attestation gate
+      # as a fatal halt -- D-22 and INV-BOOT-002, no fallback to unattested
+      # operation, ever. No attestation key is provisioned in this test (that
+      # is a separate, larger milestone), so the quote fails and the gate does
+      # exactly what it is built to do: it halts, before "boot complete" is
+      # printed. This job asserted a banner that a production kernel is
+      # designed never to reach.
+      #
+      # With `dev-build` the gate logs a warning and continues, and the dev
+      # flag surfaces in PCR[1], so the image says of itself that it is not a
+      # production one. docker/test.sh -- the harness that has actually booted
+      # this kernel -- builds with the same two features.
+      #
+      # The Kernel Cross-Compile job deliberately does NOT set it: the
+      # production build must keep compiling, and that job is what proves it.
       - name: Build kernel
         working-directory: src/kernel
-        run: cargo build --target x86_64-unknown-none --release --features kernel-binary
+        run: cargo build --target x86_64-unknown-none --release --features kernel-binary,dev-build
 
       - name: Build bootloader
         working-directory: src/bootloader
@@ -383,11 +400,26 @@ jobs:
             --decryption \
             --lock-nvram \
             --overwrite
+          # ONE socket, and it is the CONTROL socket -- the arrangement the
+          # QEMU manual documents and the only one that works.
+          #
+          # QEMU's `-tpmdev emulator` does not send TPM commands over the
+          # chardev. It speaks swtpm's control protocol on it and hands the
+          # emulator a data fd with CMD_SET_DATAFD. Pointing the chardev at a
+          # `--server` socket therefore talks control protocol to a data
+          # socket: QEMU blocks in the handshake before starting the CPU, and
+          # the job times out with every log empty -- no serial, no SeaBIOS, no
+          # guest instruction ever executed. That is what this job did on every
+          # run it ever made.
+          #
+          # Declaring `--server` as well is not harmless either: swtpm then
+          # refuses the fd handoff with "Failed to send CMD_SET_DATAFD", which
+          # at least fails loudly. Neither socket is needed by anything else
+          # here, so there is one.
           swtpm socket \
             --tpm2 \
             --tpmstate dir=/tmp/swtpm-test \
-            --ctrl type=unixio,path=/tmp/swtpm-test.ctrl \
-            --server type=unixio,path=/tmp/swtpm-test.sock \
+            --ctrl type=unixio,path=/tmp/swtpm-test.sock \
             --flags not-need-init,startup-clear \
             --daemon
 
