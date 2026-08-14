@@ -137,22 +137,28 @@ supported platform until AS-1 lands.
 and inside the x86-64 reference build; **there is still not one aarch64 source file in the kernel tree**
 (`find src -iname '*aarch64*'` is empty), so AS-1 through AS-5 remain untouched.
 
-**2026-08-13 — twelve of the thirteen CI checks pass, for the first time in the project's history.** The
-holdout is the QEMU integration test, which is still red and is discussed below. What the other twelve
-took is worth recording, because the plan above cited several of them as evidence:
+**2026-08-14 — CI is green, all thirteen checks, for the first time in the project's history.** What it
+took is worth recording, because the plan above cited several of these jobs as evidence for work that was
+never actually being checked:
 
 - The **style gate** built bare metal while calling itself a host run — `.cargo/config.toml` sets
   `build.target = "x86_64-unknown-none"`, so three steps that omitted `--target` were not testing what
   they named. Every job behind that gate had therefore never executed on this branch.
-- The **integration test could not have passed at any point in its history, and is still red.** Three
-  defects are fixed and it has not yet booted. Its ISO shipped the bootloader alone, with no `module2`
-  lines: BraiNIX loads its kernel and shell as multiboot2 modules, so the image handed to QEMU had nothing
-  to load. `-nographic` together with `-serial stdio` made two character devices claim the same fd, so
-  QEMU exited before executing an instruction. `grub-mkrescue` had no `mtools`, so the ISO did not build
-  at all. **What remains is not yet diagnosed**: with serial written to a file and QEMU's own output
-  captured separately, both are empty, which means the guest died before printing and GRUB's own messages
-  go to a VGA console nothing is capturing. The next step is making GRUB speak to the serial port. This is
-  a job that has never once produced a line of evidence about what it runs.
+- The **integration test could not have passed at any point in its history** — six independent defects,
+  each of which alone was fatal, and every one of them in the harness rather than in the kernel:
+  `grub-mkrescue` had no `mtools`, so the ISO never built; `swtpm_setup` asked for EK certificates it
+  cannot write on a runner; `-nographic` together with `-serial stdio` made two character devices claim
+  the same fd, so QEMU exited before executing an instruction; the ISO shipped the bootloader alone with
+  no `module2` lines, so the image had no kernel in it; QEMU's TPM chardev pointed at swtpm's `--server`
+  socket rather than its control socket, so QEMU blocked in a handshake before starting the CPU; and the
+  kernel was built **without `dev-build`**, so the attestation gate correctly halted on an unverifiable
+  `TPM2_Quote` before the banner the job asserts. The last two were found by reproducing the whole job in
+  an `ubuntu:24.04` container with the same QEMU and the same vTPM, which ended a guess-and-push loop that
+  three CI rounds had not.
+  **What this cost, stated as the plan's own risk register would:** *the QEMU integration test has never
+  provided evidence about this kernel.* Row 10 of *Honest risks* says the platform track has no
+  verification loop until hardware; until 2026-08-14 the x86-64 reference had none in CI either, and
+  nobody could have known from the job's output, because its output was empty.
 - **Eight Kani harnesses never terminate.** Measured with a 700s cap: the two ADT harnesses over the
   96-byte nested blob, and six transport-crypto harnesses that drive a hash or an AEAD over symbolic
   bytes. They are behind a `long-proofs` feature, off by default, with their measurements recorded in the
@@ -497,10 +503,10 @@ model, not a proof of absolute security.
 - `src/kernel/src/boot/credential_store.rs` — runtime key enrollment and the ratchet's persisted chain state (P2-T12); today it persists to virtio-blk and seals nothing, and **sealing is not coming** (#25).
 - `src/kernel/src/memory/virtual_address_layout.rs` — fixed reserved WEIGHTS/KV regions (INV-MEM); today it defines neither, and hardcodes a 4 KiB page against a 16 KiB platform.
 - `src/capability-verify/src/lib.rs` — the existing Kani proof pattern, now extended across `src/adt-verify/`, `src/bsp-verify/`, and `src/transport-crypto-verify/`.
-- `.github/workflows/ci.yml` — twelve of thirteen checks green as of 2026-08-13; the QEMU integration test
-  is still red. Runs six Kani jobs in parallel (one per package, with the eight non-terminating harnesses
-  behind `long-proofs`), a line-coverage gate, host and bare-metal clippy, and **zero fuzz targets** —
-  P2-T10's entire scope, unchanged.
+- `.github/workflows/ci.yml` — all thirteen checks green as of 2026-08-14. Runs six Kani jobs in parallel
+  (one per package, with the eight non-terminating harnesses behind `long-proofs`), a line-coverage gate,
+  host and bare-metal clippy, a QEMU boot that now genuinely boots, and **zero fuzz targets** — P2-T10's
+  entire scope, unchanged.
 
 ## The plan from here
 
