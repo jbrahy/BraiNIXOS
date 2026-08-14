@@ -31,8 +31,30 @@ pub const DIRECT_MAP_REGION_END: u64 = 0xFFFF_8800_FFFF_FFFF;
 /// Fixed virtual address of the kernel binary (must match linker.ld).
 pub const KERNEL_BINARY_VIRTUAL_ADDRESS: u64 = 0xFFFF_FFFF_8010_0000;
 
-/// Standard page size in bytes (4 KiB).
+/// The architecture's base page size, in bytes.
+///
+/// **Not a constant of the system — a constant of the architecture.** x86-64
+/// pages are 4 KiB and Apple Silicon's are 16 KiB, and this value was a bare
+/// `4096` against a project whose only platform is the latter. `INV-MEM-009`
+/// names a page-size assumption leaking into supposedly architecture-neutral
+/// memory code as a defect rather than a portability nit, and a literal here is
+/// how that leak starts: every size derived from it inherits the assumption
+/// silently.
+///
+/// The frozen x86-64 reference keeps 4 KiB because that is what its hardware
+/// does. Anything sized from this constant must be expressed in **pages**, so
+/// that it means the same thing on both — see
+/// [`crate::memory::reserved_regions`], which does.
+#[cfg(target_arch = "x86_64")]
 pub const PAGE_SIZE_IN_BYTES: usize = 4096;
+
+/// The architecture's base page size, in bytes — 16 KiB on Apple Silicon.
+///
+/// See the x86-64 arm above for why this is architecture-selected rather than a
+/// literal. There is no aarch64 kernel yet (AS-1); this constant exists so that
+/// the first one does not begin by inheriting 4 KiB.
+#[cfg(target_arch = "aarch64")]
+pub const PAGE_SIZE_IN_BYTES: usize = 16384;
 
 /// Size of each pool sub-region in bytes (512 MB per object type).
 pub const POOL_SUB_REGION_SIZE: u64 = 0x2000_0000;
