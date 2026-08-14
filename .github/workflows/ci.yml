@@ -185,6 +185,38 @@ jobs:
         run: ./bin/coverage-gate.py
 
   # ---------------------------------------------------------------------------
+  # 3d. Reproducible build — INV-BOOT's first clause (X-T3)
+  #
+  # "A third party can rebuild the published payload bit-for-bit" is one of the
+  # four things INV-BOOT still means on this platform, and the only one of the
+  # four that can be checked without hardware. A release whose payload is not
+  # reproducible cannot honestly carry the signature the other clause requires:
+  # the signed artifact and the published source would describe different
+  # objects.
+  #
+  # This builds twice into unrelated target directories and compares bytes. It
+  # runs on every pull request rather than at release time, because a build that
+  # became irreproducible in March is cheapest to find in March.
+  # ---------------------------------------------------------------------------
+  reproducible-build:
+    name: Reproducible Build
+    runs-on: ubuntu-latest
+    needs: supply-chain
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (pinned nightly + bare-metal target)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-01
+          targets: x86_64-unknown-none
+          components: rust-src
+
+      - name: Build the payload twice and compare
+        run: ./bin/reproducible-build.sh
+
+  # ---------------------------------------------------------------------------
   # 3c. Fuzz smoke — the eleven targets that have never executed
   #
   # `INV-PARSE-002` requires every hostile-input parser to ship a fuzz target
