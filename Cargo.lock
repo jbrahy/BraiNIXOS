@@ -197,6 +197,7 @@ version = "0.1.0"
 name = "brainix-servd"
 version = "0.1.0"
 dependencies = [
+ "brainix-auditd",
  "brainix-bsp",
 ]
 

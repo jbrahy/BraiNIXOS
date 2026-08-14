@@ -8,5 +8,13 @@ description = "servd: the serving front end's fixed session-slot pool and admiss
 [dependencies]
 brainix-bsp = { path = "../../bsp" }
 
+# Test-only. `servd` emits audit events and `auditd` owns their shape, but the
+# emitter needs no compile-time dependency on the observer: the record travels
+# over IPC, and coupling the two crates in production would put the observer's
+# type in the serving path's build. The tests need both, so the dependency is
+# a dev one and the coupling is checkable without existing.
+[dev-dependencies]
+brainix-auditd = { path = "../auditd" }
+
 [lints]
 workspace = true

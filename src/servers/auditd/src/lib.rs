@@ -12,6 +12,7 @@
 #![deny(unsafe_code)]
 
 pub mod event;
+pub mod manifest;
 
 use brainix_libsyscall::syscall_audit_read;
 
