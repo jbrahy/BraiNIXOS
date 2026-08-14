@@ -331,6 +331,13 @@ fn map_proofs_to_invariants(
 fn infer_invariant_from_proof(proof_name: &str) -> Option<String> {
     let lower = proof_name.to_lowercase();
 
+    // The IOMMU confinement. INV-GPU's structural control is INV-DEV-006 -- a
+    // driver cannot widen its own DMA window -- and the obligation belongs to
+    // the confinement rather than to any driver (decision #15).
+    if lower.starts_with("dart_iommu_") {
+        return Some("INV-GPU".to_string());
+    }
+
     // The auditor. INV-AUDIT is "observes and reports and does nothing else",
     // and its record is where that claim is kept honest: bounded pressure
     // (INV-AUD-003) and a decode that refuses rather than inventing an event

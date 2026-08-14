@@ -306,6 +306,11 @@ jobs:
           # every 23-byte string rather than assembling an event from one.
           - name: auditd
             args: --package brainix-auditd-verify
+          # INV-DEV-006, and precondition 2 of the five that gate loading Apple's
+          # GPU firmware. A claim about an API surface, so it is provable years
+          # before the firmware, the hardware, or `gpud` exists.
+          - name: dart
+            args: --package brainix-dart-verify
     steps:
       # Kani is installed BEFORE checkout, deliberately.
       #

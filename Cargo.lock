@@ -89,6 +89,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-dart"
+version = "0.1.0"
+
+[[package]]
+name = "brainix-dart-verify"
+version = "0.1.0"
+dependencies = [
+ "brainix-dart",
+]
+
+[[package]]
 name = "brainix-devd-disk"
 version = "0.1.0"
 
