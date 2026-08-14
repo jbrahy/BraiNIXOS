@@ -60,6 +60,7 @@ CRATES = [
     "brainix-sha256",
     "brainix-perf-baseline",
     "brainix-aarch64-mmu",
+    "brainix-platform-select",
 ]
 
 # Whole files excluded from measurement. Each entry names why it cannot be
