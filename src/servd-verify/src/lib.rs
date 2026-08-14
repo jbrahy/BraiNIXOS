@@ -34,6 +34,7 @@
 #[cfg(kani)]
 mod proofs {
     use brainix_bsp::{SessionType, MAX_ADMIN_SESSIONS, MAX_SESSIONS, MAX_SESSIONS_PER_CREDENTIAL};
+    use brainix_servd::serving_log::{LogRow, ServingLogOf};
     use brainix_servd::{CredentialHandle, SessionSlots, Tick};
 
     /// How many operations each harness drives.
@@ -158,6 +159,51 @@ mod proofs {
             );
 
             index = index.saturating_add(1);
+        }
+    }
+
+    /// **No read ever returns another session's row — unbounded over slots.**
+    ///
+    /// P2-T7 names this obligation in those words: "no session row readable via
+    /// another session's capability". The tests check it for the eight slots
+    /// the server admits; this checks it for **every** pair of `usize` values,
+    /// which is what a slot index could be after an arithmetic slip that the
+    /// eight-slot walk would not reveal.
+    ///
+    /// The read interface takes the reader's own slot rather than a filter, so
+    /// what is proved is that the interface *cannot express* the cross-session
+    /// read, not that a comparison happens to reject it.
+    /// Proved over a **four-row** log. The rule under test does not mention the
+    /// capacity, and the production 64 does not fit a model checker: at that
+    /// size this harness did not finish in ten minutes. `ServingLogOf` is
+    /// generic precisely so the proof can be about the algorithm.
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn servd_admission_a_log_read_returns_no_other_sessions_rows() {
+        let mut log = ServingLogOf::<4>::new();
+
+        let writer: usize = kani::any();
+        let reader: usize = kani::any();
+        let tag: u8 = kani::any();
+        let appended = log.append(writer, tag);
+
+        let mut out = [LogRow {
+            session_slot: usize::MAX,
+            event_tag: 0,
+            sequence: 0,
+        }; 2];
+        let written = log.read(reader, &mut out);
+
+        if written > 0 {
+            kani::assert(appended.is_some(), "a read returned a row nothing appended");
+            kani::assert(
+                out[0].session_slot == reader,
+                "a read returned a row belonging to another session",
+            );
+            kani::assert(
+                writer == reader,
+                "a session read a row written by a different session",
+            );
         }
     }
 

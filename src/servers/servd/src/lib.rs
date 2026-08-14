@@ -66,6 +66,7 @@
 
 pub mod admin;
 pub mod credentials;
+pub mod serving_log;
 
 use brainix_bsp::{
     Session, SessionType, HS_TIMEOUT_SECONDS, IDLE_TIMEOUT_SECONDS, LEN_HANDLE, MAX_ADMIN_SESSIONS,
