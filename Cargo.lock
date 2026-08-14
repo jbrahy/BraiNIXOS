@@ -24,6 +24,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-aarch64-mmu"
+version = "0.1.0"
+
+[[package]]
+name = "brainix-aarch64-mmu-verify"
+version = "0.1.0"
+dependencies = [
+ "brainix-aarch64-mmu",
+]
+
+[[package]]
 name = "brainix-adt"
 version = "0.1.0"
 

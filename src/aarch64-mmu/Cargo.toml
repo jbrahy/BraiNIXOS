@@ -1,0 +1,11 @@
+[package]
+name = "brainix-aarch64-mmu"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "aarch64 stage-1 descriptors in which W^X is unrepresentable (AS-1b, INV-MEM-003)"
+
+[dependencies]
+
+[lints]
+workspace = true

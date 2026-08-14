@@ -356,6 +356,10 @@ jobs:
           # author thought to walk.
           - name: servd
             args: --package brainix-servd-verify
+          # INV-MEM-003 on the aarch64 MMU. The roadmap moved this obligation
+          # here when the HAL was cancelled, and it is Full tier.
+          - name: aarch64-mmu
+            args: --package brainix-aarch64-mmu-verify
     steps:
       # Kani is installed BEFORE checkout, deliberately.
       #
