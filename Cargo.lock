@@ -67,6 +67,13 @@ name = "brainix-bsp"
 version = "0.1.0"
 
 [[package]]
+name = "brainix-bsp-client"
+version = "0.1.0"
+dependencies = [
+ "brainix-bsp",
+]
+
+[[package]]
 name = "brainix-bsp-verify"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,12 @@
+[package]
+name = "brainix-bsp-client"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The client half of BSP v2: the encoders the server's decoder is tested against (P2-T11)"
+
+[dependencies]
+brainix-bsp = { path = "../../src/bsp" }
+
+[lints]
+workspace = true

@@ -55,6 +55,7 @@ CRATES = [
     "brainix-modeld",
     "brainix-inferd",
     "brainix-dart",
+    "brainix-bsp-client",
 ]
 
 # Whole files excluded from measurement. Each entry names why it cannot be
