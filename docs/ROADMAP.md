@@ -137,6 +137,37 @@ supported platform until AS-1 lands.
 and inside the x86-64 reference build; **there is still not one aarch64 source file in the kernel tree**
 (`find src -iname '*aarch64*'` is empty), so AS-1 through AS-5 remain untouched.
 
+**2026-08-13 — twelve of the thirteen CI checks pass, for the first time in the project's history.** The
+holdout is the QEMU integration test, which is still red and is discussed below. What the other twelve
+took is worth recording, because the plan above cited several of them as evidence:
+
+- The **style gate** built bare metal while calling itself a host run — `.cargo/config.toml` sets
+  `build.target = "x86_64-unknown-none"`, so three steps that omitted `--target` were not testing what
+  they named. Every job behind that gate had therefore never executed on this branch.
+- The **integration test could not have passed at any point in its history, and is still red.** Three
+  defects are fixed and it has not yet booted. Its ISO shipped the bootloader alone, with no `module2`
+  lines: BraiNIX loads its kernel and shell as multiboot2 modules, so the image handed to QEMU had nothing
+  to load. `-nographic` together with `-serial stdio` made two character devices claim the same fd, so
+  QEMU exited before executing an instruction. `grub-mkrescue` had no `mtools`, so the ISO did not build
+  at all. **What remains is not yet diagnosed**: with serial written to a file and QEMU's own output
+  captured separately, both are empty, which means the guest died before printing and GRUB's own messages
+  go to a VGA console nothing is capturing. The next step is making GRUB speak to the serial port. This is
+  a job that has never once produced a line of evidence about what it runs.
+- **Eight Kani harnesses never terminate.** Measured with a 700s cap: the two ADT harnesses over the
+  96-byte nested blob, and six transport-crypto harnesses that drive a hash or an AEAD over symbolic
+  bytes. They are behind a `long-proofs` feature, off by default, with their measurements recorded in the
+  crates and a stated gap in [`security/SECURITY_INVARIANTS.md`](security/SECURITY_INVARIANTS.md) §16.
+  The Kani job now runs one parallel job per package, because sequentially one non-converging harness
+  starved every package behind it — the BSP, transport-crypto and IPC proof sets had never once run.
+- A **line-coverage gate** now holds every uncovered line in the seven library crates to a
+  `COVERAGE-EXEMPT:` marker with a stated reason. 118 lines are exempt; zero are unjustified.
+
+**Two consequences for the numbers this document quotes.** `tools/proof-coverage` reports **50 Kani
+proofs**, and it counts harnesses that *exist* — eight of those do not run in CI. Read it as 42 running
+plus 8 recorded-and-excluded until X-T5 splits the two. And **no fuzz target has ever executed in CI**
+(P2-T10), so every "Verify: fuzz soak" criterion in this document remains unsatisfied, including the ones
+whose tasks are marked DONE.
+
 ---
 
 ## Architecture target
@@ -314,7 +345,15 @@ decision #6 and again under #20–#23.
 Recovery — needs local admin credentials and physical presence, once per machine), a debug UART cable, and
 m1n1 running as a lab instrument on the machine for register exploration and payload loading. Payload
 delivery is `kmutil configure-boot -c <payload> -v <volume>`, which wraps the payload as an Image4 object
-under the machine's Secure-Enclave-held local policy — an Apple-supported, documented flow.
+under the machine's Secure-Enclave-held local policy — an Apple-supported, documented flow. The full
+checklist, including the parts that are owner actions rather than engineering, is in *Deployment
+readiness* below.
+
+**Every task in this phase is sliced at the hardware gate**, following AS-1a. The decoding half of each —
+ADT-derived discovery, register layouts, PTE encoders, mailbox and NVMe structures — is a pure function
+over bytes, is host-testable, and is written *before* the rig exists; only the half that touches silicon
+waits. Those slices are enumerated as **Track C** in *The plan from here*, and AS-3a in particular
+discharges one of AS-5-T0's five signed preconditions on a laptop.
 
 - **AS-1** **SLICED (2026-08-10).** AS-1 as written below is a dozen independent subsystems, and one spec across all of them would be written entirely against unverified assumptions. It is now delivered in slices, each with its own design doc. **AS-1a is COMPLETE to the hardware gate (`e90ea1e`)**; the rest are unstarted.
   - **AS-1a — first light.** [`architecture/AS-1a-first-light-boot-stub.md`](architecture/AS-1a-first-light-boot-stub.md). The smallest payload that proves the delivery chain: target plumbing, linker script, entry assembly, s5l UART transmit, ADT-derived UART discovery, banner. Landed as **`src/boot-stub-apple/`** with 32 host tests and a linked `aarch64-unknown-none-softfloat` image. **Everything except the hardware run is done**; the run is blocked on the rig, not on code.
@@ -458,35 +497,162 @@ model, not a proof of absolute security.
 - `src/kernel/src/boot/credential_store.rs` — runtime key enrollment and the ratchet's persisted chain state (P2-T12); today it persists to virtio-blk and seals nothing, and **sealing is not coming** (#25).
 - `src/kernel/src/memory/virtual_address_layout.rs` — fixed reserved WEIGHTS/KV regions (INV-MEM); today it defines neither, and hardcodes a 4 KiB page against a 16 KiB platform.
 - `src/capability-verify/src/lib.rs` — the existing Kani proof pattern, now extended across `src/adt-verify/`, `src/bsp-verify/`, and `src/transport-crypto-verify/`.
-- `.github/workflows/ci.yml` — runs four Kani packages and **zero fuzz targets**; P2-T10's entire scope.
+- `.github/workflows/ci.yml` — twelve of thirteen checks green as of 2026-08-13; the QEMU integration test
+  is still red. Runs six Kani jobs in parallel (one per package, with the eight non-terminating harnesses
+  behind `long-proofs`), a line-coverage gate, host and bare-metal clippy, and **zero fuzz targets** —
+  P2-T10's entire scope, unchanged.
 
-## Immediate next step
+## The plan from here
 
-~~Close this single-platform documentation gate first — **it is Wave 2** (#27). Then, sharing no code:~~
-~~1. **AS-0-T1/T2** — the ADT binary-format spec and the `no_std`, zero-allocation, fail-closed parser. **This is the first code** (#23)…~~
-~~2. **P2-T2 onward** — the serving path…~~ — **both superseded: the documentation gate closed, AS-0
-landed in full, and P2-T2/T3 landed with them.**
+~~Close this single-platform documentation gate first — **it is Wave 2** (#27)…~~ ~~**The next step is
+P2-T5**…~~ — **both superseded: the documentation gate closed, AS-0 landed in full, P2-T2/T3 landed with
+them, and P2-T5 is DONE** (11/11 harnesses verify, including
+`no_derivation_path_leads_between_serve_and_admin`). `servd` has no unmet dependency.
 
-**The next step is P2-T5, and it is small.** `src/kernel/src/capability/capability_type.rs:37` still ends
-at `Frame = 10`. Adding `Serve = 11, Model = 12, Gpu = 13, Admin = 14` plus their grant/derive/revoke rules
-and the `src/capability-verify/` proof that **no derivation path leads from `CapServe` to `CapAdmin`**
-(decision #17) is the **sole unmet dependency of P2-T4** — `servd`'s other three deps (T1, T2, T3) are done.
-It needs no hardware and no new crate.
+**The organizing rule for everything below: build every line that does not need the mini, before the mini
+arrives.** AS-1a already proved this is possible on the platform track, not just the neutral one — it is
+"complete to the hardware gate" with 32 host tests and a linked `aarch64-unknown-none-softfloat` image,
+and the only thing it is waiting for is a cable. That pattern generalizes further than this document
+previously claimed, and the sentence it replaces — *"there is no host-testable Apple work left"* — was
+wrong: it read the hardware gate as covering the whole task rather than its last step.
 
-Then, in dependency order, the four things that turn seven finished libraries into a system:
+Three tracks. They share no code and no dependencies, so they can run in any order or at once.
 
-1. **P2-T4** `src/servers/servd/` — accept via `transportd`, session manager, per-client frozen capability set, both session types. Deps: T1, T2, T3 (done), T5.
-2. **P3-T2** the `WEIGHTS_REGION` / `KV_REGION` reserved regions, and the 4 KiB → 16 KiB page fix.
-3. **P3-T3a** `src/servers/modeld/` — the one-shot loader that hosts the finished `src/bxw1/` parser, then exits.
-4. **P3-T7** `src/servers/inferd/` — the confined tenant wrapping the finished `src/transformer/`.
+### Track A — turn seven finished libraries into a serving system *(no hardware)*
 
-**P3-T9a is the first point at which BraiNIX serves inference at all**, and it needs all four plus
-`tools/bsp-client/` (P2-T11). None of the five directories named above exists today.
+Nothing here needs the mini, a crate, or a proof that does not already exist. **None of these five
+directories exists today**, and until they do BraiNIX has components without a system.
 
-Separately and in parallel, **P2-T10** is worth closing early: the fuzz targets already exist and CI simply
-never runs them, so the cost is a CI job, not a corpus.
+| # | Task | Deliverable | Deps | Why it is next |
+|---|---|---|---|---|
+| A1 | **P2-T4** | `src/servers/servd/` — accept via `transportd`, session manager, per-client frozen capability set, both session types decided at accept | T1, T2, T3, T5 — **all done** | The head of the chain. Every other row waits on it. |
+| A2 | **P3-T2** | `WEIGHTS_REGION` / `KV_REGION` reserved regions in `memory/`, **and the 4 KiB → 16 KiB page fix** | none | `virtual_address_layout.rs` hardcodes 4096 against a 16 KiB platform — an `INV-MEM-009` defect sitting in the file the regions land in. |
+| A3 | **P3-T3a** | `src/servers/modeld/` — one-shot loader hosting the finished `src/bxw1/` parser, exits before `inferd` starts | A2, P3-T3, P3-T5 | Nothing holds storage authority or a writable weights capability while the system serves. |
+| A4 | **P3-T7** | `src/servers/inferd/` — the confined tenant wrapping the finished `src/transformer/` | A1, A2, P3-T6 | **Covers INV-MODEL**, one of the three uncovered invariants. |
+| A5 | **P2-T11** | `tools/bsp-client/` — host test client driving both session types and all six admin verbs | A1, A7 | The only thing that can exercise the datapath end to end before hardware. |
+| A6 | **P3-T9a** | Host-run datapath: `bsp-client` → `servd` → `inferd`, two isolated sessions, streamed tokens | A1, A4, A5 | **The first point at which BraiNIX serves inference at all.** |
+| A7 | **P2-T14** | Admin verb dispatch — exactly six handlers, `CapAdmin` only | A1, P2-T5, P2-T7, P2-T12, A3 | The network-reachable administrative surface; Full tier. |
+| A8 | **P2-T12** | Runtime key enrollment + HKDF ratchet in the credential store | A1, P2-T5 | **Until this lands there is no forward secrecy** — a disclosed PSK decrypts every recorded session. |
+| A9 | **P2-T7** | `db/` reframed for the session table + serving log, with the cross-session non-interference proof | P2-T5 | The proof INV-SERVE's blast radius entry rests on. |
+| A10 | **P2-T8** | `auditd` extended to serving and admin events, manifest unchanged | A1, A7 | **Covers INV-AUDIT**, the second uncovered invariant. |
+| A11 | **P3-T8** | Confinement suite — adversarial prompts, zero escalation under any input | A4 | The INV-MODEL claim is unfalsifiable without it. |
+| A12 | **P2-T6** | Delete `boot/ssh_bridge.rs` and its `static mut` session globals | A1 | Risk 5: the weakest point in the tree until it goes. |
+| A13 | **P3-T0** | Userspace FP/SIMD enablement — in-tree FP state save/restore, kernel stays soft-float | A4 | Unblocks NEON in the tensor kernels; the context-switch ABI is TCB, so it is reviewed as such. |
+| A14 | **P3-T10** *(new)* | **Serving performance baseline.** Measure tokens/s against the `(model bytes ÷ memory bandwidth)` ceiling, host-side first, and record the gap | A6 | The north star makes performance a craft standard and says slowness must be justified by a **named invariant**. That is not checkable without a number, and no task produced one until this row. |
+| A15 | **P3-A** | Phase 3 security audit | A6, A11 | The last audit before hardware. |
 
-Before AS-1 can begin, the hardware rig must exist: the Mac mini M2 Pro in Permissive Security, a debug UART
-cable, and m1n1 installed as a lab instrument. Until it does, ~~AS-0 and~~ the P2/P3 host tracks are the whole
-of the runnable work — AS-0 is finished, so **there is no host-testable Apple work left**: everything
-remaining on the platform track needs the rig.
+**Exit for Track A:** P3-T9a green, two isolated sessions, malformed requests denied without allocating,
+teardown zeroizing the KV partition — and stated as what it is: **a host-level test of composed
+components, not a boot and not a system claim.**
+
+### Track B — assurance debt that currently contradicts a north-star rule *(no hardware)*
+
+Each row closes a claim the tree makes but cannot presently support. These are cheap relative to Track A
+and two of them block *honesty*, not features.
+
+| # | Task | What is wrong today |
+|---|---|---|
+| B1 | **P2-T10** — fuzz targets into CI | Eleven targets and their corpora are committed; `grep -c "cargo fuzz" .github/workflows/ci.yml` returns **0**. Every "fuzz soak" criterion in this document, including on DONE rows, is unmet. The cost is a CI job, not a corpus. |
+| B2 | **X-T4** — in-tree SHA-256 and ChaCha20 | `sha2` and `chacha20` are still the vendored crates, so the serving transport **does not satisfy the dependency-closure rule**. With the Ed25519 stack a permanent named exception, these two symmetric primitives with published test vectors are what remains of the crypto burn-down. |
+| B3 | **X-T5** *(new)* — make the proof tracker distinguish **runs** from **exists** | `tools/proof-coverage` reports 50 harnesses; 8 are behind `long-proofs` and never execute. A number that counts unrun proofs is exactly the unfalsifiable claim the north star forbids. Also: attack the cost problem itself — the 96-byte ADT harnesses and the AEAD/hash harnesses are excluded, not solved. |
+| B4 | **X-T2** — clippy burn-down so it can gate | Clippy is green on both host architectures and the bare-metal target as of 2026-08-13; the remaining suppressions are scope-allows on the frozen reference and the orphaned trees. Removing those is what lets clippy become a gate rather than a habit. |
+| B5 | **X-T3** — reproducible build + Ed25519 release signing | INV-BOOT's two artifact-side clauses. Needed **before** anything is delivered to the mini, not after; see *Deployment readiness* below. |
+
+### Track C — build the platform to the hardware gate *(no hardware, until the last step of each)*
+
+The AS-1a pattern: write the slice, host-test everything that has a checkable contract, and stop at the
+line where only the machine can answer. What is host-testable here is larger than it looks, because most
+of this work is **decoding and encoding** — ADT-derived discovery, register layouts, page-table entries,
+mailbox messages — and every one of those is a pure function over bytes, which is the cheapest thing in
+this project to verify and the discipline `INV-PARSE-001` already demands.
+
+| # | Slice | Host-testable now | Needs the machine |
+|---|---|---|---|
+| C1 | **AS-1b** — EL2→EL1, MMU init, exception vectors, generic timer, SVC entry, RNDR/PAC-BTI, watchdog | Page-table construction and the W^X/page-table Kani proofs (16 KiB, parametric); vector-table layout; register encodings | Whether the transitions actually take, on silicon |
+| C2 | **AS-2a** *(new slice)* — AIC decode | ADT `compatible`-string → AIC revision selection, **failing closed on an unknown string**; the packed event-word decoder as a pure function, fuzzed and Kani-checked as firmware input | Timer FIQ and IPI delivery |
+| C3 | **AS-3a** *(new slice)* — DART model + **the IOMMU trait** | Per-instance discovery from the ADT; PTE encoders per SoC generation; deny-all default construction; **the `INV-DEV-006` no-widening Kani proof on the trait's API surface** | Programming a real DART; DMA fault injection |
+| C4 | **AS-4a1** *(new slice)* — RTKit + ANS2 codecs | Mailbox message encode/decode and the ANS2 command/completion structures, as fail-closed parsers with fuzz targets | Talking to the co-processor |
+| C5 | **AS-4b1** *(new slice)* — PCIe/NIC descriptor formats | Descriptor and config-space walkers, including the cyclic-capability-list termination the tier table already requires | Link training, TX/RX |
+
+**C3 is the highest-value row in this table and it is not obvious why.** AS-5-T0 precondition 2 — a Kani
+proof that the DART backend's IOMMU trait admits no widening operation — is one of the five **signed,
+unwaivable** acceptance criteria of the TCB-AS/GPU exception, and it is a proof about an **API surface**.
+It can be discharged on a laptop, years before any GPU firmware exists to be confined. Landing C3 turns
+one of the five preconditions green ahead of the hardware it protects.
+
+**What Track C cannot do:** it cannot tell you the ADT you parsed is the ADT that machine emits, that the
+register offsets are right, or that a sequence completes. Those are the hardware gate, and every slice
+above ends at it. The risk this document already names stands unchanged — *the first aarch64 instruction
+BraiNIX executes runs on the mini, over a debug cable, with no prior console* — but the amount of code
+meeting that moment untested shrinks with every row here.
+
+---
+
+## Deployment readiness — what "ready for the Mac mini" means
+
+The terminal criterion is AS-5 (#12). **Deployment readiness is earlier and is a different thing**: it is
+the point at which a signed payload can be delivered to the machine and serve a remote client. It has four
+parts, and two of them are not engineering.
+
+### 1. The rig — owner actions, physical, once per machine
+
+None of this can be done from a repository, and **AS-1's hardware gate cannot open until all of it is
+true**:
+
+- [ ] Mac mini M2 Pro downgraded to **Permissive Security** via `bputil` from One True Recovery. Requires
+      local admin credentials and physical presence. This is also why **fully headless provisioning is not
+      available** on this platform.
+- [ ] A **debug UART cable** for the s5l console. Until this exists there is no output from a failing boot,
+      and a failing boot is the expected first outcome.
+- [ ] **m1n1** installed as a lab instrument, for register exploration and payload loading.
+- [ ] A **macOS stub install** left on disk — paired recoveryOS and firmware volumes. "Bare metal" means
+      our kernel is the OS, not that Apple software is absent.
+- [ ] The stub's **macOS version pinned and recorded**. Risk 3: every firmware update is a potential
+      breaking change to reverse-engineered structures, with no upstream remedy. Treat any update as a
+      re-qualification event.
+
+### 2. The engineering gates, in order
+
+1. **Track A exit** — P3-T9a green: the serving stack composes and serves, host-side.
+2. **AS-1 hardware gate** — the invariant banner over serial on the mini. The first proof that anything we
+   wrote runs on this machine.
+3. **AS-2, AS-3** — timer and IPI on hardware; DART deny-all proven and DMA faults injected.
+4. **AS-4a, AS-4b** — weights read from NVMe; NIC TX and RX.
+5. **AS-4c** — remote `bsp-client` → mini → auth → prompt → streamed tokens, two isolated clients.
+   **This is the project's first true end-to-end integration** (#27) and the demonstration that BraiNIX
+   serves inference on the target machine.
+6. **AS-A** — whole-platform audit, including the TCB-AS enumeration and the boot posture.
+
+### 3. Release mechanics — X-T3, and it is not optional
+
+A payload reaches the mini as an **Image4 object via `kmutil configure-boot -c <payload> -v <volume>`**,
+wrapped under the machine's Secure-Enclave-held local policy. What INV-BOOT requires of us on the artifact
+side is a **reproducible build** a third party can reproduce bit for bit and an **Ed25519 release
+signature**. Signing is an out-of-tree release step: in tree, Ed25519 is verify-only, and once the outbound
+SSH client is removed nothing in tree holds a private key.
+
+**No secret ever enters the payload.** Client and admin keys are enrolled at runtime (P2-T12); the
+break-glass admin key is provisioned over the serial console and authenticates over serial only. A
+compile-time secret would mean either publishing the secret or shipping an image nobody can reproduce.
+
+### 4. The disclosures that ship with it
+
+These are not caveats to be softened in release notes; the north star requires them stated:
+
+- **No remote attestation, ever.** A client cannot distinguish a genuine BraiNIX boot from a compromised
+  one. There is no configuration, target, or later phase that changes this, and no platform to move a
+  deployment to that needs it.
+- **The credential store is plaintext at rest, permanently.** Anyone who obtains the disk obtains every
+  client and admin pre-shared key. Combined with the forward-secrecy gap until P2-T12 ships, physical
+  possession of the machine or a backup retroactively decrypts every session recorded from it. Disk
+  disposal is a key-compromise event.
+- **The measurement log is self-reported** and is a debugging aid, never evidence.
+- **The serial console grants physical-access authority** and must not be present in a production
+  configuration.
+
+### What is *not* required for deployment readiness
+
+**AS-5 (the GPU) is not.** It is the terminal criterion for the project, not a precondition for serving:
+AS-4c is CPU serving on the target machine, and the GPU's payoff is prefill acceleration plus time-sliced
+multi-client serving on top of it. Deploying at AS-4c and adding AS-5 afterwards is the intended order,
+and no GPU-enabled build ships until all five AS-5-T0 preconditions are green.
