@@ -274,6 +274,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # mtools and dosfstools are REQUIRED and their absence is why this job
+      # failed with "grub-mkrescue: error: `mformat` invocation failed".
+      #
+      # grub-mkrescue builds a hybrid ISO with an EFI System Partition inside
+      # it, and it shells out to mformat (mtools) to lay down the FAT image and
+      # to mkfs.vfat (dosfstools) behind it. Neither is a dependency of
+      # grub-common on ubuntu-latest, and grub-mkrescue reports the failure as
+      # one line about mformat rather than as a missing package.
       - name: Install QEMU + swtpm + GRUB2 ISO tools
         run: |
           sudo apt-get update -qq
@@ -284,7 +292,9 @@ jobs:
             ovmf \
             grub-pc-bin \
             grub-common \
-            xorriso
+            xorriso \
+            mtools \
+            dosfstools
 
       - name: Install Rust (nightly + x86_64-unknown-none)
         uses: dtolnay/rust-toolchain@master
