@@ -1,0 +1,13 @@
+[package]
+name = "brainix-inferd-verify"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Kani proof harnesses for the confined tenant's KV binding (INV-MODEL, INV-SERVE-001)"
+
+[dependencies]
+brainix-bsp = { path = "../bsp" }
+brainix-inferd = { path = "../servers/inferd" }
+
+[lints]
+workspace = true

@@ -14,6 +14,7 @@ members = [
     "src/bootloader",
     "src/bootloader-verify",
     "src/servers/*",
+    "src/inferd-verify",
     "src/capability-verify",
     "src/ipc-verify",
     "userland/shell/0.01",

@@ -331,6 +331,15 @@ fn map_proofs_to_invariants(
 fn infer_invariant_from_proof(proof_name: &str) -> Option<String> {
     let lower = proof_name.to_lowercase();
 
+    // The confined tenant. INV-MODEL's content is the capability manifest and
+    // the per-session KV binding: "the model physically cannot name a
+    // capability it was not granted", and no session can name another's cache.
+    // Routed before the parser families below because `inferd_model_*` proofs
+    // are about confinement rather than about decoding bytes.
+    if lower.starts_with("inferd_model_") {
+        return Some("INV-MODEL".to_string());
+    }
+
     // Hostile-input parser proofs. SECURITY_INVARIANTS.md §15's INV-PARSE-001..004
     // roll up under INV-SERVE, so an ADT proof lands there — except the bounds
     // and allocation proofs, which are what INV-MEM asserts about every parser.

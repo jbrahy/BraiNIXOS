@@ -97,6 +97,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-inferd-verify"
+version = "0.1.0"
+dependencies = [
+ "brainix-bsp",
+ "brainix-inferd",
+]
+
+[[package]]
 name = "brainix-init"
 version = "0.1.0"
 dependencies = [

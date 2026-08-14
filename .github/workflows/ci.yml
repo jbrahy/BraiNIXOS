@@ -296,6 +296,12 @@ jobs:
           # against the real perform_rendezvous.
           - name: ipc
             args: --package brainix-ipc-verify
+          # The confined tenant's KV binding, over a symbolic slot rather than
+          # the eight the tests walk: the failure mode is one tenant reading
+          # another's cache, and a test over the values we expect cannot see a
+          # value we did not.
+          - name: inferd
+            args: --package brainix-inferd-verify
     steps:
       # Kani is installed BEFORE checkout, deliberately.
       #
