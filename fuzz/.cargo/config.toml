@@ -10,4 +10,4 @@
 replace-with = "fuzz-vendored-sources"
 
 [source."fuzz-vendored-sources"]
-directory = "/Users/jbrahy/OtherProjects/brainix/fuzz/vendor"
+directory = "../vendor"

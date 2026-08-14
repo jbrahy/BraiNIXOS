@@ -185,6 +185,65 @@ jobs:
         run: ./bin/coverage-gate.py
 
   # ---------------------------------------------------------------------------
+  # 3c. Fuzz smoke — the eleven targets that have never executed
+  #
+  # `INV-PARSE-002` requires every hostile-input parser to ship a fuzz target
+  # *and* a Kani harness, and this repository has shipped eleven targets with
+  # checked-in corpora that no job has ever run. Every "fuzz soak" criterion in
+  # docs/ROADMAP.md -- including on tasks marked DONE -- has therefore been
+  # unmet since it was written. This job is P2-T10.
+  #
+  # It is a smoke test, and the name is meant literally: twenty seconds per
+  # target, seeded by the checked-in corpus, is enough to catch a target that
+  # crashes on its own corpus or on trivially reachable input. It is not a soak
+  # and nothing may cite it as one.
+  # ---------------------------------------------------------------------------
+  fuzz-smoke:
+    name: Fuzz Smoke
+    runs-on: ubuntu-latest
+    needs: supply-chain
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (pinned nightly)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-01
+          components: rust-src, llvm-tools-preview
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@cargo-fuzz
+
+      - name: Fuzz every target, twenty seconds each
+        working-directory: fuzz
+        run: |
+          set -o pipefail
+          failed=""
+          for target in $(cargo fuzz list); do
+            echo "=============== ${target} ==============="
+            # -timeout=10 turns a hanging input into a reported crash rather
+            # than a silent stall that only the job timeout would catch.
+            if ! cargo fuzz run "${target}" -- -max_total_time=20 -timeout=10; then
+              echo "FAIL: ${target}"
+              failed="${failed} ${target}"
+            fi
+          done
+          if [ -n "${failed}" ]; then
+            echo "fuzz smoke failed for:${failed}"
+            exit 1
+          fi
+          echo "fuzz smoke: every target survived its corpus and twenty seconds"
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
   # 4. Formal verification — Kani on the capability-verify and adt-verify crates
   # ---------------------------------------------------------------------------
   # One job per proof package, run in parallel, rather than six `cargo kani`
