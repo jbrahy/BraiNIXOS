@@ -56,13 +56,15 @@ pub const KV_PARTITION_PAGES: usize = 1 << 14;
 
 /// How many sessions the KV region can hold at once.
 ///
-/// **Eight, because `MAX_SESSIONS` is eight** (BSP v2 §9.1). This is an
-/// unchecked duplicate of `brainix_bsp::MAX_SESSIONS` and is written down as
-/// one: the kernel does not depend on the serving-protocol crate, and adding
-/// that dependency to make one integer agree would be a worse trade than
-/// recording the coupling. **P3-T7 closes it**, when `inferd` is wired and one
-/// crate can see both. A partition count below `MAX_SESSIONS` would mean
-/// admission hands out sessions that have nowhere to put their cache.
+/// **Eight, because `MAX_SESSIONS` is eight** (BSP v2 §9.1). A partition count
+/// below `MAX_SESSIONS` would mean admission hands out sessions with nowhere to
+/// put their cache, so the two integers must agree — and two integers in two
+/// crates agree by accident until something checks.
+///
+/// Something checks: `the_partition_count_equals_the_protocol_s_session_ceiling`
+/// asserts it against `brainix_bsp::MAX_SESSIONS` through a **dev-dependency**,
+/// which is not built for a non-test build. The shipped kernel does not gain
+/// the serving-protocol crate; the test does.
 pub const KV_PARTITION_COUNT: usize = 8;
 
 /// A reserved region: a base address and a length in pages.
@@ -332,9 +334,11 @@ mod tests {
     }
 
     #[test]
-    fn the_kv_region_holds_one_partition_for_every_session_admission_can_grant() {
-        // MAX_SESSIONS is 8 (BSP v2 §9.1). A partition count below it would
-        // mean admitting sessions with nowhere to put their cache.
-        assert_eq!(KV_PARTITION_COUNT, 8);
+    fn the_partition_count_equals_the_protocol_s_session_ceiling() {
+        // The coupling this test exists for: admission is bounded by
+        // MAX_SESSIONS and the cache is bounded by KV_PARTITION_COUNT, and a
+        // session admitted with no partition is a session with nowhere to put
+        // its KV cache. Asserting the literal 8 would only restate this file.
+        assert_eq!(KV_PARTITION_COUNT, brainix_bsp::MAX_SESSIONS);
     }
 }

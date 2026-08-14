@@ -114,6 +114,7 @@ dependencies = [
 name = "brainix-kernel"
 version = "0.1.0"
 dependencies = [
+ "brainix-bsp",
  "brainix-libsyscall",
  "chacha20",
  "curve25519-dalek",

@@ -19,6 +19,16 @@ kernel-binary = []
 # Default (no flag): production build
 dev-build = []
 
+# Test-only, and deliberately so. `KV_PARTITION_COUNT` must equal
+# `brainix_bsp::MAX_SESSIONS` -- admission handing out more sessions than there
+# are KV partitions would be sessions with nowhere to put their cache -- and two
+# integers that must agree in two crates agree by accident until something
+# checks. A dev-dependency checks it without putting the serving-protocol crate
+# in the shipped kernel: dev-dependencies are not built for a non-test build, so
+# the bare-metal image is byte-identical.
+[dev-dependencies]
+brainix-bsp = { path = "../bsp" }
+
 [dependencies]
 # Shared syscall ABI types: ProcessType enum, syscall number constants, server VA layout.
 # Single definition per D-09 -- kernel and server crates share this crate at compile time.
