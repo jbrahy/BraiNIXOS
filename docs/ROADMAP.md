@@ -169,8 +169,14 @@ never actually being checked:
   `COVERAGE-EXEMPT:` marker with a stated reason. 118 lines are exempt; zero are unjustified.
 
 **The numbers this document quotes now say which they are.** `tools/proof-coverage` reports
-**50 Kani proofs, 42 of which run in CI**; the other eight are behind `long-proofs` and are listed
+**62 Kani proofs, 54 of which run in CI**; the other eight are behind `long-proofs` and are listed
 rather than counted (X-T5).
+
+**Invariant coverage is 8/8 as of 2026-08-14**, against a standing bar of 80%. INV-MODEL, INV-AUDIT and
+INV-GPU were all uncovered that morning; each is now covered by proofs over a symbolic input rather than
+by tests over the values we happened to think of. The three were cheap once something existed to prove
+things about — confinement properties are integer comparisons, and the expensive proofs in this tree are
+expensive because of what they *parse*.
 
 **The fuzz targets do now run** (P2-T10, closed 2026-08-14): eleven targets, twenty seconds each, seeded
 by the checked-in corpora. That is a smoke test, and this document's "Verify: fuzz soak" criteria are
@@ -404,7 +410,7 @@ and on AS-5-T0's five preconditions, which are unchanged and unwaivable.
 
 - **AS-5-T0** DART/GPU confinement proof. **O**. Deps: AS-3. **Gate for everything below**, and the acceptance criteria of the conditionally signed TCB-AS/GPU exception (decision #10, NORTH_STAR.md). All five must be green **before GPU firmware is ever loaded**; each is pass/fail, and none is waivable:
   1. Every GPU-fronting DART instance defaults to **deny-all**.
-  2. A **Kani proof on the DART backend's IOMMU trait** that its API surface admits no widening operation — proving that no consumer, `gpud` included, can widen its own DMA window (`INV-DEV-006`). The proof belongs to the confinement (Full tier), **not** to the driver; stating it as a proof about `gpud` would contradict the tiering rule of decision #15.
+  2. **GREEN as of 2026-08-14, ahead of the hardware it protects.** A **Kani proof on the DART backend's IOMMU trait** that its API surface admits no widening operation — proving that no consumer, `gpud` included, can widen its own DMA window (`INV-DEV-006`). The proof belongs to the confinement (Full tier), **not** to the driver; stating it as a proof about `gpud` would contradict the tiering rule of decision #15. Discharged by `src/dart-verify/`, five harnesses over the holder trait's whole surface. **The obligation transfers**: when AS-3 lands the real backend, it must be *this* trait that the backend exposes, or the proof is about a surface nothing implements.
   3. GPU completion records are **fuzzed and Kani-checked as hostile input** (`INV-PARSE-001`).
   4. The **tenant-mapping policy of decision #14** is enforced: weights read-only and permanent, KV cache per session, **never two tenants resident simultaneously**.
   5. **No iBoot-locked DART on the GPU path** — or, if one exists, its locked semantics are honestly represented in **the DART backend's IOMMU trait** rather than papered over.
@@ -578,7 +584,7 @@ this project to verify and the discipline `INV-PARSE-001` already demands.
 |---|---|---|---|
 | C1 | **AS-1b** — EL2→EL1, MMU init, exception vectors, generic timer, SVC entry, RNDR/PAC-BTI, watchdog | Page-table construction and the W^X/page-table Kani proofs (16 KiB, parametric); vector-table layout; register encodings | Whether the transitions actually take, on silicon |
 | C2 | **AS-2a** *(new slice)* — AIC decode | ADT `compatible`-string → AIC revision selection, **failing closed on an unknown string**; the packed event-word decoder as a pure function, fuzzed and Kani-checked as firmware input | Timer FIQ and IPI delivery |
-| C3 | **AS-3a** *(new slice)* — DART model + **the IOMMU trait** | Per-instance discovery from the ADT; PTE encoders per SoC generation; deny-all default construction; **the `INV-DEV-006` no-widening Kani proof on the trait's API surface** | Programming a real DART; DMA fault injection |
+| C3 | **AS-3a** — DART model + **the IOMMU trait** | **DONE 2026-08-14 for the trait half.** `src/dart/` + `src/dart-verify/`: five Kani harnesses proving no holder operation widens a window, including one over a symbolic *pair* of operations. Deny-all is the `Default`. Kani found a real defect — a window whose extent overflows `u64` contains nothing, not even itself — fixed at construction rather than assumed away. **Still owed: per-instance ADT discovery, the PTE formats, register programming, and honest locked-DART semantics.** | Programming a real DART; DMA fault injection |
 | C4 | **AS-4a1** *(new slice)* — RTKit + ANS2 codecs | Mailbox message encode/decode and the ANS2 command/completion structures, as fail-closed parsers with fuzz targets | Talking to the co-processor |
 | C5 | **AS-4b1** *(new slice)* — PCIe/NIC descriptor formats | Descriptor and config-space walkers, including the cyclic-capability-list termination the tier table already requires | Link training, TX/RX |
 
