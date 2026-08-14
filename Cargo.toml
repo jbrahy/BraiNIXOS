@@ -2,6 +2,7 @@
 members = [
     "src/adt",
     "src/sha256",
+    "src/chacha20",
     "src/platform-select",
     "src/pcie-config",
     "src/pcie-config-verify",

@@ -5,7 +5,8 @@
 //! below is therefore checked against a vector published by someone other than
 //! this project — RFC 4231 for HMAC-SHA256, RFC 5869 for HKDF-SHA256, RFC 8439
 //! for ChaCha20, Poly1305, and the AEAD composition of the two, and FIPS 180-4
-//! for SHA-256 itself.
+//! for SHA-256 itself -- which since X-T4 is the in-tree `brainix-sha256`, so
+//! that vector now checks our code rather than a vendored crate's.
 //!
 //! The AEAD case is the important one: `chacha20-poly1305@openssh.com` (§4.2)
 //! has no published vector, because §0 says there is no interoperability to
@@ -29,7 +30,6 @@ use brainix_transport_crypto::{expand, extract, hmac_sha256, poly1305_mac, Secre
 
 use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use chacha20::ChaCha20;
-use sha2::{Digest, Sha256};
 
 /// Decodes a compile-time hex literal into a fixed array.
 fn hex<const N: usize>(text: &str) -> [u8; N] {
@@ -58,7 +58,7 @@ fn from_hex(character: u8) -> u8 {
 
 #[test]
 fn sha256_matches_the_fips_180_4_abc_vector() {
-    let digest: [u8; 32] = Sha256::digest(b"abc").into();
+    let digest: [u8; 32] = brainix_sha256::digest(b"abc");
     assert_eq!(
         digest,
         hex::<32>("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")

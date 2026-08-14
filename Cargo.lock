@@ -95,6 +95,7 @@ dependencies = [
 name = "brainix-bxw1"
 version = "0.1.0"
 dependencies = [
+ "brainix-sha256",
  "brainix-tensor",
  "sha2",
 ]
@@ -104,6 +105,13 @@ name = "brainix-capability-verify"
 version = "0.1.0"
 dependencies = [
  "brainix-kernel",
+]
+
+[[package]]
+name = "brainix-chacha20"
+version = "0.1.0"
+dependencies = [
+ "chacha20",
 ]
 
 [[package]]
@@ -281,8 +289,8 @@ name = "brainix-transport-crypto"
 version = "0.1.0"
 dependencies = [
  "brainix-bsp",
+ "brainix-sha256",
  "chacha20",
- "sha2",
  "subtle",
 ]
 

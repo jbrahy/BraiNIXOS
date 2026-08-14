@@ -32,7 +32,7 @@
 //! the wire** and is never a routable name (`INV-SERVE-001`).
 
 use brainix_bsp::{LEN_CLIENT_HELLO, LEN_CONFIRM, LEN_DIR_KEYS, LEN_NONCE};
-use sha2::{Digest, Sha256};
+use brainix_sha256::Sha256;
 
 use crate::hkdf::{expand, extract};
 use crate::labels::{
@@ -54,7 +54,7 @@ pub fn transcript_one(
     let mut hasher = Sha256::new();
     hasher.update(client_hello);
     hasher.update(server_nonce);
-    hasher.finalize().into()
+    hasher.finalize()
 }
 
 /// `TH_2 = SHA256(ClientHello || server_nonce || server_confirm)` (§5.4).
@@ -71,7 +71,7 @@ pub fn transcript_two(
     hasher.update(client_hello);
     hasher.update(server_nonce);
     hasher.update(server_confirm);
-    hasher.finalize().into()
+    hasher.finalize()
 }
 
 /// Everything §5.4 derives from one transcript and one chain key.

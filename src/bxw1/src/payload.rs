@@ -19,7 +19,7 @@
 //! that is unvalidated by construction rather than by omission, and it is
 //! called out here so its absence from the checks below is not read as a gap.
 
-use sha2::{Digest, Sha256};
+use brainix_sha256::Sha256;
 
 use crate::error::Bxw1Error;
 use crate::header::Header;

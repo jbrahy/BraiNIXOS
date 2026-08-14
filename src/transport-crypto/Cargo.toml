@@ -10,14 +10,19 @@ description = "BSP v2 PSK key schedule, HKDF ratchet, and ChaCha20-Poly1305 reco
 # the wire. `brainix-bsp` holds no key material and has no dependencies.
 brainix-bsp = { path = "../bsp" }
 
-# The three vendored primitives P2-T2 is permitted to consume, at the versions
-# already in `vendor/`. No new dependency enters the tree here.
+# HMAC-SHA256, HKDF-SHA256 and Poly1305 were always in-tree here
+# (`hmac.rs`, `hkdf.rs`, `poly1305.rs`). What follows is the burn-down of the
+# two primitives that were not.
 #
-# `sha2` and `chacha20` are named in `docs/NORTH_STAR.md` as future in-tree
-# work; they are vendored today and this crate does not reimplement them.
-# HMAC-SHA256, HKDF-SHA256, and Poly1305 are **not** vendored and are in-tree
-# here (`hmac.rs`, `hkdf.rs`, `poly1305.rs`) -- see the crate docs.
-sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+# SHA-256 is in-tree as of X-T4. `sha2` is gone from this crate entirely --
+# not demoted to a test oracle, because `brainix-sha256` carries its own
+# FIPS 180-4 vectors and an oracle that is never wrong proves nothing.
+brainix-sha256 = { path = "../sha256" }
+
+# Still vendored: the record layer needs ChaCha20's **64-bit-nonce** variant
+# (`chacha20-poly1305@openssh.com`, BSP v2 4.2), and `brainix-chacha20`
+# currently implements only RFC 8439's 96-bit-nonce construction. Different
+# state layout, not interchangeable. See ROADMAP Track B, B2.
 chacha20 = { version = "0.9", default-features = false }
 subtle = { version = "2.6", default-features = false }
 
@@ -26,7 +31,6 @@ subtle = { version = "2.6", default-features = false }
 # this crate's Poly1305, so the vendored cipher is checked against the RFC
 # rather than only against itself.
 chacha20 = { version = "0.9", default-features = false }
-sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
 
 [lints]
 workspace = true

@@ -6,16 +6,17 @@ license.workspace = true
 description = "Fail-closed, zero-allocation BXW1 model-weight loader (P3-T3)"
 
 [dependencies]
-# The in-tree SHA-256 path. Same crate, same version, and the same
-# `force-soft` feature the kernel's hardware_security modules already build
-# against (src/kernel/Cargo.toml) -- this adds no new dependency to the tree
-# and no new vendored source. BXW1 §0 records that the in-tree
-# reimplementation has not landed and that `sha2` is still vendored.
-sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+# The in-tree SHA-256, as of X-T4. BXW1 §0's note that the reimplementation
+# "has not landed" is now stale for this crate: the per-tensor and whole-blob
+# digests this loader checks are computed by `brainix-sha256`.
+brainix-sha256 = { path = "../sha256" }
 
 [dev-dependencies]
 # The fixtures compute the digests a blob declares, and the seam test hands a
-# validated Q8_0 payload to the kernel that consumes it (P3-T4).
+# validated Q8_0 payload to the kernel that consumes it (P3-T4). This one stays
+# vendored **on purpose**: fixtures built by `sha2` and verified by
+# `brainix-sha256` make every blob test a differential check between two
+# independent SHA-256 implementations. It leaves when `sha2` leaves the tree.
 sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
 brainix-tensor = { path = "../tensor" }
 

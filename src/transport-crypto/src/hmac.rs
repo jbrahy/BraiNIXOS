@@ -11,7 +11,7 @@
 //! The construction is checked against RFC 4231 in `tests/known_answer.rs`, not
 //! merely against itself.
 
-use sha2::{Digest, Sha256};
+use brainix_sha256::Sha256;
 
 use crate::secret::Secret;
 
@@ -66,12 +66,12 @@ impl HmacSha256 {
     /// Produces the 32-byte tag and destroys the key-derived pads.
     #[must_use]
     pub fn finalize(mut self) -> [u8; HMAC_OUTPUT_BYTES] {
-        let inner_digest = self.inner.finalize_reset();
+        let inner_digest = self.inner.finalize();
         let mut outer = Sha256::new();
         outer.update(self.outer_pad.expose());
-        outer.update(inner_digest);
+        outer.update(&inner_digest);
         self.outer_pad.zeroize();
-        outer.finalize().into()
+        outer.finalize()
     }
 }
 
@@ -80,7 +80,7 @@ impl HmacSha256 {
 fn normalize_key(key: &[u8]) -> Secret<HMAC_BLOCK_BYTES> {
     let mut block = Secret::<HMAC_BLOCK_BYTES>::zero();
     if key.len() > HMAC_BLOCK_BYTES {
-        let digest: [u8; HMAC_OUTPUT_BYTES] = Sha256::digest(key).into();
+        let digest: [u8; HMAC_OUTPUT_BYTES] = brainix_sha256::digest(key);
         block.expose_mut()[..HMAC_OUTPUT_BYTES].copy_from_slice(&digest);
     } else {
         block.expose_mut()[..key.len()].copy_from_slice(key);

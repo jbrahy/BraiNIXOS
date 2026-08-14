@@ -1,0 +1,17 @@
+[package]
+name = "brainix-chacha20"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "In-tree ChaCha20 from RFC 8439, to retire the vendored chacha20 (X-T4)"
+
+[dependencies]
+
+[dev-dependencies]
+# The crate this one exists to retire, as a differential oracle. It goes when
+# X-T4 removes `chacha20` from the tree; until then, agreeing with the
+# implementation in production is a stronger check than published vectors alone.
+chacha20 = { version = "0.9", default-features = false }
+
+[lints]
+workspace = true
