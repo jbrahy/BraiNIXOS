@@ -182,6 +182,29 @@ expensive because of what they *parse*.
 by the checked-in corpora. That is a smoke test, and this document's "Verify: fuzz soak" criteria are
 still unmet — the difference between the two words is the whole reason that row existed.
 
+**2026-08-14, plan review against the north star. Three findings, all of them omissions rather than
+drift:**
+
+1. **`AS-1c` — nothing in this plan made the kernel build for aarch64.** Eight Track A rows end "and the
+   rest needs a kernel," `src/kernel` compiles for `x86_64-unknown-none` alone, and no task produced the
+   other one. It is now a named row (AS-1 slice list, Track C row C6) and it is **the pivot of the whole
+   plan**: it is the only thing standing between the host lane's finished halves and their other halves,
+   and it is answerable on a laptop.
+2. **`A16` — the engine has never run a real model, and one is sitting in the tree.**
+   `tools/bxw1-convert/models/LiteLlama-460M-1T/` is checked out, the converter is written, and
+   `find . -name '*.bxw1'` is empty. Three rows (A6's absent token stream, A11's transformer-less
+   confinement suite, A14's missing numerator) are each owed the same artifact.
+3. **`A17` — NEON is unwritten and was blocked behind a kernel dependency it does not have.**
+   `grep -rn "neon" src/tensor/src/` returns nothing. The north star names NEON explicitly and ranks
+   performance above everything but the invariants; the development host is aarch64, so the kernels can be
+   written, property-tested and measured now. It was folded into A13 (FP context switch), which genuinely
+   does need the kernel. Split.
+
+**No drift was found.** Nothing in the plan crosses a hard line, no row proposes an external crate, ambient
+authority, shared-memory IPC, a kernel heap, or a weakened confinement, and the exception ledger still
+holds exactly the four named exceptions. What the review found is that the plan was **under-scheduled, not
+misaimed** — and that B2 mistakes writing a primitive for adopting it (see Track B).
+
 ---
 
 ## Architecture target
@@ -238,10 +261,17 @@ with `auditd` observing connect / auth / grant / request / response boundaries.
 ### Critical path to "the Mac mini serves inference"
 
 ```
-AS-0 (ADT parser) ──▶ AS-1 ──▶ AS-2 ──▶ AS-3 ──▶ AS-4 ──┐
-                                                        ├─▶ AS-4c ──▶ AS-5 = DONE (#12)
-P2 (serving path) ──▶ P3 (inference engine) ────────────┘
+AS-0 (ADT parser) ──▶ AS-1b ──▶ AS-1c ──▶ AS-1 ──▶ AS-2 ──▶ AS-3 ──▶ AS-4 ──┐
+                                  │                                          ├─▶ AS-4c ──▶ AS-5 = DONE (#12)
+P2 (serving path) ──▶ P3 (inference engine) ──▶ [second halves] ─────────────┘
+                                  ▲
+                                  └── the product track's remaining halves join here, not at AS-4c
 ```
+
+**`AS-1c` was added to this diagram on 2026-08-14** because it was missing from it, and its absence made
+the two tracks look independent for longer than they are. They are independent **for their first halves
+only**: every Track A row's second half — a real accept, a real IPC, a real mapping, a real disk — needs a
+kernel, and the kernel it needs is the aarch64 one. See Track C row C6.
 
 Two independent tracks converge at **AS-4c**. The **platform track** (`AS-0 → AS-1 → AS-2 → AS-3 → AS-4`)
 is serial and hardware-gated, and AS-0 is its only host-testable member. The **product track**
@@ -371,7 +401,12 @@ discharges one of AS-5-T0's five signed preconditions on a laptop.
 
 - **AS-1** **SLICED (2026-08-10).** AS-1 as written below is a dozen independent subsystems, and one spec across all of them would be written entirely against unverified assumptions. It is now delivered in slices, each with its own design doc. **AS-1a is COMPLETE to the hardware gate (`e90ea1e`)**; the rest are unstarted.
   - **AS-1a — first light.** [`architecture/AS-1a-first-light-boot-stub.md`](architecture/AS-1a-first-light-boot-stub.md). The smallest payload that proves the delivery chain: target plumbing, linker script, entry assembly, s5l UART transmit, ADT-derived UART discovery, banner. Landed as **`src/boot-stub-apple/`** with 32 host tests and a linked `aarch64-unknown-none-softfloat` image. **Everything except the hardware run is done**; the run is blocked on the rig, not on code.
-  - **AS-1b onward — unstarted.** EL2→EL1, MMU init, exception vectors, generic timer, SVC entry, RNDR/PAC-BTI, watchdog reset, Image4/`kmutil` delivery, secondary-CPU release.
+  - **AS-1b — the aarch64 core, unstarted except for the MMU encoder.** EL2→EL1, MMU init and the table walk, exception vectors, generic timer, SVC entry, RNDR/PAC-BTI, watchdog reset, Image4/`kmutil` delivery, secondary-CPU release. `src/aarch64-mmu/` (Track C, C1) is its descriptor half and is done to the hardware gate.
+  - **AS-1c — the kernel crate itself builds for aarch64.** *(Named 2026-08-14; it was implied by AS-1a's deviation 2 and scheduled nowhere.)* `src/kernel` compiles for `x86_64-unknown-none` and for nothing else: `src/kernel/src/arch/` contains ten x86-64 modules and no aarch64 sibling, `.cargo/config.toml` hardcodes `build.target = "x86_64-unknown-none"`, and `find src/kernel -iname '*aarch64*'` is empty. AS-1a deliberately deferred this — cfg-gating the whole module tree before a character had been printed risked the frozen reference build (#26) for no gain — and that was the right call for AS-1a. It stops being right the moment anything needs to *run*.
+
+    **This is the dependency behind every "what remains needs a kernel" note in Track A.** `servd`'s `transportd` accept and its minted `CapServe`/`CapAdmin`, `modeld`'s storage read and region seal, `inferd`'s real IPC, `auditd`'s persistence, A12's deletion of `ssh_bridge.rs`, and A13's FP context switch are all waiting on one thing, and this row is that thing. Naming it separately is the point: five rows blocked on an unnamed task read as five independent stalls.
+
+    **It is host-checkable in the only sense available before the rig** — it compiles for `aarch64-unknown-none-softfloat` or it does not, and the x86-64 reference either still builds beside it or the cfg gating is wrong. Scope: `arch/aarch64/` with the AS-1b core behind it, cfg gates over the module tree, a second `.cargo` target profile, and CI building both. **S** impl / **O** review — the context-switch and syscall entry paths are TCB. Deps: AS-1b. Verify: both bare-metal builds green in CI; x86-64 boot parity against the current QEMU job, which is the frozen reference's own regression bar (#26).
 
   **Two deviations from this document, recorded rather than left silent:**
 
@@ -503,6 +538,18 @@ model, not a proof of absolute security.
 9. **Ratchet desynchronization is an availability risk (P2-T12).** The HKDF chain deletes the key it advanced past, so if the two ends disagree irreconcilably — a client store restored from an older state, a server chain advanced past a client that lost its own advance, or a gap wider than the catch-up bound — the handshake fails closed and the client is locked out. That is the correct behavior and there **must never be a fallback to an un-ratcheted key**, because a fallback any failure can trigger is a downgrade any attacker can trigger. Nothing is disclosed; access is lost. Mitigation, and the reason it is not a remote self-destruct: recovery is re-enrollment over the admin channel, and if the credential authorizing that is itself desynchronized, recovery is over the **serial console and nowhere else** — which is why the serial path is compiled in unconditionally and gated on no network state. Stated plainly: a ratchet bug is a lockout requiring physical presence to repair.
 10. **No verification loop for the platform track until hardware (#20, #22).** Dropping x86-64 removed the only environment the tree boots in, and cancelling Phase 4 removed the QEMU `virt` harness that would have replaced it. Between now and AS-1's serial banner, **AS-0 and the host-tested P2/P3 work are the only things that can be shown to work at all.** The first aarch64 instruction BraiNIX executes runs on the mini, over a debug cable, with no prior console — and the first end-to-end serving run is AS-4c, at the end of the driver chain. Mitigation is ordering, not tooling: AS-0 first because it is host-testable, then the rig, then AS-1. There is no mitigation for the missing integration gate; it is an accepted cost of #20 and #22.
 
+11. **One unbuilt dependency carries eight rows (`AS-1c`).** Named 2026-08-14, having been scheduled
+    nowhere before that. The concentration is the risk, not the difficulty: cfg-gating a module tree is
+    ordinary work, but until it lands, *every* second half of the serving stack is stalled behind it while
+    reading as eight independent stalls. Mitigation is exactly the naming — one row, one owner, one
+    verify criterion (both bare-metal builds green), sequenced immediately after AS-1b and **before** the
+    rig is needed, so it cannot end up waiting on a cable it does not require.
+12. **The engine has never run a model (`A16`).** Every performance claim in this plan is arithmetic — a
+    ceiling divided out of memory bandwidth — and every confinement claim about the model is a claim about
+    the type system rather than about a transformer under load. Both are correct as far as they go, and
+    neither has met a real weight set. Mitigation: A16, which needs no hardware and whose inputs are
+    already in the tree.
+
 ## Critical files
 
 - `src/kernel/src/arch/mod.rs` — today: cfg-gated x86 modules. ~~The HAL extraction seam~~ — no seam is being cut (#21); this tree is **frozen reference, not scheduled** (#26) and keeps building. Apple platform code lands under `arch/aarch64/`.
@@ -511,6 +558,9 @@ model, not a proof of absolute security.
 - `src/kernel/src/boot/credential_store.rs` — runtime key enrollment and the ratchet's persisted chain state (P2-T12); today it persists to virtio-blk and seals nothing, and **sealing is not coming** (#25).
 - `src/kernel/src/memory/virtual_address_layout.rs` — fixed reserved WEIGHTS/KV regions (INV-MEM); today it defines neither, and hardcodes a 4 KiB page against a 16 KiB platform.
 - `src/capability-verify/src/lib.rs` — the existing Kani proof pattern, now extended across `src/adt-verify/`, `src/bsp-verify/`, and `src/transport-crypto-verify/`.
+- `src/transport-crypto/Cargo.toml` — **the file B2 is actually about.** It still names `sha2` and `chacha20` as dependencies; X-T4 is done when those two lines are gone and `Cargo.lock` is shorter, not when `src/sha256/` and `src/chacha20/` exist.
+- `tools/bxw1-convert/` and `tools/bxw1-convert/models/LiteLlama-460M-1T/` — the converter and the checked-out weights A16 turns into the first `.bxw1` blob this project has ever produced. The blob is a build artifact and is never committed.
+- `.cargo/config.toml` — hardcodes `build.target = "x86_64-unknown-none"`. AS-1c makes the target a choice rather than a constant, without breaking the frozen reference build (#26).
 - `.github/workflows/ci.yml` — all thirteen checks green as of 2026-08-14. Runs six Kani jobs in parallel
   (one per package, with the eight non-terminating harnesses behind `long-proofs`), a line-coverage gate,
   host and bare-metal clippy, a QEMU boot that now genuinely boots, and **zero fuzz targets** — P2-T10's
@@ -530,7 +580,14 @@ and the only thing it is waiting for is a cable. That pattern generalizes furthe
 previously claimed, and the sentence it replaces — *"there is no host-testable Apple work left"* — was
 wrong: it read the hardware gate as covering the whole task rather than its last step.
 
-Three tracks. They share no code and no dependencies, so they can run in any order or at once.
+Three tracks. **Their first halves share no code and no dependencies and can run in any order or at once;
+their second halves converge on one row** — `AS-1c`, the aarch64 kernel build (Track C, C6). That
+convergence was not written down until 2026-08-14, and leaving it unwritten is what made eight separate
+rows each end with the same sentence. **The ordered picture is in *Deployment readiness* §0.**
+
+**The three unbuilt things that need nothing at all:** `A16` (a real BXW1 blob and real streamed tokens),
+`A17` (NEON tensor kernels), and `B2`'s adoption swap (delete `sha2` and `chacha20` from
+`transport-crypto`). Everything else in the host lane is either done, or a remaining half waiting on C6.
 
 ### Track A — turn seven finished libraries into a serving system *(no hardware)*
 
@@ -551,13 +608,32 @@ directories exists today**, and until they do BraiNIX has components without a s
 | A10 | **P2-T8** | `auditd` extended to serving and admin events, manifest unchanged | A1, A7 | **DONE 2026-08-14** for the host-testable half. Fixed-size record with no field a prompt could occupy, four Kani proofs (**INV-AUDIT covered**), a two-entry manifest that cannot write its own log, and one row per outcome — verbs *and* refusals, because a refusal that emits nothing is the more dangerous silence. |
 | A11 | **P3-T8** | Confinement suite — adversarial prompts, zero escalation under any input | A4 | **STARTED 2026-08-14.** Twelve injection prompts carried through a live session; nothing about its authority moves. It asks the type system rather than the model, which is what `INV-MODEL` claims. **A suite that runs them through a real transformer is still owed** and needs the engine, the weights and the loader chain. |
 | A12 | **P2-T6** | Delete `boot/ssh_bridge.rs` and its `static mut` session globals | A1 | Risk 5: the weakest point in the tree until it goes. |
-| A13 | **P3-T0** | Userspace FP/SIMD enablement — in-tree FP state save/restore, kernel stays soft-float | A4 | Unblocks NEON in the tensor kernels; the context-switch ABI is TCB, so it is reviewed as such. |
-| A14 | **P3-T10** | **Serving performance baseline** | A6 | **HALF DONE 2026-08-14.** The ceiling is arithmetic now: 7B at Q8 is 7.875 GB/token, so 200 GB/s buys **~25 tokens/second and no more**. Writing it down corrected the obvious claim — Q8 against f16 is **1.78×, not 2×**, because the per-block scales cost 12.5%, and the test asserting 2× failed. The numerator needs the engine running. |
+| A13 | **P3-T0** | Userspace FP/SIMD enablement — FP state save/restore in the context switch, kernel stays soft-float | A4, **AS-1c** | **Re-scoped 2026-08-14: this row is the *context switch*, not the kernels.** Saving and restoring FP state needs a context switch to save it in, so this waits on the aarch64 kernel. The NEON work it was blocking does not, and is now A17. The context-switch ABI is TCB and is reviewed as such. |
+| A14 | **P3-T10** | **Serving performance baseline** | A6, **A16** | **HALF DONE 2026-08-14.** The ceiling is arithmetic now: 7B at Q8 is 7.875 GB/token, so 200 GB/s buys **~25 tokens/second and no more**. Writing it down corrected the obvious claim — Q8 against f16 is **1.78×, not 2×**, because the per-block scales cost 12.5%, and the test asserting 2× failed. The numerator needs the engine running, which is A16, not the kernel. |
 | A15 | **P3-A** | Phase 3 security audit | A6, A11 | The last audit before hardware. |
+| A16 | *(new slice of **P3-T3a**/**P3-T9a**)* | **A real BXW1 blob and real streamed tokens, host-side.** Run `tools/bxw1-convert` over the checked-out **LiteLlama-460M-1T** in `tools/bxw1-convert/models/`, produce the `.bxw1` and vocab blobs, and drive them through `modeld` → `inferd` → the `src/transformer/` decode loop until tokens come out. | A3, A4, P3-T5, P3-T6 | **Nothing here needs the mini, and it closes three rows' honest caveats at once.** A6 says "streamed tokens are absent, not stubbed"; A11 owes "a suite that runs them through a real transformer"; A14 owes the numerator. All three are owed the same thing: a model that exists. The converter and the 460M weights are already in the tree and **no `.bxw1` has ever been produced** (`find . -name '*.bxw1'` is empty), and `tools/bxw1-run` is named in `Cargo.toml`'s exclude list and does not exist. The blob is a build artifact, never committed — see the note below this table. |
+| A17 | *(new slice of **P3-T4**)* | **NEON tensor kernels.** Aarch64 SIMD matmul and Q8 dequant in `src/tensor/`, behind the same property tests the scalar path already passes. | P3-T4 | **The highest-leverage in-bounds performance work available without hardware, and `grep -rn "neon" src/tensor/src/` returns nothing.** The north star calls NEON out by name and ranks performance above everything but the invariants; the development host *is* aarch64, so these kernels are written, tested and measured on a laptop. Split out of A13 on 2026-08-14 because it was blocked there by a kernel dependency it does not have: kernel FP state matters when `inferd` is a scheduled process, not when the kernels are a host-tested library. Bounded by the invariants exactly as before — no JIT (INV-MEM), fixed scratch, no allocation. |
+
+**Model weights are never committed.** The `.bxw1` blob A16 produces is a build artifact of the converter
+over a checked-out upstream model, reproduced by running the tool, and it belongs in `.gitignore` beside
+the safetensors it came from. A committed multi-hundred-megabyte blob would also make the reproducible-build
+check of X-T3 measure the wrong thing.
+
+**What Track A can and cannot finish without the mini — stated once, because eight rows repeat it.** Every
+row above is split the same way the platform track is: a half that is a pure function over values, and a
+half that needs a process, an address space, an IPC rendezvous, or a disk. **The first half is done or
+doable now. The second half is blocked on `AS-1c`, not on further host work** — `servd`'s accept and minted
+capabilities, `modeld`'s storage read and region seal, `inferd`'s real IPC, `auditd`'s persistence, A8's
+persisted ratchet chain (and therefore forward secrecy), A12's deletion of `ssh_bridge.rs`, and A13's FP
+save area. Naming that dependency once is the difference between eight stalled rows and one.
+
+The rows that are **not** blocked on it, and are therefore the whole of what "build everything possible"
+means today: **A16** (a real model and real tokens), **A17** (NEON), **A4/A5/A7/A9/A11**'s remaining
+host-testable halves, **A14** once A16 lands, **A15**, and all of Track B and Track C.
 
 **Exit for Track A:** P3-T9a green, two isolated sessions, malformed requests denied without allocating,
-teardown zeroizing the KV partition — and stated as what it is: **a host-level test of composed
-components, not a boot and not a system claim.**
+teardown zeroizing the KV partition, **and A16's tokens actually streaming** — and stated as what it is:
+**a host-level test of composed components, not a boot and not a system claim.**
 
 ### Track B — assurance debt that currently contradicts a north-star rule *(no hardware)*
 
@@ -567,7 +643,7 @@ and two of them block *honesty*, not features.
 | # | Task | What is wrong today |
 |---|---|---|
 | B1 | ~~**P2-T10** — fuzz targets into CI~~ | **DONE 2026-08-14.** A `Fuzz Smoke` job runs all eleven targets for twenty seconds each, seeded by the checked-in corpora. Two things were needed, not one: `fuzz/.cargo/config.toml` pointed its vendored source at an absolute path that existed on one laptop, so the crate could not resolve dependencies anywhere else. **Twenty seconds is a smoke test and nothing may cite it as a soak** — the soak criteria in this document stay unmet until something runs long enough to deserve the word. |
-| B2 | **X-T4** — in-tree SHA-256 and ChaCha20 | `sha2` and `chacha20` are still the vendored crates, so the serving transport **does not satisfy the dependency-closure rule**. With the Ed25519 stack a permanent named exception, these two symmetric primitives with published test vectors are what remains of the crypto burn-down. |
+| B2 | **X-T4** — in-tree SHA-256 and ChaCha20 | **PART WRITTEN, NOTHING ADOPTED, and the distinction is the whole row.** `src/sha256/` landed 2026-08-14 (`f5a3571`) and `src/chacha20/` is in the working tree, added to the workspace, **and does not currently compile** (`saturating_mul` on an inferred integer, `src/chacha20/src/lib.rs:93`). Meanwhile `src/transport-crypto/Cargo.toml` still names `sha2` and `chacha20` in both `[dependencies]` and `[dev-dependencies]`, so **the vendored crates are still what the serving transport executes** and `Cargo.lock` still carries 84 packages. The task is not writing the primitive; it is **deleting the dependency** — swap the imports, keep the vendored crate only as a test oracle in `[dev-dependencies]` against RFC 8439 and FIPS 180-4 vectors, then drop it from `vendor/` and watch the lock count fall. Until that swap lands, no document may describe the primitive set as in-tree, and X-T4's own verify criterion — *`Cargo.lock` crate count strictly decreases* — is unmet. |
 | B3 | **X-T5** — make the proof tracker distinguish **runs** from **exists** | **PARTLY DONE 2026-08-14.** The tracker now reports `50 (42 run in CI, 8 gated)`, lists the gated harnesses, and decides whether a gate is live by parsing `--features` out of `.github/workflows/ci.yml` rather than assuming — so a harness gated behind a feature no job enables reports as unrun. **What remains is the cost problem itself:** the 96-byte ADT harnesses and the AEAD/hash harnesses are excluded, not solved. |
 | B4 | **X-T2** — clippy burn-down so it can gate | **DONE 2026-08-14, and not the way this row expected.** The suppressions are not removable: 108 of the 110 are in the frozen x86-64 reference, and decision #26 says changing that tree earns no platform progress while risking the one build that works. So the gate is not "no suppressions" but **"no unaccounted suppressions"** — `bin/lint-suppressions.py` requires every one to sit in a frozen tree or in a named file with a stated reason, and CI runs it. The two outside the frozen tree are in `src/bsp/src/record.rs`, and the reason is now written down. |
 | B5 | **X-T3** — reproducible build + Ed25519 release signing | **HALF DONE 2026-08-14.** `bin/reproducible-build.sh` builds the payload twice into unrelated target directories and compares bytes; all three artifacts are identical, and a CI job runs it on every pull request. **Its limit is stated in the script**: two builds on one machine with one toolchain catch the common causes and not a path baked in by *that* machine, which needs a second one. Signing is the other half and is an out-of-tree release step. |
@@ -587,12 +663,18 @@ this project to verify and the discipline `INV-PARSE-001` already demands.
 | C3 | **AS-3a** — DART model + **the IOMMU trait** | **DONE 2026-08-14 for the trait half.** `src/dart/` + `src/dart-verify/`: five Kani harnesses proving no holder operation widens a window, including one over a symbolic *pair* of operations. Deny-all is the `Default`. Kani found a real defect — a window whose extent overflows `u64` contains nothing, not even itself — fixed at construction rather than assumed away. **Still owed: per-instance ADT discovery, the PTE formats, register programming, and honest locked-DART semantics.** | Programming a real DART; DMA fault injection |
 | C4 | **AS-4a1** *(new slice)* — RTKit + ANS2 codecs | Mailbox message encode/decode and the ANS2 command/completion structures, as fail-closed parsers with fuzz targets | Talking to the co-processor |
 | C5 | **AS-4b1** — PCIe/NIC descriptor formats | **STARTED 2026-08-14**: `src/pcie-config/` walks the capability list with three independent termination bounds and two Kani proofs over symbolic pointers — the cyclic-list termination the tier table requires. PCI-SIG's layout, so no clean-room spec is needed. NIC descriptors remain. | Link training, TX/RX |
+| C6 | **AS-1c** — the kernel crate goes aarch64 | **UNSTARTED, and the largest unnamed item in this plan until 2026-08-14.** `arch/aarch64/` under `src/kernel`, cfg gates over the module tree, the second bare-metal target in `.cargo` and in CI, with the x86-64 reference still building beside it (#26). It compiles or it does not, and that answer is available on a laptop. | Whether any of it executes — which is AS-1's serial banner |
 
 **C3 is the highest-value row in this table and it is not obvious why.** AS-5-T0 precondition 2 — a Kani
 proof that the DART backend's IOMMU trait admits no widening operation — is one of the five **signed,
 unwaivable** acceptance criteria of the TCB-AS/GPU exception, and it is a proof about an **API surface**.
 It can be discharged on a laptop, years before any GPU firmware exists to be confined. Landing C3 turns
 one of the five preconditions green ahead of the hardware it protects.
+
+**C6 is the row that unblocks the other track.** C3 turns a signed GPU precondition green years early;
+**C6 is what eight Track A rows are actually waiting for.** Every one of them ends "and the rest needs a
+kernel," and until 2026-08-14 no task in this document produced one. It is sequenced after C1's table walk
+(AS-1b) because a kernel that cannot map a page is not worth cfg-gating a module tree for.
 
 **What Track C cannot do:** it cannot tell you the ADT you parsed is the ADT that machine emits, that the
 register offsets are right, or that a sequence completes. Those are the hardware gate, and every slice
@@ -607,6 +689,37 @@ meeting that moment untested shrinks with every row here.
 The terminal criterion is AS-5 (#12). **Deployment readiness is earlier and is a different thing**: it is
 the point at which a signed payload can be delivered to the machine and serve a remote client. It has four
 parts, and two of them are not engineering.
+
+### 0. The order, in one place *(added 2026-08-14)*
+
+Three lanes run concurrently and share no code. Read down a lane, not across.
+
+```
+OWNER LANE   rig: Permissive Security · UART cable · m1n1 · macOS stub pinned
+             └──────────────────────────────────────────────┐
+                                                            │ (gates AS-1's run, nothing else)
+HOST LANE    A16 real tokens ─┬─ A14 measured baseline      │
+  (no mini)  A17 NEON ────────┘                             │
+             B2 adopt in-tree SHA-256 + ChaCha20            │
+             A4/A5/A7/A9/A11 remaining host halves ─ A6 ─ A15 (P3-A audit)
+                                                            │
+PLATFORM     C1 AS-1b core ──▶ C6 AS-1c kernel-on-aarch64 ──┴──▶ AS-1 banner ──▶ AS-2 ──▶ AS-3
+  LANE       C2 AIC decode ──────────────┘                            │
+  (no mini    C3 DART model + trait (DONE for the trait)              │
+   until the  C4 RTKit/ANS2 codecs                                    ▼
+   last step) C5 PCIe/NIC descriptors ────────────────────▶ AS-4a ─┬─▶ AS-4c = DEPLOYABLE
+                                                           AS-4b ─┘
+                                                                     └──▶ AS-5 = DONE (#12)
+```
+
+**The rule that decides what to build next: if a task's answer is a value rather than a behavior, build it
+now.** That is what AS-1a proved on the platform track and what every Track A row's first half proved on
+the neutral one. The three things that fit that rule and are not yet built are **A16**, **A17**, and
+**B2's adoption swap**; after those, the host lane's remaining halves are blocked on **C6**, which is
+therefore the pivot of this whole plan.
+
+**What the mini's absence does *not* block:** anything above except the AS-1 banner and everything to its
+right. **What it does block, permanently until the rig exists:** every claim that any of this executes.
 
 ### 1. The rig — owner actions, physical, once per machine
 
@@ -627,15 +740,19 @@ true**:
 
 ### 2. The engineering gates, in order
 
-1. **Track A exit** — P3-T9a green: the serving stack composes and serves, host-side.
-2. **AS-1 hardware gate** — the invariant banner over serial on the mini. The first proof that anything we
+1. **Track A exit** — P3-T9a green: the serving stack composes and serves, host-side, **with A16's real
+   tokens rather than an absent stream**.
+2. **AS-1c** — the kernel crate builds for `aarch64-unknown-none-softfloat` with the x86-64 reference still
+   building beside it. No banner yet, and no hardware needed: this is the gate that turns the host lane's
+   blocked halves into work that can proceed.
+3. **AS-1 hardware gate** — the invariant banner over serial on the mini. The first proof that anything we
    wrote runs on this machine.
-3. **AS-2, AS-3** — timer and IPI on hardware; DART deny-all proven and DMA faults injected.
-4. **AS-4a, AS-4b** — weights read from NVMe; NIC TX and RX.
-5. **AS-4c** — remote `bsp-client` → mini → auth → prompt → streamed tokens, two isolated clients.
+4. **AS-2, AS-3** — timer and IPI on hardware; DART deny-all proven and DMA faults injected.
+5. **AS-4a, AS-4b** — weights read from NVMe; NIC TX and RX.
+6. **AS-4c** — remote `bsp-client` → mini → auth → prompt → streamed tokens, two isolated clients.
    **This is the project's first true end-to-end integration** (#27) and the demonstration that BraiNIX
    serves inference on the target machine.
-6. **AS-A** — whole-platform audit, including the TCB-AS enumeration and the boot posture.
+7. **AS-A** — whole-platform audit, including the TCB-AS enumeration and the boot posture.
 
 ### 3. Release mechanics — X-T3, and it is not optional
 
