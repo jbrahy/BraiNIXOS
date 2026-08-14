@@ -58,12 +58,17 @@ fn carry_prompt_through_session(prompt: &[u8]) {
         .expect("admitted");
     let binding = KvBinding::for_session(0).expect("admissible");
 
-    // The prompt is bytes in a buffer. There is no call it could make from
-    // here, which is the point being asserted rather than a limitation of the
-    // test: the session's API surface has no method that takes prompt content
-    // and returns authority.
-    let carried: usize = prompt.len();
-    assert!(carried <= usize::MAX);
+    // The prompt is bytes in a buffer, and the assertions below are about what
+    // did *not* happen to the session while they sat there. There is no call
+    // the prompt could make from here, which is the point rather than a
+    // limitation of the test: the session's API surface has no method that
+    // takes prompt content and returns authority. A prompt longer than the
+    // per-request ceiling would be refused by the accounting in `brainix-bsp`,
+    // which is a different test in a different crate.
+    assert!(
+        prompt.len() <= usize::from(u16::MAX),
+        "corpus entries are small"
+    );
 
     // Nothing about the session's authority moved.
     assert_eq!(
