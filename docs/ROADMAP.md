@@ -168,9 +168,9 @@ never actually being checked:
 - A **line-coverage gate** now holds every uncovered line in the seven library crates to a
   `COVERAGE-EXEMPT:` marker with a stated reason. 118 lines are exempt; zero are unjustified.
 
-**One consequence for the numbers this document quotes.** `tools/proof-coverage` reports **50 Kani
-proofs**, and it counts harnesses that *exist* — eight of those do not run in CI. Read it as 42 running
-plus 8 recorded-and-excluded until X-T5 splits the two.
+**The numbers this document quotes now say which they are.** `tools/proof-coverage` reports
+**50 Kani proofs, 42 of which run in CI**; the other eight are behind `long-proofs` and are listed
+rather than counted (X-T5).
 
 **The fuzz targets do now run** (P2-T10, closed 2026-08-14): eleven targets, twenty seconds each, seeded
 by the checked-in corpora. That is a smoke test, and this document's "Verify: fuzz soak" criteria are
@@ -562,7 +562,7 @@ and two of them block *honesty*, not features.
 |---|---|---|
 | B1 | ~~**P2-T10** — fuzz targets into CI~~ | **DONE 2026-08-14.** A `Fuzz Smoke` job runs all eleven targets for twenty seconds each, seeded by the checked-in corpora. Two things were needed, not one: `fuzz/.cargo/config.toml` pointed its vendored source at an absolute path that existed on one laptop, so the crate could not resolve dependencies anywhere else. **Twenty seconds is a smoke test and nothing may cite it as a soak** — the soak criteria in this document stay unmet until something runs long enough to deserve the word. |
 | B2 | **X-T4** — in-tree SHA-256 and ChaCha20 | `sha2` and `chacha20` are still the vendored crates, so the serving transport **does not satisfy the dependency-closure rule**. With the Ed25519 stack a permanent named exception, these two symmetric primitives with published test vectors are what remains of the crypto burn-down. |
-| B3 | **X-T5** *(new)* — make the proof tracker distinguish **runs** from **exists** | `tools/proof-coverage` reports 50 harnesses; 8 are behind `long-proofs` and never execute. A number that counts unrun proofs is exactly the unfalsifiable claim the north star forbids. Also: attack the cost problem itself — the 96-byte ADT harnesses and the AEAD/hash harnesses are excluded, not solved. |
+| B3 | **X-T5** — make the proof tracker distinguish **runs** from **exists** | **PARTLY DONE 2026-08-14.** The tracker now reports `50 (42 run in CI, 8 gated)`, lists the gated harnesses, and decides whether a gate is live by parsing `--features` out of `.github/workflows/ci.yml` rather than assuming — so a harness gated behind a feature no job enables reports as unrun. **What remains is the cost problem itself:** the 96-byte ADT harnesses and the AEAD/hash harnesses are excluded, not solved. |
 | B4 | **X-T2** — clippy burn-down so it can gate | Clippy is green on both host architectures and the bare-metal target as of 2026-08-13; the remaining suppressions are scope-allows on the frozen reference and the orphaned trees. Removing those is what lets clippy become a gate rather than a habit. |
 | B5 | **X-T3** — reproducible build + Ed25519 release signing | INV-BOOT's two artifact-side clauses. Needed **before** anything is delivered to the mini, not after; see *Deployment readiness* below. |
 
