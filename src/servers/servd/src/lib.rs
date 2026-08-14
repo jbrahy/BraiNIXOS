@@ -64,6 +64,8 @@
 //! slot reuse would be a cross-tenant read (`INV-SERVE`) reachable by holding
 //! on to an old handle.
 
+pub mod admin;
+
 use brainix_bsp::{
     Session, SessionType, HS_TIMEOUT_SECONDS, IDLE_TIMEOUT_SECONDS, LEN_HANDLE, MAX_ADMIN_SESSIONS,
     MAX_SESSIONS, MAX_SESSIONS_PER_CREDENTIAL,
