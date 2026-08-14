@@ -367,21 +367,35 @@ jobs:
             --flags not-need-init,startup-clear \
             --daemon
 
+      # This invocation mirrors docker/test.sh, which is the one that has
+      # actually booted this kernel. The version it replaces produced a
+      # zero-byte boot log -- not a failed assertion, no output at all -- and
+      # differed from the working one in three ways that each explain silence:
+      #
+      #   * `-nographic` **and** `-serial stdio`. `-nographic` already routes
+      #     the serial port to stdio; naming stdio a second time makes two
+      #     character devices claim it.
+      #   * `-cdrom` rather than an IDE drive with `-boot order=c`. GRUB writes
+      #     its own messages to the VGA console, which `-nographic` discards,
+      #     so a boot that never reaches the kernel is silent by construction:
+      #     the serial log stays empty and says nothing about why.
+      #   * no `+rdrand,+rdseed`. The kernel seeds its CSPRNG from RDRAND on
+      #     this platform.
       - name: Boot kernel in QEMU (headless, 30s timeout)
         timeout-minutes: 2
         run: |
           timeout 30 qemu-system-x86_64 \
+            -drive file=brainix.iso,format=raw,if=ide \
+            -boot order=c \
             -machine q35,accel=tcg \
-            -cpu qemu64,+smep,+smap \
+            -cpu qemu64,+smep,+smap,+rdrand,+rdseed \
             -m 512M \
             -nographic \
-            -serial stdio \
             -device virtio-net-pci,netdev=net0 \
             -netdev user,id=net0 \
             -chardev socket,id=chrtpm,path=/tmp/swtpm-test.sock \
             -tpmdev emulator,id=tpm0,chardev=chrtpm \
             -device tpm-tis,tpmdev=tpm0 \
-            -cdrom brainix.iso \
             2>&1 | tee /tmp/boot.log || true
 
       - name: Assert boot success
