@@ -60,16 +60,33 @@ SECTIONS
         __bss_end = .;
     } :payload
 
-    /* Boot stack. Lives in .bss so start.S zeroes it, and is addressed
-     * PC-relatively. 64 KiB is far more than first light needs; it costs
-     * nothing in the image because .bss occupies no file space.
+    /* Boot stack.
+     *
+     * MUST be inside the loaded image, and the reason is the whole of AS-1a's
+     * first failure on hardware. This was `(NOLOAD)` with 64 KiB, which
+     * `objcopy -O binary` does not emit -- so the file ended at 0x2133 while
+     * `__stack_top` sat at 0x12140, and `start.S` pointed `sp` 73 KB past the
+     * last byte iBoot loaded. The first call into Rust wrote there. With the
+     * MMU off that is not a fault into a guard page, it is a write into
+     * whatever physical memory follows the payload: iBoot's own structures,
+     * the boot_args, or the ADT this stub then tries to parse. It died before
+     * reaching any output path, which presents as a powered machine with a
+     * dark screen and a silent console -- indistinguishable, from outside,
+     * from never having run at all.
+     *
+     * Emitting a byte after `__stack_top` forces this section to PROGBITS, so
+     * the whole reservation lands in the flat binary and the memory is
+     * unambiguously ours. 16 KiB is far more than first light needs; the cost
+     * is 16 KiB of image, which is the correct price for not scribbling on
+     * the firmware.
      */
-    .stack (NOLOAD) : ALIGN(16) {
+    .stack : ALIGN(16) {
         __stack_bottom = .;
-        . += 0x10000;
+        . += 0x4000;
         . = ALIGN(16);
         __stack_top = .;
-    }
+        BYTE(0)
+    } :payload
 
     /DISCARD/ : {
         *(.comment)
