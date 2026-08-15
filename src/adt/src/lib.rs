@@ -73,7 +73,9 @@ mod node;
 mod property;
 mod raw;
 
-pub use crate::boot_args::{adt_window, AdtWindow, BootArgsError};
+pub use crate::boot_args::{
+    adt_window, framebuffer, AdtWindow, BootArgsError, Framebuffer, MAX_FB_EXTENT,
+};
 pub use crate::error::AdtError;
 pub use crate::node::{ChildIter, Node, PropertyIter};
 pub use crate::property::{

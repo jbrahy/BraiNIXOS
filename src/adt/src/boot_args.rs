@@ -18,11 +18,17 @@
 //!
 //! # What this module deliberately does not do
 //!
-//! It does not read `revision`, `version`, `top_of_kernel_data`, `video`,
+//! It does not read `revision`, `version`, `top_of_kernel_data`,
 //! `machine_type`, or `cmdline` — none of them bear on deriving or validating
 //! the ADT window, and `cmdline`'s offset is disputed (spec §10, OQ-1). It
 //! also does not dereference any physical address: the caller owns turning an
 //! [`AdtWindow`] into the `&[u8]` slice the ADT decoder receives.
+//!
+//! **`video` was on that list until 2026-08-14** and is now read by
+//! [`framebuffer`], because AS-1a's serial banner may have nowhere to go on
+//! this SoC (OQ-5) and a display is an independent output path. Same
+//! discipline: fixed offsets, bounds-checked reads, fail closed, dereference
+//! nothing.
 
 use crate::raw::{read_u32_le, read_u64_le};
 
@@ -91,6 +97,34 @@ pub enum BootArgsError {
     /// inside the DRAM window `[phys_base, phys_base + mem_size)` (spec
     /// §9.1).
     AdtWindowOutsideDram,
+
+    /// `boot_args` ends before the end of the `Boot_Video` structure.
+    TruncatedVideo,
+
+    /// `video.base_addr` is zero — firmware reports no framebuffer.
+    NoFramebuffer,
+
+    /// `video.base_addr` is not 8-byte aligned. A framebuffer that is not
+    /// pixel-aligned is not one we will write to.
+    FramebufferMisaligned,
+
+    /// `video.width` or `video.height` is zero.
+    ZeroFramebufferExtent,
+
+    /// `video.width` or `video.height` exceeds [`MAX_FB_EXTENT`]. A hostile
+    /// or corrupt value here would otherwise drive an enormous write.
+    FramebufferExtentTooLarge,
+
+    /// `video.depth` is not a bit depth this project renders into.
+    UnsupportedFramebufferDepth,
+
+    /// `video.row_bytes` is smaller than one row of pixels needs, so a
+    /// row-strided write would overlap the following row.
+    RowBytesBelowWidth,
+
+    /// `row_bytes * height` overflowed, or the resulting span left the
+    /// 64-bit address range.
+    FramebufferSpanOverflow,
 }
 
 /// The ADT's validated location in physical memory.
@@ -181,5 +215,177 @@ pub fn adt_window(boot_args: &[u8]) -> Result<AdtWindow, BootArgsError> {
     Ok(AdtWindow {
         phys_addr: adt_phys,
         len: devtree_size,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Framebuffer — AS-1a2 / ROADMAP Track C row C7
+// ---------------------------------------------------------------------------
+
+/// Byte offset of `boot_args.video.base_addr`.
+///
+/// # Why these offsets are not a guess
+///
+/// `Boot_Video` is six `unsigned long` fields, and it sits between
+/// `top_of_kernel_data` (`0x20`) and `machine_type`. Six 8-byte fields from
+/// `0x28` end at `0x58`; `machine_type` is a `u32` there, and `devtree`
+/// follows at `0x60` — which is the offset this module has been using since
+/// AS-0-T4 and which is checked against real firmware. The `Video` layout is
+/// therefore pinned on both sides by a value already known good, rather than
+/// asserted on its own.
+const VIDEO_BASE_ADDR_OFFSET: usize = 0x28;
+/// Byte offset of `boot_args.video.row_bytes` — the stride, in bytes.
+const VIDEO_ROW_BYTES_OFFSET: usize = 0x38;
+/// Byte offset of `boot_args.video.width`, in pixels.
+const VIDEO_WIDTH_OFFSET: usize = 0x40;
+/// Byte offset of `boot_args.video.height`, in pixels.
+const VIDEO_HEIGHT_OFFSET: usize = 0x48;
+/// Byte offset of `boot_args.video.depth`, in bits per pixel.
+const VIDEO_DEPTH_OFFSET: usize = 0x50;
+/// Bytes of `boot_args` [`framebuffer`] reads: through the end of `depth`.
+const MIN_VIDEO_LEN: usize = VIDEO_DEPTH_OFFSET + 8;
+
+/// Largest width or height accepted, in pixels.
+///
+/// Not a hardware limit — a bound. `video` is firmware-supplied data and gets
+/// the same treatment as network bytes, so a corrupt extent must deny rather
+/// than drive a write sized by it (`INV-MEM`, `INV-PARSE-001`).
+pub const MAX_FB_EXTENT: u64 = 16384;
+
+/// Bytes per pixel this project renders. Apple reports `30` for the common
+/// 10-bit-per-channel mode and `32` for 8-bit; both occupy four bytes.
+const FB_BYTES_PER_PIXEL: u64 = 4;
+
+/// A validated framebuffer handed over by iBoot.
+///
+/// Holding one means every check in [`framebuffer`] has passed: the span
+/// `[phys_addr, phys_addr + row_bytes * height)` does not overflow, the
+/// stride covers a full row, and the extents are within [`MAX_FB_EXTENT`].
+/// It is **not** a claim that anything is mapped there — establishing that is
+/// the MMU's job, not this parser's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Framebuffer {
+    /// Physical address of pixel (0, 0).
+    pub phys_addr: u64,
+    /// Visible width in pixels.
+    pub width: u64,
+    /// Visible height in pixels.
+    pub height: u64,
+    /// Bytes between the start of one row and the next. May exceed
+    /// `width * 4`; padding at the end of a row is normal and must not be
+    /// assumed absent.
+    pub row_bytes: u64,
+    /// Bits per pixel as firmware reported it — `30` or `32`, both stored in
+    /// four bytes.
+    pub depth: u64,
+}
+
+impl Framebuffer {
+    /// Total bytes spanned, `row_bytes * height`.
+    ///
+    /// Cannot overflow: [`framebuffer`] rejects any value that would.
+    #[must_use]
+    pub fn span_bytes(&self) -> u64 {
+        self.row_bytes.saturating_mul(self.height)
+    }
+
+    /// Byte offset of pixel (`x`, `y`) from [`Self::phys_addr`], or `None` if
+    /// the pixel lies outside the visible area.
+    ///
+    /// Returning `None` rather than clamping is deliberate: a clamped write
+    /// silently corrupts the wrong pixel, and a caller that ignores the
+    /// `Option` cannot compile.
+    #[must_use]
+    pub fn pixel_offset(&self, x: u64, y: u64) -> Option<u64> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let row = y.checked_mul(self.row_bytes)?;
+        let column = x.checked_mul(FB_BYTES_PER_PIXEL)?;
+        row.checked_add(column)
+    }
+}
+
+/// Derives and validates the framebuffer iBoot describes in `boot_args`.
+///
+/// # Why this exists
+///
+/// AS-1a's banner goes to the s5l UART, and whether that UART reaches the
+/// machine's USB-C SBU pins on a `T6020` is unresolved — see **OQ-5** in
+/// `docs/platform-specs/apple-s5l-uart.md`. A framebuffer is an *independent*
+/// output path sharing none of that question's failure modes, so first light
+/// can be observed on a display even if the console never speaks.
+///
+/// It does not replace the UART path. The serial console is bidirectional and
+/// carries break-glass authority (`INV-BOOT-008`); a framebuffer is
+/// output-only, which is why it is the safer of the two to add and cannot
+/// substitute for the other.
+///
+/// # Example
+///
+/// ```
+/// use brainix_adt::{framebuffer, BootArgsError};
+///
+/// fn first_light(boot_args: &[u8]) -> Result<(), BootArgsError> {
+///     let fb = framebuffer(boot_args)?;
+///     let _ = fb.pixel_offset(0, 0);
+///     Ok(())
+/// }
+/// ```
+pub fn framebuffer(boot_args: &[u8]) -> Result<Framebuffer, BootArgsError> {
+    if boot_args.len() < MIN_VIDEO_LEN {
+        return Err(BootArgsError::TruncatedVideo);
+    }
+
+    let phys_addr =
+        read_u64_le(boot_args, VIDEO_BASE_ADDR_OFFSET).ok_or(BootArgsError::TruncatedVideo)?;
+    let row_bytes =
+        read_u64_le(boot_args, VIDEO_ROW_BYTES_OFFSET).ok_or(BootArgsError::TruncatedVideo)?;
+    let width = read_u64_le(boot_args, VIDEO_WIDTH_OFFSET).ok_or(BootArgsError::TruncatedVideo)?;
+    let height =
+        read_u64_le(boot_args, VIDEO_HEIGHT_OFFSET).ok_or(BootArgsError::TruncatedVideo)?;
+    let depth = read_u64_le(boot_args, VIDEO_DEPTH_OFFSET).ok_or(BootArgsError::TruncatedVideo)?;
+
+    if phys_addr == 0 {
+        return Err(BootArgsError::NoFramebuffer);
+    }
+    // Bitwise, not `%`, for the same reason the ADT window's alignment check
+    // is bitwise: it cannot be misread as arithmetic that might overflow.
+    if phys_addr & 0x7 != 0 {
+        return Err(BootArgsError::FramebufferMisaligned);
+    }
+    if width == 0 || height == 0 {
+        return Err(BootArgsError::ZeroFramebufferExtent);
+    }
+    if width > MAX_FB_EXTENT || height > MAX_FB_EXTENT {
+        return Err(BootArgsError::FramebufferExtentTooLarge);
+    }
+    if depth != 30 && depth != 32 {
+        return Err(BootArgsError::UnsupportedFramebufferDepth);
+    }
+
+    // A stride shorter than one row means row n's tail overlaps row n+1.
+    // Writing under that assumption corrupts the display rather than failing,
+    // which is exactly the kind of silent wrongness this project denies on.
+    let row_pixels_bytes = width
+        .checked_mul(FB_BYTES_PER_PIXEL)
+        .ok_or(BootArgsError::FramebufferSpanOverflow)?;
+    if row_bytes < row_pixels_bytes {
+        return Err(BootArgsError::RowBytesBelowWidth);
+    }
+
+    let span = row_bytes
+        .checked_mul(height)
+        .ok_or(BootArgsError::FramebufferSpanOverflow)?;
+    phys_addr
+        .checked_add(span)
+        .ok_or(BootArgsError::FramebufferSpanOverflow)?;
+
+    Ok(Framebuffer {
+        phys_addr,
+        width,
+        height,
+        row_bytes,
+        depth,
     })
 }
