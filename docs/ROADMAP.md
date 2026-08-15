@@ -406,7 +406,31 @@ discharges one of AS-5-T0's five signed preconditions on a laptop.
 
     **This is the dependency behind every "what remains needs a kernel" note in Track A.** `servd`'s `transportd` accept and its minted `CapServe`/`CapAdmin`, `modeld`'s storage read and region seal, `inferd`'s real IPC, `auditd`'s persistence, A12's deletion of `ssh_bridge.rs`, and A13's FP context switch are all waiting on one thing, and this row is that thing. Naming it separately is the point: five rows blocked on an unnamed task read as five independent stalls.
 
-    **It is host-checkable in the only sense available before the rig** — it compiles for `aarch64-unknown-none-softfloat` or it does not, and the x86-64 reference either still builds beside it or the cfg gating is wrong. Scope: `arch/aarch64/` with the AS-1b core behind it, cfg gates over the module tree, a second `.cargo` target profile, and CI building both. **S** impl / **O** review — the context-switch and syscall entry paths are TCB. Deps: AS-1b. Verify: both bare-metal builds green in CI; x86-64 boot parity against the current QEMU job, which is the frozen reference's own regression bar (#26).
+    **CORRECTION, measured 2026-08-14, same day this row was written: `cargo build -p brainix-kernel
+    --target aarch64-unknown-none-softfloat` already succeeds.** Clean rebuild, 1.6s, zero errors, a 5.1 MB
+    rlib. **This row's original verify criterion — "it compiles or it does not" — was therefore already
+    green before the port started, and it is worthless.** Recorded rather than quietly edited, because the
+    criterion was wrong in the direction that would have let the task be marked done without any aarch64
+    code existing.
+
+    Why it compiles: `src/kernel/src/lib.rs:11` declares `pub mod arch;` **ungated**, and the modules
+    inside it are largely ungated too — `arch/interrupts/halt.rs:34` contains a bare
+    `core::arch::asm!("cli")` with no `cfg` anywhere near it, and it built for aarch64 anyway. A library
+    build is not a link, and `paging/` compiles because an x86-64 PML4 walk is `u64` arithmetic that is
+    valid on any target and *meaningful* on one.
+
+    **The real criterion, replacing the compile check:** an `arch/aarch64/` backend that exists — MMU,
+    vectors, timer, context switch, syscall entry — reached through a seam that selects it, with the x86-64
+    modules gated behind `target_arch = "x86_64"` rather than compiled into an aarch64 image by accident,
+    and a **linked binary** rather than an rlib as the artifact. Two bare-metal builds green in CI remains
+    necessary and is nowhere near sufficient.
+
+    **Build-system trap, recorded because it cost a diagnostic round:** Homebrew's `cargo` and `rustc`
+    shadow rustup's on this workstation, and `rustc --print sysroot` returns
+    `/opt/homebrew/Cellar/rust/<ver>`, which has no bare-metal targets — so the port appears to fail with
+    `can't find crate for core` while `rustup target list --installed` insists the target is there.
+    `bin/as-boot.sh` already documents the fix and every aarch64 command must follow it: invoke the pinned
+    toolchain by absolute path out of `~/.rustup/toolchains/`, with `RUSTC` and `RUSTDOC` set to match. Scope: `arch/aarch64/` with the AS-1b core behind it, cfg gates over the module tree, a second `.cargo` target profile, and CI building both. **S** impl / **O** review — the context-switch and syscall entry paths are TCB. Deps: AS-1b. Verify: both bare-metal builds green in CI; x86-64 boot parity against the current QEMU job, which is the frozen reference's own regression bar (#26).
 
   **Two deviations from this document, recorded rather than left silent:**
 
@@ -663,7 +687,7 @@ this project to verify and the discipline `INV-PARSE-001` already demands.
 | C3 | **AS-3a** — DART model + **the IOMMU trait** | **DONE 2026-08-14 for the trait half.** `src/dart/` + `src/dart-verify/`: five Kani harnesses proving no holder operation widens a window, including one over a symbolic *pair* of operations. Deny-all is the `Default`. Kani found a real defect — a window whose extent overflows `u64` contains nothing, not even itself — fixed at construction rather than assumed away. **Still owed: per-instance ADT discovery, the PTE formats, register programming, and honest locked-DART semantics.** | Programming a real DART; DMA fault injection |
 | C4 | **AS-4a1** *(new slice)* — RTKit + ANS2 codecs | Mailbox message encode/decode and the ANS2 command/completion structures, as fail-closed parsers with fuzz targets | Talking to the co-processor |
 | C5 | **AS-4b1** — PCIe/NIC descriptor formats | **STARTED 2026-08-14**: `src/pcie-config/` walks the capability list with three independent termination bounds and two Kani proofs over symbolic pointers — the cyclic-list termination the tier table requires. PCI-SIG's layout, so no clean-room spec is needed. NIC descriptors remain. | Link training, TX/RX |
-| C6 | **AS-1c** — the kernel crate goes aarch64 | **UNSTARTED, and the largest unnamed item in this plan until 2026-08-14.** `arch/aarch64/` under `src/kernel`, cfg gates over the module tree, the second bare-metal target in `.cargo` and in CI, with the x86-64 reference still building beside it (#26). It compiles or it does not, and that answer is available on a laptop. | Whether any of it executes — which is AS-1's serial banner |
+| C6 | **AS-1c** — the kernel crate goes aarch64 | **UNSTARTED, and its original verify criterion was already green — see the AS-1c row above.** The crate builds for `aarch64-unknown-none-softfloat` today and contains **no aarch64 code**: `pub mod arch;` is ungated, so x86-64 modules compile into the aarch64 build, `asm!("cli")` included. What is host-checkable is therefore *not* "does it compile" but **does an `arch/aarch64/` backend exist behind a seam that selects it, and does a linked binary come out.** | Whether any of it executes — which is AS-1's serial banner |
 | C7 | **AS-1a2** *(new slice, proposed 2026-08-14 — needs owner sign-off, because it changes a written exit criterion; **re-rated upward the same day**, see OQ-5 below)* — **framebuffer first light** | The `video` field of `boot_args` — the same structure AS-0-T4 already parses and whose module doc records that it deliberately skips this field — plus a font blitter into the framebuffer iBoot hands us. Both are pure functions over bytes, so both are unit-tested and fuzzed like every other firmware-supplied structure (`INV-PARSE-001`). | Whether the framebuffer base iBoot reports is where the pixels actually are |
 
 **C3 is the highest-value row in this table and it is not obvious why.** AS-5-T0 precondition 2 — a Kani
