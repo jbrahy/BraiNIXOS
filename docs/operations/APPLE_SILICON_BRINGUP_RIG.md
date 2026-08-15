@@ -197,6 +197,28 @@ boot object, policy, and the 18:57 panic log — and its boot object reset if ne
 same breath. A boot object is the one change whose failure mode is a machine that cannot tell you what
 went wrong.
 
+### AS-1a2 changes the acceptance test — 2026-08-15
+
+**The payload no longer depends on the serial console to prove it ran.** As of `3317f78` it paints one
+horizontal stripe per boot stage into the framebuffer `boot_args.video` describes, so first light is
+visible on a display whether or not the s5l UART reaches this machine's SBU pins (**OQ-5**).
+
+| Stripes | Meaning |
+|---|---|
+| screen unchanged | the payload never ran, or never reached `paint` |
+| 1, white | executing, and `boot_args.video` parsed |
+| 2, +cyan | the ADT window derived from `boot_args` |
+| 3, +green | the ADT parsed and UART discovery ran |
+| last stripe red | that stage denied; the count says which |
+
+**Consequence: m1n1 is not required.** It was only ever a convenience for chainloading over serial. The
+BraiNIX payload can be the Image4 boot object directly, with the same `kmutil` invocation and a different
+`-c`. Staged on the machine at `/Users/Shared/brainix-boot/brainix-boot-stub-apple.bin` (8,499 bytes,
+sha256 `db630c10b9476f40...`), and on `BraiNIX - Data` under `Users/Shared/brainix-serve/`.
+
+The install still requires One True Recovery, and **its output must be captured this time** — see the
+session record above for why that one missing line cost a night.
+
 ### Running two models concurrently on 32 GB — do not
 
 The 18:57 crash happened with `llama-server` at 7.3 GB resident and `sd-server` at 11.8 GB, GPU pinned at
