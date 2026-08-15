@@ -27,11 +27,37 @@
 // nothing reads it; removing it would misalign the struct against the manual.
 #![allow(dead_code)]
 
+// AS-1c, step 1 — the seam.
+//
+// These five were declared **ungated** until 2026-08-14, which is why
+// `cargo build --target aarch64-unknown-none-softfloat` succeeded on a tree
+// containing no aarch64 code: the x86-64 modules were compiled into the aarch64
+// build. `interrupts/halt.rs` carries a bare `asm!("cli")`, so that build was
+// only ever green because a library build is not a link.
+//
+// Gating them makes the aarch64 build fail honestly. Every error it now emits
+// is a real item of AS-1c work that was previously invisible.
+//
+// On `x86_64-unknown-none` the predicate is true and the module set is
+// byte-identical to before, so the frozen reference (#26) is untouched.
+#[cfg(target_arch = "x86_64")]
 pub mod context_switch_assembly;
+#[cfg(target_arch = "x86_64")]
 pub mod hardware_registers;
+#[cfg(target_arch = "x86_64")]
 pub mod interrupts;
+#[cfg(target_arch = "x86_64")]
 pub mod paging;
+#[cfg(target_arch = "x86_64")]
 pub mod timer;
+
+/// The aarch64/Apple Silicon backend — **the only supported platform**.
+///
+/// Empty of implementations by design at this step. AS-1c is delivered as a
+/// seam first and a backend second, because until the seam exists the aarch64
+/// build cannot say what is missing.
+#[cfg(target_arch = "aarch64")]
+pub mod aarch64;
 
 #[cfg(target_arch = "x86_64")]
 pub mod syscall_entry;
