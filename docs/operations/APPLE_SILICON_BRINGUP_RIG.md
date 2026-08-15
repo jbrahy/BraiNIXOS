@@ -49,6 +49,25 @@ re-qualification compares against.
 | **Firmware at first contact** | **11881.81.4** (System Firmware = OS Loader) | `system_profiler SPHardwareDataType` |
 | Boot policy at first contact | **Full Security** (`smb0` absent), SIP enabled, Kernel CTRR enabled, boot-args filtering enabled | `bputil -d` |
 
+### THE PIN — established 2026-08-14 after the Sequoia install
+
+**This is the version every reverse-engineered fact in this tree is derived against.** Risk 3 applies from
+here: any macOS update that moves these numbers is a re-qualification event, and firmware cannot be
+downgraded.
+
+| Fact | Value |
+|---|---|
+| Stub install | **macOS 15.7.5, build 24G624** (`love: 24.7.624.0.0,0`) |
+| **System Firmware Version** | **`mBoot-18000.161.9`** |
+| **OS Loader Version** | **`11881.140.96.701.1`** |
+| Host name | `brainix-mini.local` |
+| BraiNIX volume group UUID | **`D2193B68-243F-444A-A38F-D46D224964E6`** — boots from `/dev/disk3s8s1` |
+| Production volume group UUID | `C40FFC20-DCC8-494E-B6A2-D7FAA994557E` — `Macintosh HD`, **leave alone** |
+
+**Note the format change.** Before the install, System Firmware and OS Loader reported the same value
+(`11881.81.4`). After it they are different and the firmware string carries an `mBoot-` prefix. Record
+both; a spec file stamped with only one of them is stamped ambiguously.
+
 **This machine was, and while it dual-boots still is, in production use.** It runs `llama-server` on
 `0.0.0.0:8080` serving Qwen2.5-Coder-32B Q4_K_M, a `coder_proxy.py` on 8091, plus SMB, screen sharing and
 ARD. That is why the BraiNIX install is a **second volume group** rather than a takeover of the machine:
@@ -165,7 +184,20 @@ every macOS update is a re-qualification event.
      will not permit the downgrade.
 3. Sign in as a local administrator when prompted.
 4. Open **Utilities → Terminal**.
-5. Run:
+5. **`bputil` will ask which macOS installation to act on**, because this machine has two. *(Recorded
+   2026-08-14 — the original version of this section did not mention the prompt, and picking wrong here
+   downgrades the production install instead of the stub.)* Identify the target by its **volume group
+   UUID**, never by its position in the list:
+
+   | Pick | UUID | What it is |
+   |---|---|---|
+   | BraiNIX | `D2193B68-243F-444A-A38F-D46D224964E6` | the stub — **this one** |
+   | Macintosh HD | `C40FFC20-DCC8-494E-B6A2-D7FAA994557E` | production — **not this one** |
+
+   Confirm before committing by running `bputil -d` first and checking the `vuid` line it prints back.
+   The `love` field is a second check: the stub reports `24.7.624.0.0,0` (build 24G624).
+
+6. Run:
 
    ```
    bputil -n -k -c
@@ -174,8 +206,8 @@ every macOS update is a re-qualification event.
    Read what it prints and confirm the prompts. `bputil` is interactive and states exactly what it is
    about to change; if its description does not match "downgrade this volume to Permissive Security",
    stop and re-read rather than confirming.
-6. Reboot into macOS.
-7. Verify from macOS:
+7. Reboot into macOS.
+8. Verify from macOS:
 
    ```
    bputil -d

@@ -779,7 +779,11 @@ its firmware at first contact, and the measured bandwidth baseline, is in
 - [ ] **m1n1** installed as a lab instrument, for register exploration and payload loading.
 - [x] A **macOS stub install** left on disk — paired recoveryOS and firmware volumes. Satisfied twice over:
       the production install stays, and BraiNIX's own volume group is itself a macOS install.
-- [~] The stub's **macOS version pinned and recorded**. **Owner decision 2026-08-14: bump and pin.** The
+- [x] The stub's **macOS version pinned and recorded** — **DONE 2026-08-14: macOS 15.7.5 (24G624), System
+      Firmware `mBoot-18000.161.9`, OS Loader `11881.140.96.701.1`**, on `brainix-mini.local`, volume group
+      `D2193B68-243F-444A-A38F-D46D224964E6`. From here Risk 3 is live: firmware cannot be downgraded, so
+      every macOS update is a re-qualification event.
+- [x] *(historical)* The bump decision itself. **Owner decision 2026-08-14: bump and pin.** The
       machine was found at 15.3.1 (24D70) / firmware 11881.81.4, and the oldest installer Apple still
       offers is **Sequoia 15.7.5 (24G624)**. Firmware is global to the machine and cannot be downgraded, so
       any second install moves it permanently. The bump was taken deliberately at the one moment it was
