@@ -19,10 +19,10 @@ use core::arch::global_asm;
 use core::panic::PanicInfo;
 use core::ptr;
 
-use brainix_adt::adt_window;
+use brainix_adt::{adt_window, framebuffer, Framebuffer};
 use brainix_boot_stub_apple::registers::UART_BASE_FALLBACK;
 use brainix_boot_stub_apple::uart::{Mmio, Uart};
-use brainix_boot_stub_apple::{bring_up, MmioFactory};
+use brainix_boot_stub_apple::{bring_up, progress, MmioFactory, Outcome, Surface};
 
 global_asm!(include_str!("start.S"));
 
@@ -62,6 +62,44 @@ impl MmioFactory for PhysicalMmioFactory {
     }
 }
 
+/// The panel iBoot handed us, written directly.
+///
+/// The MMU is off at entry, so the framebuffer's physical address is usable
+/// as a pointer with no mapping step -- the same property the UART path
+/// relies on.
+struct PhysicalSurface {
+    base: *mut u8,
+}
+
+impl Surface for PhysicalSurface {
+    fn put_u32(&mut self, byte_offset: u64, value: u32) {
+        // SAFETY: every offset reaching here came from
+        // `Framebuffer::pixel_offset`, which returns `None` outside the
+        // visible area, and the framebuffer's span was checked for overflow
+        // by `brainix_adt::framebuffer` before this surface was constructed.
+        unsafe {
+            ptr::write_volatile(
+                self.base.byte_add(byte_offset as usize).cast::<u32>(),
+                value,
+            )
+        }
+    }
+}
+
+/// Paints `reached` stage stripes if firmware gave us a panel.
+///
+/// Silently does nothing when there is no framebuffer. That is the correct
+/// behaviour rather than a fallback worth reporting: the UART path is
+/// unaffected, and a headless machine has nothing to show.
+fn show(panel: Option<Framebuffer>, reached: u64, denied: bool) {
+    if let Some(fb) = panel {
+        let mut surface = PhysicalSurface {
+            base: fb.phys_addr as usize as *mut u8,
+        };
+        progress(&mut surface, &fb, reached, denied);
+    }
+}
+
 /// Largest `boot_args` prefix read. Only the fixed header through
 /// `devtree_size` is consumed; `cmdline` and beyond are never touched.
 const BOOT_ARGS_PREFIX_LEN: usize = 0x100;
@@ -76,6 +114,8 @@ pub unsafe extern "C" fn boot_stub_main(boot_args: *const u8) -> ! {
     let mut factory = PhysicalMmioFactory;
 
     if boot_args.is_null() {
+        // Nothing to paint with: the panel's address lives in the structure
+        // we do not have. Serial is the only channel left.
         let mut fallback = Uart::new(factory.window_at(UART_BASE_FALLBACK));
         fallback.write_str("\r\n[!!] BraiNIX: boot_args pointer is null\r\n");
         hang();
@@ -86,14 +126,24 @@ pub unsafe extern "C" fn boot_stub_main(boot_args: *const u8) -> ! {
     // bounds-checks every field access within the slice it is given.
     let boot_args_bytes = unsafe { core::slice::from_raw_parts(boot_args, BOOT_ARGS_PREFIX_LEN) };
 
+    // Stage 1 -- we are executing, and firmware described a panel. This is the
+    // stripe that answers the question the serial console could not: whether
+    // any of our code runs at all (OQ-5).
+    let panel = framebuffer(boot_args_bytes).ok();
+    show(panel, 1, false);
+
     let window = match adt_window(boot_args_bytes) {
         Ok(window) => window,
         Err(_) => {
+            show(panel, 2, true);
             let mut fallback = Uart::new(factory.window_at(UART_BASE_FALLBACK));
             fallback.write_str("\r\n[!!] BraiNIX: boot_args did not yield an adt window\r\n");
             hang();
         }
     };
+
+    // Stage 2 -- the ADT window derived and passed every check.
+    show(panel, 2, false);
 
     // SAFETY: `adt_window` has validated that this range lies entirely inside
     // the DRAM window the firmware reported, is 4-byte aligned, and does not
@@ -102,7 +152,13 @@ pub unsafe extern "C" fn boot_stub_main(boot_args: *const u8) -> ! {
         core::slice::from_raw_parts(window.phys_addr as usize as *const u8, window.len as usize)
     };
 
-    let _outcome = bring_up(&mut factory, adt_blob);
+    let outcome = bring_up(&mut factory, adt_blob);
+
+    // Stage 3 -- the ADT parsed and UART discovery ran. Red here means
+    // discovery denied, and the serial console carries the reason if it is
+    // reaching anyone.
+    let denied = matches!(outcome, Outcome::AdtFailed(_));
+    show(panel, 3, denied);
 
     hang()
 }

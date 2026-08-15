@@ -32,9 +32,11 @@
 
 pub mod console;
 pub mod discover;
+pub mod paint;
 pub mod registers;
 pub mod uart;
 
 pub use console::{bring_up, MmioFactory, Outcome, BANNER, LIVENESS_MARKER};
 pub use discover::{uart_base_from_adt, DiscoverError, SelectedNode, UartLocation};
+pub use paint::{progress, stripe, Surface, DENIED_COLOUR, STAGE_COLOURS, STRIPE_HEIGHT};
 pub use uart::{Mmio, TransmitOutcome, Uart};
