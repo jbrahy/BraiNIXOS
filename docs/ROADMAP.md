@@ -784,7 +784,12 @@ its firmware at first contact, and the measured bandwidth baseline, is in
       sharing and ARD — so BraiNIX gets its own volume group rather than the machine. Boot policy on Apple
       Silicon is per-volume-group, so the working install keeps Full Security while BraiNIX's is
       downgraded, and deleting the volume group undoes all of it. `disk3s7` created; macOS 15.7.5 fetching.
-- [ ] BraiNIX's volume group downgraded to **Permissive Security** via `bputil` from One True Recovery.
+- [x] BraiNIX's volume group downgraded to **Permissive Security** — **DONE 2026-08-14 from One True
+      Recovery.** Policy reports `Security Mode: Permissive (smb0 && smb1): 1`, `3rd Party Kexts: Enabled`,
+      `Kernel CTRR: Disabled`, on `vuid D2193B68-243F-444A-A38F-D46D224964E6`; the production volume group
+      is untouched and still Full Security. **Boot-args filtering remains enabled** — that is `-a`, not
+      `-c`, and it is the one thing still standing between us and the macOS-side leg of OQ-5.
+- [x] *(historical)* Why it could not be done remotely.
       Requires local admin credentials and physical presence. This is also why **fully headless
       provisioning is not available** on this platform. *Blocked on the 15.7.5 install, which is itself
       blocked on a human: `startosinstall` **has no `--volume` flag** — Apple removed it, leaving no

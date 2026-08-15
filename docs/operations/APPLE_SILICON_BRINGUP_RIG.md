@@ -88,6 +88,51 @@ A14). The figure is generous to BraiNIX in two directions and should be read as 
 than a target: it is measured *with* the GPU, which AS-4c will not have, and it includes KV-cache traffic
 so it is not a weights-only bandwidth number. What it is not is a guess.
 
+### Permissive Security — ACHIEVED 2026-08-14
+
+The rig's blocking item. Done from **One True Recovery** on the mini, after two remote attempts proved it
+could not be done any other way.
+
+**What the machine printed back**, which is the record that matters:
+
+| Field | Value |
+|---|---|
+| OS Type | `one true recoveryOS` — confirms genuine 1TR rather than a paired recovery |
+| OS Pairing Status | `Paired` |
+| Authorized user | `administrator` |
+| Volume Group UUID (`vuid`) | `D2193B68-243F-444A-A38F-D46D224964E6` — the stub |
+| OS Version (`love`) | `24.7.624.0.0,0` |
+| **Security Mode** | **`Permissive` (`smb0 && smb1`): 1** |
+| 3rd Party Kexts (`smb2`) | `Enabled`: 1 |
+| **Kernel CTRR** (`sip2`) | **`Disabled`**: 1 |
+| SIP (`sip0`) | `Enabled` — absent from policy |
+| Signed System Volume (`sip1`) | `Enabled` — absent |
+| **Boot Args Filtering** (`sip3`) | **`Enabled`** — absent |
+
+The production volume group `C40FFC20-...` was not touched and remains Full Security.
+
+**Remote attempts fail, and the reason is worth keeping.** `bputil` accepts `-u`/`-p`/`-v` and will run to
+completion from a booted macOS — the Secure Enclave answers every command with 0, garbage policies are
+reaped, the nonce is reset — and then the write is refused:
+
+```
+BYErrorDomain Code=401 "Failed to create local policy"
+  com.apple.bootpolicy Code=11 "AP boot mode (11)"
+```
+
+`AP boot mode (11)` is *normal* boot mode. Creating a local policy requires *recovery* boot mode. It is
+not a credential, a permission, or a missing flag, and a correct password produces an **authenticated
+failure** that looks nothing like an auth error. Verify with `bputil -d` afterwards rather than trusting
+the exit path.
+
+#### The one thing `-n -k -c` does not give us
+
+**Boot-args filtering is still enabled** (`sip3` absent), because that is `-a`'s job, not `-c`'s. This is
+enough to boot a custom kernel via `kmutil`, which is what AS-1 needs. It is **not** enough for the
+macOS-side leg of the **OQ-5** experiment — reading legacy-UART output out of XNU needs `serial=3` and
+`serial-device=<uart0 phandle>` passed as boot-args, which needs `-a`, and per the published accounts also
+SIP disabled. Decide that when OQ-5 is actually being run; do not pre-emptively widen the downgrade.
+
 ### Serving a model from the stub volume — 2026-08-14
 
 Recorded because it modifies the stub, and an undocumented modification to the machine that holds the boot
