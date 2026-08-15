@@ -216,8 +216,26 @@ BraiNIX payload can be the Image4 boot object directly, with the same `kmutil` i
 `-c`. Staged on the machine at `/Users/Shared/brainix-boot/brainix-boot-stub-apple.bin` (8,499 bytes,
 sha256 `db630c10b9476f40...`), and on `BraiNIX - Data` under `Users/Shared/brainix-serve/`.
 
-The install still requires One True Recovery, and **its output must be captured this time** — see the
-session record above for why that one missing line cost a night.
+**Install it with `--entry-point 0`, not `2048`:**
+
+```
+kmutil configure-boot -c <payload> --raw --entry-point 0 --lowest-virtual-address 0 -v /Volumes/BraiNIX
+```
+
+**This is the difference between a payload that runs and one that does not, and it was got wrong once.**
+§4's m1n1 invocation uses `--entry-point 2048` because m1n1's raw image carries a 2048-byte header before
+its entry, and that section says outright those values are "m1n1's own layout convention, not BraiNIX's".
+The BraiNIX payload's linker script places `_start` at **offset 0** and `llvm-readobj` reports
+`Entry: 0x0`. Installed at 2048, iBoot jumps 2 KB into an 8.5 KB image, lands mid-instruction, and
+executes garbage — which presents as a powered machine with **no serial, no stripes, and no network**,
+i.e. every output path silent at once.
+
+**Read that failure signature the right way round:** two independent channels going quiet together is far
+more likely to mean nothing ran than that both broke. Check the entry point against
+`llvm-readobj --file-headers` before concluding anything about OQ-5.
+
+The install still requires One True Recovery, and **its output must be captured** — see the session
+record above for why that one missing line cost a night.
 
 ### Running two models concurrently on 32 GB — do not
 
