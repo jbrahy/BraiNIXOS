@@ -197,6 +197,31 @@ boot object, policy, and the 18:57 panic log — and its boot object reset if ne
 same breath. A boot object is the one change whose failure mode is a machine that cannot tell you what
 went wrong.
 
+### Installing the boot object — three rules paid for in recovery trips
+
+**1. `bputil -n -c`. Never `-k` on this path.** §2 documents `bputil -n -k -c`, and the `-k` is wrong
+here. It enables trust in a locally SEP-signed AuxiliaryKernelCache for third-party kexts — a macOS
+concern with no bearing on booting our own kernel — and it requires a *paired* AuxKC that this flow never
+creates. The symptom arrives later and points elsewhere: `kmutil configure-boot` runs all the way through
+`wrapping boot object payload` and then fails with
+
+```
+KMErrorDomain Code=71 "Boot policy error: Error setting 3rd party kexts tag: code pairing (17)"
+```
+
+and afterwards `bputil` itself fails with `BYErrorDomain Code=401 "Failed to create local policy"`
+wrapping the same `pairing (17)`. At that point the volume group's policy is wedged: both tools refuse,
+and the only recoveries are reinstalling macOS on it or deleting and recreating the volume group.
+
+**2. Install the boot object once, last.** Every `configure-boot` replaces that volume's kernelcache, which
+is what puts it into "this version of macOS needs to be reinstalled" and degrades the macOS/recoveryOS
+pairing the policy tools depend on. Do the security downgrade, confirm it, and only then install the boot
+object — as the final action before rebooting into it.
+
+**3. The volume group UUID changes when the volume group is recreated.** Obvious in hindsight, and a stale
+`-v` UUID produces a failure that looks like a policy fault rather than a typo. Read it fresh from
+`bputil -e` every time.
+
 ### AS-1a2 changes the acceptance test — 2026-08-15
 
 **The payload no longer depends on the serial console to prove it ran.** As of `3317f78` it paints one
