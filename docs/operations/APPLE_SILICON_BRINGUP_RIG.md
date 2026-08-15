@@ -88,6 +88,39 @@ A14). The figure is generous to BraiNIX in two directions and should be read as 
 than a target: it is measured *with* the GPU, which AS-4c will not have, and it includes KV-cache traffic
 so it is not a weights-only bandwidth number. What it is not is a guess.
 
+### Serving a model from the stub volume — 2026-08-14
+
+Recorded because it modifies the stub, and an undocumented modification to the machine that holds the boot
+policy is exactly the kind of thing that confuses a later bring-up session.
+
+The production `llama-server` is a LaunchDaemon on `Macintosh HD`, so booting the stub takes it down. It
+can be run **from the stub without rebooting**, because the production Data volume mounts at
+`/Volumes/Data`:
+
+1. `ln -sfn /Volumes/Data/opt/homebrew /opt/homebrew` — ggml `dlopen`s its Metal and CPU backends by paths
+   derived from the binary's own prefix, so `DYLD_FALLBACK_LIBRARY_PATH` is **not** sufficient; the
+   Homebrew prefix has to resolve. Symptom when it does not: `no backends are loaded`.
+2. `sysctl -w iogpu.wired_limit_mb=28672` — without it, a 19.85 GB model on a 32 GB machine fails at
+   inference time (not load time) with `kIOGPUCommandBufferCallbackErrorOutOfMemory`. The production
+   volume sets this via a `com.local.iogpu-wiredlimit` LaunchDaemon; the stub has no such daemon and
+   defaults to `0`.
+3. Run `llama-server` with the production arguments, paths rebased onto `/Volumes/Data`.
+
+**Neither change persists across a reboot**, and neither is part of the BraiNIX design — they exist so the
+machine is not dark while bring-up proceeds. Undo by deleting the symlink; the sysctl reverts by itself.
+
+### The bandwidth figure, measured twice — 2026-08-14
+
+| Run | Context | decode tok/s | Implied bandwidth |
+|---|---|---|---|
+| 1 | Production install, `Macintosh HD` | 7.785 | ~155 GB/s |
+| 2 | Stub volume, same model and flags | 7.922 | ~157 GB/s |
+
+Two independent runs on different volume groups agreeing to within 1.5% is a stronger basis for A14's
+denominator than either alone. **~155 GB/s stands as the number to divide by**, against the M2 Pro's
+200 GB/s theoretical — and it remains an *upper* reference for BraiNIX, since both runs had the GPU that
+AS-4c will not.
+
 ### The firmware pin — owner decision, 2026-08-14
 
 The second volume group needs a macOS install, and **the oldest installer Apple still offers is Sequoia
