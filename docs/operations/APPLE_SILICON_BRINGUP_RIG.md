@@ -166,6 +166,75 @@ denominator than either alone. **~155 GB/s stands as the number to divide by**, 
 200 GB/s theoretical — and it remains an *upper* reference for BraiNIX, since both runs had the GPU that
 AS-4c will not.
 
+### Session record, 2026-08-14 evening — where this was left
+
+**The BraiNIX volume group is in an unknown boot state and the machine is powered off.** Recorded in
+detail because the next session cannot re-derive it.
+
+**Sequence.** Permissive Security landed (above) and the volume booted macOS normally. Two model services
+were installed on it and both ran. At **18:57 the machine went down abruptly** while `sd-server` was
+generating and `llama-server` was resident. The owner reached 1TR and ran `kmutil configure-boot` for
+m1n1, then rebooted. Since then: **no network, no serial output, no Thunderbolt device, black screen.** A
+remote `macvdmtool reboot serial` was acknowledged (`Rebooting target into normal mode... OK`, then
+`Connected`) and produced nothing over four minutes of polling.
+
+**Known:**
+
+- `Macintosh HD` (`C40FFC20-...`) is untouched, Full Security, and boots. All data and weights are on disk.
+- Thunderbolt reporting `No device connected` on every receptacle is the tell that the mini is **off**.
+  `macvdmtool nop` succeeding does **not** contradict that — it exercises the *local* HPM, and a target's
+  USB-PD controller stays powered when the Mac is off. That is how DFU works, and it misled this session.
+
+**Not known, and it is the gap that decides the fix:** whether `kmutil configure-boot` succeeded. Its
+output was never captured. Installed-and-working, installed-and-not-running, and errored-out are three
+different states with three different remedies, and a silent black screen is consistent with all three.
+
+**Recovery, and it requires physical presence:** force off (hold power 10 s), hold power to reach the
+startup manager, select `Macintosh HD`. From there the BraiNIX volume can be mounted and inspected —
+boot object, policy, and the 18:57 panic log — and its boot object reset if needed.
+
+**Rule earned here:** never install a custom boot object without capturing the installer's output in the
+same breath. A boot object is the one change whose failure mode is a machine that cannot tell you what
+went wrong.
+
+### Running two models concurrently on 32 GB — do not
+
+The 18:57 crash happened with `llama-server` at 7.3 GB resident and `sd-server` at 11.8 GB, GPU pinned at
+98% / 18 W, against `iogpu.wired_limit_mb=28672` on a 32 GB machine. The FLUX job had been *generating*
+for over ten minutes without completing and never did.
+
+Two conclusions, stated separately because they have different confidence:
+
+- **Firm:** FLUX.1-schnell Q4_0 under `sd.cpp`'s Metal path is **not viable on this hardware at these
+  settings** — over ten minutes for a 4-step 512x512 image, unfinished. If image generation is wanted
+  here, `mflux` (MLX) is the tuned Apple Silicon path and should be measured before sd.cpp is kept.
+- **Circumstantial:** the crash is consistent with GPU/wired-memory exhaustion from both models resident
+  at once. Not proven — the panic log has not been read. Until it is, treat concurrent LLM + diffusion
+  serving on this box as unsupported rather than merely slow.
+
+### macOS serving gotchas found the hard way — 2026-08-14
+
+Four, each of which cost a diagnostic round and none of which is visible from an interactive shell:
+
+1. **launchd cannot read the other volume group.** A daemon whose binary and weights lived on
+   `/Volumes/Data` died with SIGSEGV at model-open while the identical script ran fine over SSH. Everything
+   a boot-time service needs must be on the volume that booted it.
+2. **`sd-server` recursively scans its working directory** and dies on `com.apple.TCC` under launchd. Set
+   an explicit `WorkingDirectory` in the plist.
+3. **`curl --retry-all-errors` with `-C -` is not resume-safe.** On a retry the CDN can answer `200`
+   instead of `206`, and curl then truncates and restarts. Observed taking a 6.07 GB file back to 3.09 GB
+   mid-run. Use one fresh `curl -C -` per attempt from a supervising loop instead.
+4. **The mini was asleep**, which killed two downloads at once. `pmset -a sleep 0 disksleep 0` — a machine
+   that serves models should never sleep, and it would have dropped inference requests too.
+
+### gemma-4 is a reasoning model
+
+`gemma-4-12B-it` fills `reasoning_content` before `content`. At `max_tokens: 500` on a trivial prompt it
+spent the entire budget thinking and returned **empty content** with `finish_reason: length` — which reads
+as a broken server. Either budget 600+ tokens or pass
+`"chat_template_kwargs": {"enable_thinking": false}`, which answered the same class of question in 13
+tokens. Measured throughput: **18.7 tok/s**.
+
 ### The firmware pin — owner decision, 2026-08-14
 
 The second volume group needs a macOS install, and **the oldest installer Apple still offers is Sequoia
