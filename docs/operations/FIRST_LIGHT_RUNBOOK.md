@@ -334,6 +334,57 @@ Things not yet eliminated, in the order worth trying, all physical:
 m1n1 stays resident, and memory can be read back after the fact. That path is
 already proven to work, needs nobody in the room, and does not depend on SBU.
 
+## 9b. Verify the payload through the proxy, not the console
+
+**This is the technique that worked, and it needs no serial path at all.**
+
+Chainloading destroys m1n1, so a payload that ends in a hang leaves nothing on
+the machine able to say what happened. Instead, give the payload a second entry
+point that reports into memory and **returns**, and call it with m1n1 resident:
+
+```python
+image = open(BIN, "rb").read()
+code = u.malloc(len(image) + 0x1000)
+out  = u.malloc(64)
+iface.writemem(code, image)
+p.dc_cvau(code, len(image))     # the I-cache has not seen this yet
+p.ic_ivau(code, len(image))
+ret = p.call(code + PROBE_OFF, p.get_bootargs(), out)
+vals = [p.read64(out + 8 * i) for i in range(6)]
+```
+
+`PROBE_OFF` comes from the ELF, not from guesswork:
+
+```sh
+llvm-nm target/.../brainix-boot-stub-apple | awk '/ T boot_stub_probe$/ {print $1}'
+```
+
+Two things that will bite:
+
+1. **The cache maintenance is not optional.** Bytes written as data are not
+   visible to the instruction fetcher until `dc_cvau` + `ic_ivau`.
+2. **`#[no_mangle]` does not survive LTO** in a binary crate when nothing calls
+   the function. It is dead-stripped and vanishes from the symbol table. Anchor
+   it with a `#[used]` static holding its address.
+
+The probe must **touch no MMIO**. It is running on the machine that is hosting
+the measurement, and driving a UART there disturbs the host. Verify decisions
+here; verify registers separately by writing them from the proxy.
+
+Result on 2026-08-16, which is what closed AS-1a's substance:
+
+```
+returned 0x427261694e495801 -> OUR CODE RAN
+  stage         0x3             all three stages reached
+  adt_phys      0x1000361c000   the real ADT
+  adt_len       0x78000
+  console_kind  0x1             DockChannel
+  console_base  0x29e528000     the address m1n1 independently printed
+```
+
+The first run of this loop returned `stage 0x1` and found a real bug in
+`adt_window` within minutes. See `src/adt/tests/fixtures/README.md`.
+
 ## 10. Driving the machine when you are not next to it
 
 Recovery work needs a keyboard on the target and eyes on its screen. Both can be
