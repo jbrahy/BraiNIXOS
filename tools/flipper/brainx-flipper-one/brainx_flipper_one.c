@@ -38,7 +38,7 @@
 #include <furi_hal_usb_hid.h>
 #include <gui/gui.h>
 #include <input/input.h>
-#include <extra_profiles/hid_profile.h>
+#include <bt/bt_service/bt.h>
 #include <profiles/serial_profile.h>
 
 #define TAG "BraiNIXOne"
@@ -56,6 +56,7 @@
 typedef struct {
     FuriMutex* mutex;
     FuriStreamBuffer* rx;
+    Bt* bt;
     FuriHalBleProfileBase* profile;
 
     bool armed;
@@ -125,34 +126,23 @@ static uint16_t serial_rx_callback(SerialServiceEvent event, void* context) {
     BraiNIXOne* app = context;
 
     if(event.event == SerialServiceEventTypeDataReceived) {
-        size_t written =
-            furi_stream_buffer_send(app->rx, event.data.buffer, event.data.size, 0);
-
-        furi_check(furi_mutex_acquire(app->mutex, FuriWaitForever) == FuriStatusOk);
-        app->bytes_received += written;
-        /* Short write means the buffer is full. Report it rather than silently
-         * truncating a command -- a half-typed `kmutil` line is worse than none. */
+        /* This runs on the BLE stack's own thread. The first version of this
+         * function took the UI mutex and called view_port_update() from here,
+         * which crashed the firmware on the first launch. Nothing but the
+         * stream buffer -- which is explicitly thread-safe -- happens here now;
+         * counters and repaints belong to the main loop. */
+        size_t written = furi_stream_buffer_send(app->rx, event.data.buffer, event.data.size, 0);
         if(written < event.data.size) app->overflowed = true;
-        furi_mutex_release(app->mutex);
-
-        view_port_update(app->viewport);
+        app->bytes_received += written;
     }
 
     return furi_stream_buffer_spaces_available(app->rx);
 }
 
-static bool gap_event_callback(GapEvent event, void* context) {
+static void bt_status_callback(BtStatus status, void* context) {
     BraiNIXOne* app = context;
-    bool connected = (event.type == GapEventTypeConnected);
-    bool disconnected = (event.type == GapEventTypeDisconnected);
-
-    if(connected || disconnected) {
-        furi_check(furi_mutex_acquire(app->mutex, FuriWaitForever) == FuriStatusOk);
-        app->ble_connected = connected;
-        furi_mutex_release(app->mutex);
-        view_port_update(app->viewport);
-    }
-    return true;
+    /* Also a service-thread callback: record and let the main loop repaint. */
+    app->ble_connected = (status == BtStatusConnected);
 }
 
 /* ----------------------------------------------------------------- typing -- */
@@ -207,13 +197,23 @@ int32_t brainx_flipper_one_app(void* p) {
     furi_hal_usb_unlock();
     furi_check(furi_hal_usb_set_config(&usb_hid, NULL));
 
-    /* Then BLE. Switching the profile disconnects the phone app if it was
-     * attached; that is expected and is why this app owns the radio while it
-     * runs and restores nothing but its own state on exit. */
-    app->profile = furi_hal_bt_start_app(ble_profile_serial, NULL, NULL, gap_event_callback, app);
+    /* Then BLE, through the Bt SERVICE -- not furi_hal_bt directly.
+     *
+     * The first version called furi_hal_bt_start_app() while the bt service
+     * still owned the radio, and the firmware crashed and rebooted on launch.
+     * The service arbitrates the second core; an app that goes around it is
+     * racing the owner of the hardware. bt_profile_restore_default() on exit
+     * hands the radio back so the phone app works again afterwards. */
+    app->bt = furi_record_open(RECORD_BT);
+    bt_set_status_changed_callback(app->bt, bt_status_callback, app);
+    bt_disconnect(app->bt);
+    furi_delay_ms(200); /* the disconnect restarts core2; do not race it */
+
+    app->profile = bt_profile_start(app->bt, ble_profile_serial, NULL);
     if(app->profile) {
         ble_profile_serial_set_event_callback(
             app->profile, RX_BUFFER_SIZE, serial_rx_callback, app);
+        furi_hal_bt_start_advertising();
     } else {
         FURI_LOG_E(TAG, "BLE serial profile failed to start");
     }
@@ -226,7 +226,10 @@ int32_t brainx_flipper_one_app(void* p) {
     while(app->running) {
         uint8_t byte;
         size_t got = furi_stream_buffer_receive(app->rx, &byte, 1, 100);
-        if(got == 0) continue;
+        if(got == 0) {
+            view_port_update(app->viewport); /* status/counters, from the UI thread */
+            continue;
+        }
 
         if(byte == '\n' || byte == '\r') {
             if(fill > 0) {
@@ -249,7 +252,9 @@ int32_t brainx_flipper_one_app(void* p) {
         }
     }
 
-    furi_hal_bt_stop_advertising();
+    bt_set_status_changed_callback(app->bt, NULL, NULL);
+    bt_profile_restore_default(app->bt);
+    furi_record_close(RECORD_BT);
     furi_hal_usb_set_config(usb_previous, NULL);
 
     gui_remove_view_port(app->gui, app->viewport);
