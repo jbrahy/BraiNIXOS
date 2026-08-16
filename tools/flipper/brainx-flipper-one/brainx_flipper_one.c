@@ -154,6 +154,31 @@ static void reply(BraiNIXOne* app, const char* text) {
     ble_profile_serial_tx(app->profile, (uint8_t*)text, (uint16_t)strlen(text));
 }
 
+static uint16_t ble_rx_callback(SerialServiceEvent event, void* context);
+
+/* Take the serial stream away from the firmware's RPC session.
+ *
+ * This must be called AFTER each connection is established, not once at
+ * startup. `applications/services/bt/bt_service/bt.c`, in
+ * bt_on_gap_event_callback under GapEventTypeConnected, does:
+ *
+ *     ble_profile_serial_set_event_callback(
+ *         bt->current_profile, RPC_BUFFER_SIZE, bt_serial_event_callback, bt);
+ *     ble_profile_serial_set_rpc_active(
+ *         bt->current_profile, FuriHalBtSerialRpcStatusActive);
+ *
+ * so the service unconditionally overwrites whatever the app registered and
+ * feeds every byte to rpc_session_feed instead. An app that registers only at
+ * startup sees rx = 0 forever, while the peer's writes succeed and read back
+ * correctly from the RX characteristic -- there is no error anywhere. */
+static void claim_serial_stream(BraiNIXOne* app) {
+    if(!app->profile) return;
+    ble_profile_serial_set_rpc_active(app->profile, false);
+    /* The size argument is the initial flow-control credit, not a hint. */
+    ble_profile_serial_set_event_callback(app->profile, LINE_MAX, ble_rx_callback, app);
+    FURI_LOG_I(TAG, "serial stream claimed from RPC");
+}
+
 /* Returns the number of further bytes this app will accept. NEVER zero -- see
  * the header comment; zero silently wedges the link. */
 static uint16_t ble_rx_callback(SerialServiceEvent event, void* context) {
@@ -345,11 +370,7 @@ int32_t brainx_flipper_one_app(void* p) {
     app->profile = bt_profile_start(app->bt, ble_profile_serial, NULL);
     app->profile_started = (app->profile != NULL);
     if(app->profile) {
-        /* Take the serial stream away from the RPC layer, which otherwise
-         * consumes it, and register for the raw bytes. The buffer size here is
-         * the initial flow-control credit. */
-        ble_profile_serial_set_rpc_active(app->profile, false);
-        ble_profile_serial_set_event_callback(app->profile, LINE_MAX, ble_rx_callback, app);
+        claim_serial_stream(app); /* covers starting while already connected */
         /* Explicit, because "I don't see it in the Bluetooth list" was a real
          * failure mode and this call is idempotent. */
         furi_hal_bt_start_advertising();
@@ -358,7 +379,18 @@ int32_t brainx_flipper_one_app(void* p) {
     }
 
     BraixLine line;
+    bool was_connected = false;
     while(app->running) {
+        /* Re-claim the stream on every connect. See claim_serial_stream: the
+         * bt service takes it back at GapEventTypeConnected, so claiming once
+         * at startup is always too early and leaves rx at 0 forever. Doing it
+         * here rather than in the status callback keeps this off the bt
+         * service thread, and the ~100 ms latency is invisible next to the
+         * peer's service discovery. */
+        bool connected = app->ble_connected;
+        if(connected && !was_connected) claim_serial_stream(app);
+        was_connected = connected;
+
         if(furi_message_queue_get(app->queue, &line, 100) == FuriStatusOk) {
             handle_line(app, line.text);
         }
