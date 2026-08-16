@@ -6,11 +6,12 @@ App(
     stack_size=4 * 1024,
     fap_category="Tools",
     fap_description=(
-        "Types commands into a target over USB HID, driven over BLE from a "
-        "workstation. Built for Apple Silicon recovery-mode bring-up, where "
-        "there is no shell history, no paste, and no way to read anything back."
+        "Types commands into a target over USB HID, driven over BLE serial "
+        "from a workstation. Built for Apple Silicon recovery-mode bring-up, "
+        "where there is no shell history, no paste, and no way to read "
+        "anything back."
     ),
     fap_author="BraiNIX",
-    fap_version="1.0",
-    requires=["gui"],
+    fap_version="2.0",
+    requires=["gui", "bt"],
 )
