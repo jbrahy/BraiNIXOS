@@ -137,3 +137,106 @@ pub fn describe(error: DiscoverError) -> &'static str {
         DiscoverError::TranslationUnavailable => "/arm-io has no ranges: reg cannot be translated",
     }
 }
+
+// ---------------------------------------------------------------------------
+// DockChannel bring-up. The path that can actually produce bytes on `T6020`.
+// ---------------------------------------------------------------------------
+
+use crate::discover::{console_from_adt, ConsoleChoice};
+use crate::dockchannel::DockChannel;
+use crate::registers::DOCKCHANNEL_BASE_OBSERVED;
+
+/// How DockChannel-first bring-up ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsoleOutcome {
+    /// DockChannel resolved from the ADT and the banner went to it.
+    DockChannel {
+        /// Translated base actually driven.
+        base: u64,
+        /// Whether it matched [`DOCKCHANNEL_BASE_OBSERVED`].
+        ///
+        /// Disagreement is **not** an error — the ADT is authoritative — but it
+        /// means the machine is not the one that constant was measured on, and
+        /// saying so is what stops the constant being mistaken for a fact.
+        matched_observed: bool,
+    },
+    /// No DockChannel node; the s5l UART was used and the reason was reported.
+    S5lFallback {
+        /// Translated s5l base.
+        base: u64,
+        /// Which §8.6 branch produced it.
+        selected: SelectedNode,
+        /// Why DockChannel was refused.
+        dockchannel_error: DiscoverError,
+    },
+    /// Neither console resolved. Reported on the observed-base console.
+    Denied(DiscoverError),
+}
+
+/// Bring up the console, preferring DockChannel, and emit the banner.
+///
+/// # Why the liveness base changed
+///
+/// [`bring_up`] emits its liveness marker on [`UART_BASE_FALLBACK`], which is a
+/// `T6030` measurement honestly labelled unconfirmed for this target. On the
+/// deployment machine that address is both the wrong SoC *and* the wrong
+/// peripheral, so the marker had no chance of appearing.
+///
+/// This emits on [`DOCKCHANNEL_BASE_OBSERVED`] instead: the address printed by
+/// code running on this exact machine. The ADT is still authoritative and is
+/// still consulted immediately afterwards — the constant exists only so that a
+/// failed ADT resolution has somewhere to say so.
+pub fn bring_up_console<F: MmioFactory>(factory: &mut F, adt_blob: &[u8]) -> ConsoleOutcome {
+    // Step 1 — liveness, before anything that can deny.
+    let mut early = DockChannel::new(factory.window_at(DOCKCHANNEL_BASE_OBSERVED));
+    early.write_line("[..] BraiNIX: alive");
+
+    match console_from_adt(adt_blob) {
+        Ok(ConsoleChoice::DockChannel { base }) => {
+            let mut console = DockChannel::new(factory.window_at(base));
+            console.write_line("[OK] BraiNIX: first light");
+            console.write_bytes(b"     console: dockchannel @ ");
+            console.write_hex64(base);
+            console.write_line("");
+
+            let matched_observed = base == DOCKCHANNEL_BASE_OBSERVED;
+            if !matched_observed {
+                console.write_bytes(b"     note: observed constant differs: ");
+                console.write_hex64(DOCKCHANNEL_BASE_OBSERVED);
+                console.write_line("");
+                console.write_line("     the adt value above is authoritative");
+            }
+            ConsoleOutcome::DockChannel {
+                base,
+                matched_observed,
+            }
+        }
+        Ok(ConsoleChoice::S5lUart {
+            location,
+            dockchannel_error,
+        }) => {
+            // A different peripheral, so a different driver. Reported rather
+            // than silently substituted: on a machine whose console really is
+            // DockChannel this branch produces no visible output at all, and
+            // the reason needs to be recoverable afterwards.
+            let mut console = Uart::new(factory.window_at(location.base));
+            console.write_str(BANNER);
+            console.write_str("     console: s5l uart @ ");
+            console.write_hex_u64(location.base);
+            console.write_str("\r\n     dockchannel refused: ");
+            console.write_str(describe(dockchannel_error));
+            console.write_str("\r\n");
+            ConsoleOutcome::S5lFallback {
+                base: location.base,
+                selected: location.selected,
+                dockchannel_error,
+            }
+        }
+        Err(error) => {
+            early.write_bytes(b"[!!] BraiNIX: console discovery denied: ");
+            early.write_bytes(describe(error).as_bytes());
+            early.write_line("");
+            ConsoleOutcome::Denied(error)
+        }
+    }
+}

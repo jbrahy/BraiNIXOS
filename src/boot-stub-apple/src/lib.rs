@@ -37,7 +37,9 @@ pub mod paint;
 pub mod registers;
 pub mod uart;
 
-pub use console::{bring_up, MmioFactory, Outcome, BANNER, LIVENESS_MARKER};
+pub use console::{
+    bring_up, bring_up_console, ConsoleOutcome, MmioFactory, Outcome, BANNER, LIVENESS_MARKER,
+};
 pub use discover::{
     console_from_adt, dockchannel_base_from_adt, uart_base_from_adt, ConsoleChoice, DiscoverError,
     SelectedNode, UartLocation,
