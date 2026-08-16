@@ -159,3 +159,117 @@ pub fn uart_base_from_adt(adt_blob: &[u8]) -> Result<UartLocation, DiscoverError
         selected,
     })
 }
+
+// ---------------------------------------------------------------------------
+// Console selection: DockChannel first, s5l UART second.
+// ---------------------------------------------------------------------------
+
+use crate::registers::{DOCKCHANNEL_ADT_COMPATIBLE, DOCKCHANNEL_ADT_PATH};
+
+/// Which console the ADT yielded, and — when it is not the preferred one — why.
+///
+/// The two variants are not interchangeable: they address different
+/// peripherals, and picking the wrong one produces silence rather than an
+/// error. Encoding the rejection reason *inside* the fallback variant makes a
+/// silent downgrade impossible to construct; a caller cannot obtain the s5l
+/// UART without also holding the reason DockChannel was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsoleChoice {
+    /// `/arm-io/dockchannel-uart`, translated. The console on `T6020`.
+    DockChannel {
+        /// Translated physical base of the DockChannel register block.
+        base: u64,
+    },
+    /// The s5l UART, because DockChannel did not resolve.
+    S5lUart {
+        /// What the §8.6 algorithm produced.
+        location: UartLocation,
+        /// Why DockChannel was rejected. Always reportable.
+        dockchannel_error: DiscoverError,
+    },
+}
+
+impl ConsoleChoice {
+    /// The translated MMIO base to drive, whichever console was chosen.
+    pub fn base(&self) -> u64 {
+        match self {
+            Self::DockChannel { base } => *base,
+            Self::S5lUart { location, .. } => location.base,
+        }
+    }
+}
+
+/// Resolve the debug console, preferring DockChannel.
+///
+/// # Order, and why it is this way round
+///
+/// On `T6020` the debug-serial mux presents **DockChannel** to the Type-C SBU
+/// pins. `/arm-io/uart0` is nonetheless present in that machine's tree *and*
+/// carries the `boot-console` property, so an algorithm that consults only §8.6
+/// selects a real, correctly-described UART, translates its `reg` correctly,
+/// writes to it correctly, and produces **no bytes at the host**. Every step
+/// looks right and the result is indistinguishable from the payload never
+/// running. That is not hypothetical: it is what this crate did until
+/// 2026-08-16, and it is recorded as OQ-5 in
+/// `docs/platform-specs/apple-s5l-uart.md`.
+///
+/// So DockChannel is tried first and the s5l UART is the fallback, rather than
+/// the other way around. On a machine with no DockChannel node the fallback is
+/// taken and reports why.
+pub fn console_from_adt(adt_blob: &[u8]) -> Result<ConsoleChoice, DiscoverError> {
+    match dockchannel_base_from_adt(adt_blob) {
+        Ok(base) => Ok(ConsoleChoice::DockChannel { base }),
+        Err(dockchannel_error) => {
+            let location = uart_base_from_adt(adt_blob)?;
+            Ok(ConsoleChoice::S5lUart {
+                location,
+                dockchannel_error,
+            })
+        }
+    }
+}
+
+/// Resolve `/arm-io/dockchannel-uart`'s translated base, or say why not.
+///
+/// Applies the same three guards as the s5l path, for the same reasons: the
+/// node must claim to be what we think it is, translation must be *possible*
+/// before its result is trusted, and the address is never used untranslated.
+pub fn dockchannel_base_from_adt(adt_blob: &[u8]) -> Result<u64, DiscoverError> {
+    let tree = DeviceTree::parse(adt_blob).map_err(DiscoverError::AdtParse)?;
+
+    let node_path = match tree.resolve(DOCKCHANNEL_ADT_PATH) {
+        Ok(resolved) => resolved,
+        Err(AdtError::NodeNotFound) => return Err(DiscoverError::NoUartNode),
+        Err(error) => return Err(DiscoverError::AdtParse(error)),
+    };
+
+    let compatible = node_path
+        .node()
+        .find_property(b"compatible")
+        .map_err(DiscoverError::AdtParse)?
+        .ok_or(DiscoverError::CompatibleMissing)?;
+    if !compatible.has_string(DOCKCHANNEL_ADT_COMPATIBLE) {
+        return Err(DiscoverError::CompatibleMismatch);
+    }
+
+    // As on the s5l path: a successful `translated_reg` is not by itself
+    // evidence that translation happened, because a missing `ranges` terminates
+    // translation and returns the raw address. For an `/arm-io` child that
+    // address points nowhere.
+    let parent = node_path
+        .parent()
+        .ok_or(DiscoverError::TranslationUnavailable)?;
+    if parent
+        .find_property(b"ranges")
+        .map_err(DiscoverError::AdtParse)?
+        .is_none()
+    {
+        return Err(DiscoverError::TranslationUnavailable);
+    }
+
+    let range = node_path
+        .translated_reg(0)
+        .map_err(DiscoverError::RegUntranslatable)?;
+
+    Ok(range.address)
+}

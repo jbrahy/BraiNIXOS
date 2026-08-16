@@ -38,7 +38,10 @@ pub mod registers;
 pub mod uart;
 
 pub use console::{bring_up, MmioFactory, Outcome, BANNER, LIVENESS_MARKER};
-pub use discover::{uart_base_from_adt, DiscoverError, SelectedNode, UartLocation};
+pub use discover::{
+    console_from_adt, dockchannel_base_from_adt, uart_base_from_adt, ConsoleChoice, DiscoverError,
+    SelectedNode, UartLocation,
+};
 pub use dockchannel::{DockChannel, DockChannelOutcome};
 pub use paint::{progress, stripe, Surface, DENIED_COLOUR, STAGE_COLOURS, STRIPE_HEIGHT};
 pub use uart::{Mmio, TransmitOutcome, Uart};
