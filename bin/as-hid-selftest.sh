@@ -68,11 +68,32 @@ if ! "${HERE}/brainx-ble.py" send status 2>&1 | grep -q 'usb=linked'; then
   exit 1
 fi
 
-# Bring Terminal forward. Best effort: over ssh this reaches the console
-# session only when the ssh user is the logged-in user, so its failure is not
-# fatal -- the operator was told to focus a Terminal anyway.
+# Bring Terminal forward, then CONFIRM it is frontmost before typing anything.
+#
+# Without the confirmation this fires a shell command into whichever window
+# happens to have focus on someone's working desktop. `open -a` reaches the
+# console session only when the ssh user is the logged-in user, and it returns
+# success either way, so its exit status proves nothing.
 ssh -o ConnectTimeout=8 "$MINI_HOST" "open -a Terminal" 2>/dev/null || true
 sleep 2
+
+FRONT="$(ssh -o ConnectTimeout=8 "$MINI_HOST" \
+  "osascript -e 'tell application \"System Events\" to get name of first application process whose frontmost is true'" 2>/dev/null)"
+
+case "$FRONT" in
+  Terminal|iTerm2|Alacritty|kitty|WezTerm)
+    printf 'frontmost application: %s\n' "$FRONT" ;;
+  "")
+    printf 'FAILED: cannot read which application is frontmost.\n'
+    printf 'osascript needs Accessibility permission for the ssh session, and\n'
+    printf 'without it this test would type into an unknown window. Focus a\n'
+    printf 'Terminal on the mini by hand and re-run with --force to skip this check.\n'
+    [ "${2:-}" = "--force" ] || [ "${1:-}" = "--force" ] || exit 1 ;;
+  *)
+    printf 'FAILED: frontmost application is "%s", not a terminal.\n' "$FRONT"
+    printf 'Refusing to type a shell command into it.\n'
+    exit 1 ;;
+esac
 
 # --- type it --------------------------------------------------------------
 "${HERE}/brainx-ble.py" send "type printf '%s' '${EXPECT}' > ${REMOTE_FILE}" || {
