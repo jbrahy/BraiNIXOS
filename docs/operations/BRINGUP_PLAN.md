@@ -35,8 +35,11 @@ Recorded because the same mistakes are cheap to repeat.
 | 4 | **Unverified steps stacked.** Three boot objects installed without once running `bputil -d` in between. | The wedged policy was invisible until both tools refused. |
 | 5 | **Diagnosis from absence of evidence.** Two silent output channels were read as *two broken channels* rather than *nothing ran*. | Chased OQ-5 and the entry point while the stack bug sat in the linker script. |
 | 6 | **A stack in a `NOLOAD` section.** `objcopy -O binary` does not emit it, so the image ended at `0x2133` while `__stack_top` was `0x12140`. | The genuine fault. Died before any output path. |
+| 7 | **`kmutil configure-boot` prompts for credentials and has no `-u`/`-p`.** An empty answer fails as `Code=71 not a valid admin user`, which reads as a policy fault. | Two runs lost. Fixed by answering `y`, then `jbrahy`, then the password. |
+| 8 | **Diagnosis from absence of evidence, again.** A macOS login window that kept its dots after Return was read as *Return is not submitting*, rather than *the password is wrong*. macOS does not clear the field. | Four rejected attempts and a one-minute account lock, on a machine ten minutes away. |
 
-Five of those six are process failures. One is a real bug. That ratio is the point.
+Six of those eight are process failures. Two are real bugs. That ratio is the point, and item 8
+is item 5 committed a second time on the same day.
 
 ## 3. What is known-good and must not be re-litigated
 
@@ -65,7 +68,13 @@ code, and **chainloading — which replaces a ten-minute recovery trip with a on
 
 1. Obtain m1n1. The release asset `m1n1-stage2-v*.zip` contains `m1n1.bin`. Prefer building from source
    if its documentation says the release artifact is not the boot object.
+   **Done 2026-08-16**: v1.6.1, 1,097,728 bytes, sha256
+   `05137464cdacb23d8aed9be1d0ddd4fda757fb57d2b1a769ff3d88409afaafa0`, verified on the workstation and
+   again on the mini, staged at `/Users/Shared/brainix-boot/m1n1.bin`.
 2. Install it **with `--entry-point 2048`** — its convention, not ours, and the value we got wrong.
+   Confirmed from two independent sources rather than memory: m1n1's own `README.md`, and
+   `asahi-installer/src/step2/step2.sh` line 125. Our stub genuinely is entry `0`; the two values must
+   never be copied from one another. Script: [`bin/as-install-m1n1.sh`](../../bin/as-install-m1n1.sh).
 3. **Acceptance test: m1n1's own console prints.** Over `/dev/cu.debug-console` after `macvdmtool serial`,
    or over m1n1's USB gadget if the UART is silent — m1n1 handles the DockChannel-versus-UART question
    itself, which is exactly why it answers OQ-5 for us rather than us answering it for it.
