@@ -104,7 +104,11 @@ if [ -x "${HERE}/brainx-ble.py" ]; then
   if BLE="$(timeout 60 "${HERE}/brainx-ble.py" send status 2>&1 | grep -E '^\s+ble=')"; then
     row "flipper ble" "UP" "$(printf '%s' "$BLE" | tr -s ' ' | sed 's/^ //')"
   else
-    row "flipper ble" "DOWN" "no reply: app not running, or out of range"
+    # Deliberately not "app not running". The app can be running, showing
+    # "BLE waiting", and still be undiscoverable -- that was a real bug, and
+    # this line previously asserted the opposite of the truth. The two states
+    # are indistinguishable from here; only the Flipper's screen separates them.
+    row "flipper ble" "DOWN" "no reply: not advertising, out of range, or app stopped"
   fi
 else
   row "flipper ble" "ABSENT" "brainx-ble.py not found"
@@ -112,11 +116,11 @@ fi
 
 # --- flipper over usb cli -------------------------------------------------
 # Mutually exclusive with the Flipper acting as a keyboard: the app takes USB
-# for HID, so this port disappearing is a sign the app is running, not a fault.
+# for HID, so an absent port means the app IS running, not that it is not.
 if ls /dev/cu.usbmodemflip_* >/dev/null 2>&1; then
-  row "flipper usb cli" "UP" "$(ls /dev/cu.usbmodemflip_* | head -1) -- app is NOT running"
+  row "flipper usb cli" "UP" "$(ls /dev/cu.usbmodemflip_* | head -1) -- the app is NOT running"
 else
-  row "flipper usb cli" "DOWN" "no port; expected while the app holds USB as HID"
+  row "flipper usb cli" "DOWN" "no port -- consistent with the app running and holding USB"
 fi
 
 # --- camera ---------------------------------------------------------------

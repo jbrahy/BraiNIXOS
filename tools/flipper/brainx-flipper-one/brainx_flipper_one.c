@@ -380,6 +380,7 @@ int32_t brainx_flipper_one_app(void* p) {
 
     BraixLine line;
     bool was_connected = false;
+    uint32_t idle_ticks = 0;
     while(app->running) {
         /* Re-claim the stream on every connect. See claim_serial_stream: the
          * bt service takes it back at GapEventTypeConnected, so claiming once
@@ -389,6 +390,28 @@ int32_t brainx_flipper_one_app(void* p) {
          * peer's service discovery. */
         bool connected = app->ble_connected;
         if(connected && !was_connected) claim_serial_stream(app);
+
+        /* Resume advertising after the peer goes away.
+         *
+         * Nothing else does this. Once the workstation disconnected, the
+         * Flipper stopped appearing in scans entirely and could only be
+         * recovered by exiting and restarting the app -- which means walking
+         * to it, which is exactly what this app exists to avoid. The screen
+         * said "BLE waiting" the whole time, because the app genuinely was
+         * waiting; it simply was not advertising, and those look identical
+         * from the device and from the workstation alike.
+         *
+         * Re-nudged every ~10 s while disconnected as well as on the falling
+         * edge, because a missed edge would otherwise strand the device until
+         * someone noticed. */
+        if(!connected) {
+            if(was_connected || ++idle_ticks >= 100) {
+                furi_hal_bt_start_advertising();
+                idle_ticks = 0;
+            }
+        } else {
+            idle_ticks = 0;
+        }
         was_connected = connected;
 
         if(furi_message_queue_get(app->queue, &line, 100) == FuriStatusOk) {
