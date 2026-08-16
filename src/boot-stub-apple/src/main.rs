@@ -20,9 +20,10 @@ use core::panic::PanicInfo;
 use core::ptr;
 
 use brainix_adt::{adt_window, framebuffer, Framebuffer};
-use brainix_boot_stub_apple::registers::UART_BASE_FALLBACK;
-use brainix_boot_stub_apple::uart::{Mmio, Uart};
-use brainix_boot_stub_apple::{bring_up, progress, MmioFactory, Outcome, Surface};
+use brainix_boot_stub_apple::dockchannel::DockChannel;
+use brainix_boot_stub_apple::registers::DOCKCHANNEL_BASE_OBSERVED;
+use brainix_boot_stub_apple::uart::Mmio;
+use brainix_boot_stub_apple::{bring_up_console, progress, ConsoleOutcome, MmioFactory, Surface};
 
 global_asm!(include_str!("start.S"));
 
@@ -116,8 +117,8 @@ pub unsafe extern "C" fn boot_stub_main(boot_args: *const u8) -> ! {
     if boot_args.is_null() {
         // Nothing to paint with: the panel's address lives in the structure
         // we do not have. Serial is the only channel left.
-        let mut fallback = Uart::new(factory.window_at(UART_BASE_FALLBACK));
-        fallback.write_str("\r\n[!!] BraiNIX: boot_args pointer is null\r\n");
+        let mut emergency = DockChannel::new(factory.window_at(DOCKCHANNEL_BASE_OBSERVED));
+        emergency.write_line("[!!] BraiNIX: boot_args pointer is null");
         hang();
     }
 
@@ -136,8 +137,8 @@ pub unsafe extern "C" fn boot_stub_main(boot_args: *const u8) -> ! {
         Ok(window) => window,
         Err(_) => {
             show(panel, 2, true);
-            let mut fallback = Uart::new(factory.window_at(UART_BASE_FALLBACK));
-            fallback.write_str("\r\n[!!] BraiNIX: boot_args did not yield an adt window\r\n");
+            let mut emergency = DockChannel::new(factory.window_at(DOCKCHANNEL_BASE_OBSERVED));
+            emergency.write_line("[!!] BraiNIX: boot_args did not yield an adt window");
             hang();
         }
     };
@@ -152,12 +153,12 @@ pub unsafe extern "C" fn boot_stub_main(boot_args: *const u8) -> ! {
         core::slice::from_raw_parts(window.phys_addr as usize as *const u8, window.len as usize)
     };
 
-    let outcome = bring_up(&mut factory, adt_blob);
+    let outcome = bring_up_console(&mut factory, adt_blob);
 
     // Stage 3 -- the ADT parsed and UART discovery ran. Red here means
     // discovery denied, and the serial console carries the reason if it is
     // reaching anyone.
-    let denied = matches!(outcome, Outcome::AdtFailed(_));
+    let denied = matches!(outcome, ConsoleOutcome::Denied(_));
     show(panel, 3, denied);
 
     hang()
@@ -177,7 +178,7 @@ fn panic(_info: &PanicInfo) -> ! {
     // the fallback console. A fixed marker, no formatting: `core::fmt` in a
     // panic handler is how a panic becomes a double fault.
     let mut factory = PhysicalMmioFactory;
-    let mut fallback = Uart::new(factory.window_at(UART_BASE_FALLBACK));
-    fallback.write_str("\r\n[!!] BraiNIX: panic in boot stub\r\n");
+    let mut emergency = DockChannel::new(factory.window_at(DOCKCHANNEL_BASE_OBSERVED));
+    emergency.write_line("[!!] BraiNIX: panic in boot stub");
     hang()
 }

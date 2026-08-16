@@ -278,6 +278,62 @@ produce anything visible.** Any plan that depends on drawing to the screen as a
 progress indicator is unobservable by construction, however correct the drawing
 code is.
 
+## 9a. Open: the SBU serial path delivers nothing on this rig
+
+**Measured 2026-08-16, and it is not a fault in any of our code.**
+
+The DockChannel register block is live and accepts bytes. Read through m1n1's
+proxy, with m1n1 resident:
+
+```
+TX_FREE  (0x4014): 0x00000800     2048 free FIFO slots
+RX_COUNT (0x402c): 0x00000000
+```
+
+Writing the exact sequence our driver uses, from the proxy, succeeds: the poll
+loop terminates and the FIFO takes the bytes.
+
+```python
+BASE = 0x2_9E52_8000
+for ch in b"PROXY-DOCKCHANNEL-TEST\r\n":
+    while p.read32(BASE + 0x4014) == 0:
+        pass
+    p.write32(BASE + 0x4004, ch)
+```
+
+**Nothing arrives at `/dev/cu.debug-console`.** Three independent writers were
+tried and all three produce zero bytes there:
+
+| Writer | Bytes at the host |
+| --- | --- |
+| our chainloaded stub | 0 |
+| a proxy write to the same registers | 0 |
+| **m1n1 itself, across a full boot** | 0 |
+
+The third row is the one that matters. m1n1 is known-good and demonstrably
+prints 3,738 bytes over its USB gadget, and it prints
+`Initialized dockchannel UART` as its *first* line, before USB exists. If its
+output does not reach that device either, the device is not carrying this
+machine's DockChannel on this setup.
+
+So a silent `/dev/cu.debug-console` is **not evidence about the payload**, and
+must not be read as one. This is the same trap as OQ-5, one layer further out.
+
+Things not yet eliminated, in the order worth trying, all physical:
+
+1. **The cable.** SBU is not present on every USB-C cable. Charge-only and some
+   USB 2.0 cables omit those pins entirely.
+2. **The port.** See [`APPLE_SILICON_BRINGUP_RIG.md`](APPLE_SILICON_BRINGUP_RIG.md)
+   section 3.2, which already records that port choice matters and that getting
+   it wrong presents as a different failure.
+3. **Ordering.** `macvdmtool serial` was issued, then the target rebooted; serial
+   mode may not survive the reboot. Setting the mode with m1n1 already up and
+   then writing was also tried, and also produced nothing.
+
+**Until this is resolved, verify payload behaviour through the proxy instead**:
+m1n1 stays resident, and memory can be read back after the fact. That path is
+already proven to work, needs nobody in the room, and does not depend on SBU.
+
 ## 10. Driving the machine when you are not next to it
 
 Recovery work needs a keyboard on the target and eyes on its screen. Both can be
