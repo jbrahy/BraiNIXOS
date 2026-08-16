@@ -9,6 +9,11 @@ slice after it is blocked — not on code, on this.
 This runbook stops at the acceptance test. It does **not** chainload BraiNIX; that is
 [`bin/as-boot.sh`](../../bin/as-boot.sh) and it comes after.
 
+> **Read [`BRINGUP_PLAN.md`](BRINGUP_PLAN.md) first.** §5's rule — *do not chainload BraiNIX until m1n1's
+> own console prints* — was ignored on 2026-08-14/15, and the result was five recovery trips, three boot
+> objects, a wedged local policy, a deleted volume group, and **zero bytes of output from anything**. The
+> plan document explains why the loop has to come before the code.
+
 **Requires physical presence at the machine.** The security downgrade in §2 cannot be done over SSH,
 by MDM, or by any remote path — that is Apple's design, not an inconvenience to route around.
 
