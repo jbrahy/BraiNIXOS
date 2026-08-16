@@ -61,6 +61,12 @@ typedef struct {
 
     bool armed;
     bool ble_connected;
+    bool profile_started;   /* shown on screen: NULL from bt_profile_start was
+                             * invisible before, and it looks identical to a
+                             * working app because the DEFAULT Flipper profile
+                             * is also the serial profile -- it keeps
+                             * advertising, a peer still connects, GATT still
+                             * enumerates, and nothing ever reaches us. */
     uint32_t lines_typed;
     uint32_t bytes_received;
     bool overflowed;
@@ -82,7 +88,12 @@ static void draw_callback(Canvas* canvas, void* context) {
     canvas_draw_str(canvas, 2, 10, "BraiNIX One");
 
     canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str(canvas, 2, 24, app->ble_connected ? "BLE: connected" : "BLE: advertising");
+    if(!app->profile_started) {
+        canvas_draw_str(canvas, 2, 24, "BLE: PROFILE FAILED");
+    } else {
+        canvas_draw_str(
+            canvas, 2, 24, app->ble_connected ? "BLE: connected" : "BLE: advertising");
+    }
     canvas_draw_str(canvas, 2, 34, app->armed ? "TYPING: ARMED" : "TYPING: disarmed (OK)");
 
     char stats[48];
@@ -174,6 +185,25 @@ static void type_line(BraiNIXOne* app, const char* line, size_t length) {
     view_port_update(app->viewport);
 }
 
+/* ------------------------------------------------------- profile wrapper -- */
+
+/* The stock serial profile advertises with bonding enabled, which is right for
+ * the phone app and wrong here: macOS opens a GATT connection without bonding,
+ * writes return success, and the data is dropped before it reaches us. This
+ * template reuses the serial profile's start/stop and only overrides the GAP
+ * config, so the service and its characteristics are unchanged. */
+static void brainix_gap_config(GapConfig* config, FuriHalBleProfileParams params) {
+    ble_profile_serial->get_gap_config(config, params);
+    config->bonding_mode = false;
+    config->pairing_method = GapPairingNone;
+}
+
+static const FuriHalBleProfileTemplate brainix_profile_serial_open = {
+    .start = NULL,  /* filled in at runtime from ble_profile_serial */
+    .stop = NULL,
+    .get_gap_config = brainix_gap_config,
+};
+
 /* ------------------------------------------------------------------- app -- */
 
 int32_t brainx_flipper_one_app(void* p) {
@@ -209,13 +239,26 @@ int32_t brainx_flipper_one_app(void* p) {
     bt_disconnect(app->bt);
     furi_delay_ms(200); /* the disconnect restarts core2; do not race it */
 
-    app->profile = bt_profile_start(app->bt, ble_profile_serial, NULL);
+    /* Borrow start/stop from the stock profile so the instance it returns is
+     * still recognised by ble_profile_serial_set_event_callback. */
+    FuriHalBleProfileTemplate open_profile = brainix_profile_serial_open;
+    open_profile.start = ble_profile_serial->start;
+    open_profile.stop = ble_profile_serial->stop;
+
+    app->profile = bt_profile_start(app->bt, &open_profile, NULL);
+    if(!app->profile) {
+        /* Fall back to the stock profile rather than leaving the radio idle:
+         * a bonded peer can still reach us, and the screen says which we got. */
+        FURI_LOG_E(TAG, "open serial profile failed; falling back to stock");
+        app->profile = bt_profile_start(app->bt, ble_profile_serial, NULL);
+    }
+    app->profile_started = (app->profile != NULL);
     if(app->profile) {
         ble_profile_serial_set_event_callback(
             app->profile, RX_BUFFER_SIZE, serial_rx_callback, app);
         furi_hal_bt_start_advertising();
     } else {
-        FURI_LOG_E(TAG, "BLE serial profile failed to start");
+        FURI_LOG_E(TAG, "BLE serial profile failed to start at all");
     }
 
     /* Assemble whole lines before typing. A command typed in fragments as BLE
