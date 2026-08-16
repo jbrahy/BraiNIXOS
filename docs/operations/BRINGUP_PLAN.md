@@ -1,5 +1,11 @@
 # Bring-up plan — how to stop debugging blind
 
+> **Phase 1 and Phase 2 both passed on 2026-08-16.** If you are here to *repeat* the
+> procedure rather than to understand why it failed the first time, read
+> [`FIRST_LIGHT_RUNBOOK.md`](FIRST_LIGHT_RUNBOOK.md) instead — it is the ordered,
+> start-to-finish version. This file remains the postmortem, and is worth reading
+> if you are tempted to skip one of that runbook's steps.
+
 **Written 2026-08-16, after roughly twenty hours that produced no output from any BraiNIX code.**
 Companion to [`APPLE_SILICON_BRINGUP_RIG.md`](APPLE_SILICON_BRINGUP_RIG.md), which is the procedure. This
 file is why the procedure kept failing and what changes.

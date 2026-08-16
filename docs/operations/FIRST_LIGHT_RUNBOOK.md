@@ -1,0 +1,311 @@
+# First light on Apple Silicon: the repeatable procedure
+
+**What this gets you:** a Mac running your own bare-metal code, printing to a
+terminal on your workstation, with a build-and-reload loop measured in seconds.
+
+**What it cost the first time:** two days, five recovery trips, three boot
+objects, one wedged security policy, one deleted volume group, and zero bytes of
+output. Following the order below instead should cost one session.
+
+Companions, all cross-linked and none a substitute for this file:
+
+- [`BRINGUP_PLAN.md`](BRINGUP_PLAN.md) is the postmortem: why the first attempt
+  failed, itemised. Read it if you are tempted to skip a step here.
+- [`APPLE_SILICON_BRINGUP_RIG.md`](APPLE_SILICON_BRINGUP_RIG.md) is the
+  chronological log of findings, including everything about volume groups,
+  bandwidth and model serving that is not on the critical path for first light.
+- [`../../bin/README.md`](../../bin/README.md) documents the instrument scripts
+  this runbook invokes.
+
+> Style note: this file avoids em dashes per the project writing rule for new
+> documents, while its siblings in this directory use them. That is deliberate
+> and not drift.
+
+---
+
+## 0. The one rule
+
+> **Get a console before you debug anything of your own.**
+
+The first attempt installed our own payload as the boot object on day one. It
+produced a dark screen. That single bit of information could not distinguish
+between a stack bug, a wrong entry point, a wrong UART, a wrong framebuffer, and
+a machine that never executed a byte, and *all five* were true at various points.
+
+m1n1 costs one recovery trip and turns every subsequent iteration into a
+one-second command. Install it first. Every time.
+
+## 1. What you need
+
+| Thing | Notes |
+| --- | --- |
+| Target Mac | Apple Silicon. This procedure was run on `Mac14,12` (M2 Pro mini). |
+| Workstation Mac | Apple Silicon, for `macvdmtool`. |
+| USB-C cable | Any SuperSpeed cable. USB4 is not required. |
+| Display on the target | You will need to read the screen during recovery. |
+| Keyboard on the target | Or a Flipper Zero, see section 8. |
+| An admin account on the target's volume group | Section 5 is unforgiving about this. |
+
+## 2. Carve a volume group for the experiment
+
+Never do this on the volume you care about. A separate APFS volume group is the
+blast wall, and it has held: across everything above, `Macintosh HD` stayed at
+`coih: absent` with Full Security, untouched.
+
+```sh
+diskutil apfs addVolume disk0s2 APFS BraiNIX
+```
+
+Then install macOS onto it. The installer must be run from the GUI; see
+[`APPLE_SILICON_BRINGUP_RIG.md`](APPLE_SILICON_BRINGUP_RIG.md) section 1a.3 for
+why the CLI path does not work.
+
+**Record the volume group UUID, and re-read it every session.** It changes
+whenever the group is rebuilt, and a stale `-v` fails in a way that reads as a
+policy fault rather than as a wrong argument.
+
+```sh
+diskutil apfs listVolumeGroups
+```
+
+## 3. Stage the payload and the scripts
+
+On the target, under macOS, in a directory that will be reachable from
+recoveryOS as `/Volumes/Data/Users/Shared/brainix-boot`:
+
+```sh
+mkdir -p /Users/Shared/brainix-boot && cd /Users/Shared/brainix-boot
+curl -sL -o m1n1.zip \
+  https://github.com/AsahiLinux/m1n1/releases/download/v1.6.1/m1n1-stage2-v1.6.1.zip
+unzip -o m1n1.zip && rm m1n1.zip
+shasum -a 256 m1n1.bin
+# 05137464cdacb23d8aed9be1d0ddd4fda757fb57d2b1a769ff3d88409afaafa0
+```
+
+Copy in `bin/as-install-m1n1.sh`, `bin/as-preflight.sh`,
+`bin/as-verify-install.sh` and `bin/payloads.tsv` from this repository, and write
+`.admin` with the username on line 1 and the password on line 2.
+
+**Verify the hash here, under macOS.** recoveryOS has no `shasum`, no `openssl`
+and no Perl `Digest::SHA`. All three were tried, one round trip each. Scripts
+running there fall back to a size check.
+
+## 4. Enter One True Recovery
+
+Hold the power button until `Loading startup options` appears. Pick **Options**,
+then the volume whose *data* you need mounted. Pick **Macintosh HD** if your
+scripts live there, because that group's data volume only unlocks if you
+authenticate against it.
+
+Then **Utilities > Terminal**.
+
+Confirm the environment before doing anything:
+
+```sh
+sh /Volumes/Data/Users/Shared/brainix-boot/as-preflight.sh
+```
+
+It should end `READY (recoveryOS) -- 0 checks failed`. It checks tool
+availability, hashing capability, volume groups and their mount points, the
+policy on both groups, payload integrity, and that every install script's entry
+point agrees with `payloads.tsv`.
+
+## 5. Install m1n1
+
+```sh
+sh /Volumes/Data/Users/Shared/brainix-boot/as-install-m1n1.sh
+```
+
+### The entry point is 2048, and it is not the same as yours
+
+```sh
+kmutil configure-boot -c m1n1.bin --raw \
+    --entry-point 2048 --lowest-virtual-address 0 -v /Volumes/BraiNIX
+```
+
+Confirmed from two independent sources: m1n1's own `README.md`, and
+`asahi-installer/src/step2/step2.sh` line 125. **Our boot stub is entry `0`.**
+The first m1n1 attempt used `0`, so m1n1 never ran, was judged useless, and was
+abandoned, removing the only debugging instrument available. Keep the value per
+payload in `payloads.tsv` and never copy one payload's value to another.
+
+### Never pass `-k` to `bputil`
+
+`-k` enables third-party kext trust, needs a paired AuxKC that this flow never
+creates, and wedged the local policy badly enough to cost a volume group.
+`bputil -n -c -v <uuid> -u <user> -p <pass>` is the whole command.
+
+### Answer kmutil's prompts one at a time
+
+`kmutil configure-boot` has **no** `-u`/`-p`. It asks three things in order:
+
+```
+Are you sure you want to do this? (enter y or n)    ->  y
+Username:                                            ->  your admin user
+Password:                                            ->  no echo
+```
+
+Three failure modes, all of which happened:
+
+1. **An empty answer** fails as `Code=71 "not a valid admin user"`, which reads
+   like a policy fault rather than a missed prompt.
+2. **A wrong password** fails as `Code=71 "Unable to set credentials, possibly
+   wrong name or password"`. These are different messages; read which one you got.
+3. **The password prompt reads `/dev/tty` directly.** You can pipe `y` and the
+   username into kmutil's stdin, and the pipe will be consumed correctly, and
+   then it will still stop and wait for a human at `Password:`. There is no way
+   around this. Someone has to type it.
+
+### Output buffering will make it look hung
+
+The install script tees through a FIFO, so kmutil's stdout is a pipe and libc
+**fully buffers** it. `Username:` does not appear when kmutil asks; it appears
+later, in a burst, together with everything else. Three minutes of apparent hang
+was kmutil sitting at an invisible prompt.
+
+If you see nothing after answering `y`, type the username anyway. If it echoes,
+the prompt was there all along.
+
+## 6. Record what you installed
+
+```sh
+sh /Volumes/Data/Users/Shared/brainix-boot/as-verify-install.sh --record m1n1
+```
+
+`coih` is the Image4 hash of the *wrapped* boot object, so it cannot be
+predicted from the payload, only observed afterwards. That makes it useless as a
+precondition and ideal as a fingerprint. Three boot objects were installed
+across two days with no record of which was resident, and every dark screen got
+blamed on the most recent change.
+
+## 7. Reboot and read the console
+
+```sh
+reboot
+```
+
+It boots straight into the experimental volume; no picker step, because m1n1 is
+that volume group's boot object.
+
+**Expect `No Signal` on HDMI. That is normal and is not a fault.** See section 9.
+
+On the workstation, m1n1's USB gadget appears over the ordinary USB-C cable:
+
+```sh
+ls /dev/cu.usbmodem*
+# /dev/cu.usbmodemNNPN625M0M1   console and proxy
+# /dev/cu.usbmodemNNPN625M0M3   second interface
+timeout 6 cat /dev/cu.usbmodemNNPN625M0M1
+```
+
+You should see `Initialized dockchannel UART at ...`, the device info block, the
+MMU log, and finally `Running proxy...`. A full known-good capture is committed
+at [`logs/m1n1-first-boot-20260816.log`](logs/m1n1-first-boot-20260816.log).
+
+**You do not need `macvdmtool serial` for this.** The USB gadget is a separate
+path and it is the one that works. `/dev/cu.debug-console` read zero bytes
+throughout.
+
+## 8. The proxy: the actual iteration loop
+
+```sh
+curl -sL -o m1n1-src.tgz \
+  https://github.com/AsahiLinux/m1n1/archive/refs/tags/v1.6.1.tar.gz
+tar xzf m1n1-src.tgz
+python3 -m venv m1n1-venv
+./m1n1-venv/bin/pip install construct==2.10.70 pyserial==3.5
+
+cd m1n1-1.6.1/proxyclient
+M1N1DEVICE=/dev/cu.usbmodemNNPN625M0M1 PYTHONPATH=. ../../m1n1-venv/bin/python - <<'PY'
+from m1n1.setup import *
+print("base 0x%x  EL%d" % (u.base, u.mrs(CurrentEL) >> 2))
+PY
+```
+
+**The proxy is on the same port as the console**, not the second one. The second
+interface times out with `UartTimeout: Expected 1 bytes, got 0 bytes`, which
+looks like a dead proxy and is not.
+
+From here you can read and write memory, run code, dump the ADT, and chainload:
+
+```sh
+M1N1DEVICE=/dev/cu.usbmodemNNPN625M0M1 PYTHONPATH=. \
+  ../../m1n1-venv/bin/python tools/chainload.py -r /path/to/payload.bin
+```
+
+That is the loop. Build, chainload, read the console, fix, repeat.
+
+## 9. Two facts that will otherwise cost you days
+
+Both were discovered by m1n1 in a single boot, and both had been repeatedly
+misread as "our code is broken".
+
+### The console is DockChannel, not the s5l UART
+
+```
+Initialized dockchannel UART at 0x29e528000
+```
+
+`/arm-io/uart0` exists on this machine, is correctly described, carries
+`compatible = uart-1,samsung`, translates correctly, and is even marked
+`boot-console`. It is **not** the console: the debug serial mux presents
+DockChannel on the Type-C SBU pins. A flawless s5l driver emits zero bytes at
+the host, which is indistinguishable from never running.
+
+DockChannel is four registers and needs no configuration at all:
+
+| Offset | Meaning |
+| --- | --- |
+| `0x4004` | write one byte |
+| `0x4014` | free TX slots; poll until nonzero |
+| `0x401C` | RX byte, in bits `[15:8]` |
+| `0x402C` | RX count |
+
+See `src/boot-stub-apple/src/dockchannel.rs`.
+
+### The framebuffer given to a custom boot object is a dummy
+
+```
+display: Dummy framebuffer found, initializing display
+dcp: dtpx-port is only supported with V13_5 OS firmware.
+display: failed to initialize DCP
+fb init: 640x1136 (32) [s=640] @0x10799a48000
+```
+
+`boot_args.video` *is* populated, so reading it is not the problem. The surface
+simply is never scanned out, and HDMI stays at `No Signal`. **Painting it cannot
+produce anything visible.** Any plan that depends on drawing to the screen as a
+progress indicator is unobservable by construction, however correct the drawing
+code is.
+
+## 10. Driving the machine when you are not next to it
+
+Recovery work needs a keyboard on the target and eyes on its screen. Both can be
+remote.
+
+- **Keyboard:** `tools/flipper/brainx-flipper-one` turns a Flipper Zero into a
+  USB keyboard for the target, driven over BLE from the workstation with
+  `bin/brainx-ble.py`. It was verified to type all 46 characters of
+  `Test.ABC xyz 123 !@#$%^&*()_+-={}[]|:;"<>,.?/~` byte-identically, so shifted
+  characters are not a concern. Lines are capped at 191 characters.
+- **Screen:** `bin/screenshot-mini.sh` grabs a still through a camera pointed at
+  the display. Aim it so the **bottom** of the terminal window is in frame; the
+  prompts are there, and a view that cuts them off produces exactly the
+  guess-and-hope debugging this runbook exists to prevent.
+- **Note:** `clear` does not exist in recoveryOS, so you cannot scroll output
+  back to the top of the window that way.
+
+## 11. Checklist
+
+```
+[ ] separate volume group, and its UUID re-read this session
+[ ] payload staged, hash verified under macOS (not recoveryOS)
+[ ] as-preflight.sh reports READY
+[ ] bputil -n -c, no -k
+[ ] bputil -d confirms Permissive before touching the boot object
+[ ] entry point taken from payloads.tsv, per payload
+[ ] kmutil's three prompts answered one at a time
+[ ] as-verify-install.sh --record <name>
+[ ] console read over the USB gadget, not the debug-console device
+[ ] proxy connected on the same port as the console
+```
