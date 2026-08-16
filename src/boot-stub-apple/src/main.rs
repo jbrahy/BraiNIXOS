@@ -182,3 +182,106 @@ fn panic(_info: &PanicInfo) -> ! {
     emergency.write_line("[!!] BraiNIX: panic in boot stub");
     hang()
 }
+
+// ---------------------------------------------------------------------------
+// Proxy verification entry point.
+// ---------------------------------------------------------------------------
+
+/// Magic returned by [`boot_stub_probe`], so a caller can tell "our code ran"
+/// from "the memory happened to contain something".
+pub const PROBE_MAGIC: u64 = 0x4272_6169_4E49_5801; // "BraiNIX\x01"
+
+/// Run the payload's *decisions* against real firmware data and report them in
+/// memory, without touching any MMIO, then **return**.
+///
+/// # Why this exists
+///
+/// The normal entry point ends in [`hang`], which is correct for a boot object
+/// and useless for verification: chainloading it destroys m1n1, so there is no
+/// longer anything on the machine able to tell us what happened. On this rig
+/// that leaves no channel at all, because the host-side SBU serial path
+/// delivers nothing (see `docs/operations/FIRST_LIGHT_RUNBOOK.md` §9a) and a
+/// dead console is exactly the ambiguity this project keeps paying for.
+///
+/// So this entry point is designed to be called *through m1n1's proxy* with
+/// m1n1 still resident: `p.call(base + offset, boot_args, out)`. It parses the
+/// real `boot_args`, resolves the console from the real ADT, writes six `u64`s
+/// to `out`, and returns. m1n1 survives, and the proxy reads the answers back.
+///
+/// **It writes no MMIO.** Driving a UART here would disturb the machine that is
+/// hosting the measurement; the point is to verify the decisions, and the
+/// register block was proven live separately by writing it from the proxy.
+///
+/// # Report layout
+///
+/// | index | meaning |
+/// | --- | --- |
+/// | 0 | [`PROBE_MAGIC`] |
+/// | 1 | stage reached: 1 boot_args read, 2 ADT window derived, 3 console resolved |
+/// | 2 | ADT window physical address |
+/// | 3 | ADT window length |
+/// | 4 | console kind: 1 DockChannel, 2 s5l UART, 0 none |
+/// | 5 | console base, translated |
+///
+/// # Safety
+///
+/// `boot_args` must be the firmware's pointer and `out` must point to at least
+/// six writable `u64`s.
+#[no_mangle]
+pub unsafe extern "C" fn boot_stub_probe(boot_args: *const u8, out: *mut u64) -> u64 {
+    // SAFETY: the caller guarantees `out` has room for six `u64`s.
+    let put = |index: usize, value: u64| unsafe { ptr::write_volatile(out.add(index), value) };
+
+    put(0, PROBE_MAGIC);
+    for index in 1..6 {
+        put(index, 0);
+    }
+
+    if boot_args.is_null() {
+        return PROBE_MAGIC;
+    }
+
+    // SAFETY: as in `boot_stub_main`; the prefix read is bounded and every
+    // field access inside it is bounds-checked by `brainix_adt`.
+    let boot_args_bytes = unsafe { core::slice::from_raw_parts(boot_args, BOOT_ARGS_PREFIX_LEN) };
+    put(1, 1);
+
+    let window = match adt_window(boot_args_bytes) {
+        Ok(window) => window,
+        Err(_) => return PROBE_MAGIC,
+    };
+    put(1, 2);
+    put(2, window.phys_addr);
+    put(3, u64::from(window.len));
+
+    // SAFETY: `adt_window` validated that this range lies inside the DRAM
+    // window firmware reported, is aligned, and does not overflow.
+    let adt_blob = unsafe {
+        core::slice::from_raw_parts(window.phys_addr as usize as *const u8, window.len as usize)
+    };
+
+    match brainix_boot_stub_apple::console_from_adt(adt_blob) {
+        Ok(brainix_boot_stub_apple::ConsoleChoice::DockChannel { base }) => {
+            put(1, 3);
+            put(4, 1);
+            put(5, base);
+        }
+        Ok(brainix_boot_stub_apple::ConsoleChoice::S5lUart { location, .. }) => {
+            put(1, 3);
+            put(4, 2);
+            put(5, location.base);
+        }
+        Err(_) => put(4, 0),
+    }
+
+    PROBE_MAGIC
+}
+
+/// Keeps [`boot_stub_probe`] in the image.
+///
+/// `#[no_mangle]` alone is not enough in a binary crate under LTO: nothing in
+/// the payload calls the probe, so it is dead-stripped and vanishes from the
+/// symbol table. The caller is a Python proxy on the workstation, which the
+/// linker has no way to know about.
+#[used]
+static PROBE_KEEPALIVE: unsafe extern "C" fn(*const u8, *mut u64) -> u64 = boot_stub_probe;

@@ -41,3 +41,29 @@ Known-good values to assert against:
 | `/arm-io/dockchannel-uart` | `compatible` | `aapl,dock-channels` |
 | `/arm-io/dockchannel-uart` | `reg` addr | `0x9E528000`, size `0x10004` |
 | `/arm-io/dockchannel-uart` | `reg` addr | `0x9E50C000`, size `0x18` |
+
+## `mac14-12-j474s-bootargs.bin`
+
+The first 256 bytes of the real `boot_args` structure m1n1 hands a chainloaded
+payload on the same machine, read over the proxy on 2026-08-16.
+
+```
+virt_base     0xffffffffff020000      sign-extended kernel VA
+phys_base     0x00010001020000
+mem_size      0x00000794674000
+devtree       0x00000000161c000
+devtree_size  0x78000
+video base    0x10799a48000  640x1136 32bpp   (a dummy surface; never scanned out)
+```
+
+**This file is the one that found a real bug.** `adt_window` computed
+`devtree - virt_base` with `checked_sub`, which looks safer than wrapping and
+denies every real boot under m1n1, because `devtree` sits far *below* the
+kernel-VA `virt_base`. The correct computation is modular, and its result,
+`0x1000361c000`, was read back from the machine and begins
+`regulatory-model-number` -- the real ADT.
+
+Both forms occur on this same hardware: iBoot hands m1n1 a small
+`virt_base` of `0x1020000`, while m1n1 hands a chainloaded payload the
+kernel-VA form. A parser accepting only the first works under iBoot and denies
+under m1n1, which presents as "the payload is broken".

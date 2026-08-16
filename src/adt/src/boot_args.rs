@@ -185,12 +185,34 @@ pub fn adt_window(boot_args: &[u8]) -> Result<AdtWindow, BootArgsError> {
         return Err(BootArgsError::DevtreeSizeMisaligned);
     }
 
-    let virt_offset = devtree
-        .checked_sub(virt_base)
-        .ok_or(BootArgsError::VirtualAddressUnderflow)?;
-    let adt_phys = virt_offset
-        .checked_add(phys_base)
-        .ok_or(BootArgsError::PhysicalAddressOverflow)?;
+    // `devtree - virt_base + phys_base`, in **wrapping** 64-bit arithmetic.
+    //
+    // This was `checked_sub` then `checked_add`, which looks safer and is
+    // wrong: it denies valid firmware. Measured on the target 2026-08-16, with
+    // our code running on the machine and reporting through m1n1's proxy:
+    //
+    //     virt_base   0xffffffffff020000     a sign-extended kernel VA
+    //     phys_base   0x00010001020000
+    //     devtree     0x0000000161c000
+    //
+    // `devtree` is far below `virt_base`, so `checked_sub` returns `None` and
+    // the whole window is refused. The wrapping result is `0x1000361c000`,
+    // which was read back from the machine and begins
+    // `regulatory-model-number` -- the real ADT, byte-identical to the head of
+    // `tests/fixtures/mac14-12-j474s-adt.bin`.
+    //
+    // Both forms occur on the same hardware: iBoot handed m1n1 a small
+    // `virt_base` of `0x1020000`, while m1n1 hands a chainloaded payload the
+    // kernel-VA form. A parser that only accepts the first works under iBoot
+    // and denies under m1n1, which reads as "the payload is broken".
+    //
+    // Nothing is given up by wrapping here. The overflow checks were never the
+    // safety property; the **containment check below is**, and it is unchanged:
+    // the resulting window must lie entirely inside the DRAM range firmware
+    // reported, be aligned, and not overflow its own end. An address that wraps
+    // to somewhere unreasonable fails those, as it should.
+    let virt_offset = devtree.wrapping_sub(virt_base);
+    let adt_phys = virt_offset.wrapping_add(phys_base);
 
     if adt_phys & ALIGN_MASK_U64 != 0 {
         return Err(BootArgsError::AdtPhysMisaligned);
@@ -204,10 +226,11 @@ pub fn adt_window(boot_args: &[u8]) -> Result<AdtWindow, BootArgsError> {
         .checked_add(mem_size)
         .ok_or(BootArgsError::DramWindowOverflow)?;
 
-    // adt_phys < phys_base cannot happen given the derivation above (adt_phys
-    // = virt_offset + phys_base, and virt_offset is a checked-non-negative
-    // u64), but the check is kept as defence in depth against the derivation
-    // ever changing, per spec §9.1's "entirely inside" requirement.
+    // Now load-bearing rather than defence in depth. With wrapping arithmetic
+    // above, `adt_phys < phys_base` is genuinely reachable -- a hostile or
+    // corrupt `devtree`/`virt_base` pair can land the window below the DRAM
+    // base -- and this is the check that refuses it. Spec §9.1's "entirely
+    // inside" requirement is enforced here and nowhere else.
     if adt_phys < phys_base || adt_end > dram_end {
         return Err(BootArgsError::AdtWindowOutsideDram);
     }

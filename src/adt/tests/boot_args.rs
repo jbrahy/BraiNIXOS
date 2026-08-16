@@ -115,25 +115,61 @@ fn a_devtree_size_not_a_multiple_of_four_denies() {
     );
 }
 
+/// A `devtree` below `virt_base` is **legal**, and the window is still checked.
+///
+/// This test previously asserted `VirtualAddressUnderflow`. That was wrong, and
+/// hardware said so: m1n1 hands a chainloaded payload
+/// `virt_base = 0xffffffffff020000` with `devtree = 0x161c000`, so the
+/// subtraction underflows on every real boot under m1n1 and the old code
+/// refused the genuine ADT. The arithmetic is modular; the containment check is
+/// what keeps it safe.
 #[test]
-fn a_devtree_address_below_virt_base_denies() {
-    // devtree - virt_base underflows: the ADT is "before" iBoot's own mapping base.
+fn a_devtree_address_below_virt_base_wraps_and_is_then_range_checked() {
+    // Wraps to somewhere far outside the DRAM window, so it must still deny --
+    // just for the right reason.
     let bytes = boot_args(0x1000, 0x8000_0000, 0x8000_0000, 0, 288);
     assert_eq!(
         brainix_adt::adt_window(&bytes).unwrap_err(),
-        BootArgsError::VirtualAddressUnderflow
+        BootArgsError::AdtWindowOutsideDram
     );
 }
 
+/// The real firmware values, as read off the target on 2026-08-16.
+///
+/// `virt_base` is a sign-extended kernel VA far above `devtree`. The wrapping
+/// result `0x1000361c000` was read back from the machine and begins
+/// `regulatory-model-number`, the real ADT.
 #[test]
-fn an_adt_physical_address_that_would_overflow_denies() {
-    // virt_offset = u64::MAX - 10 (devtree - virt_base, no underflow); adding
-    // phys_base = 20 overflows a 64-bit address.
-    let bytes = boot_args(0, 20, 0x8000_0000, u64::MAX - 10, 8);
-    assert_eq!(
-        brainix_adt::adt_window(&bytes).unwrap_err(),
-        BootArgsError::PhysicalAddressOverflow
+fn the_kernel_va_form_from_the_machine_resolves_to_the_real_adt() {
+    let bytes = boot_args(
+        0xffff_ffff_ff02_0000, // virt_base
+        0x0001_0001_020000,    // phys_base
+        0x0000_0007_94674000,  // mem_size
+        0x0000_0000_0161c000,  // devtree
+        0x78000,               // devtree_size
     );
+
+    let window = brainix_adt::adt_window(&bytes).expect("the target's own boot_args must resolve");
+
+    assert_eq!(window.phys_addr, 0x1_0003_61c000);
+    assert_eq!(window.len, 0x78000);
+}
+
+/// An address that wraps past the top of the space is still refused.
+///
+/// Previously `PhysicalAddressOverflow`. With modular arithmetic the sum wraps
+/// to `0x9` instead of failing, and the **alignment** gate rejects it before
+/// the range gate is reached. The property that matters is unchanged and is
+/// what this asserts: this input yields no window. Which specific gate fires
+/// is an implementation detail, so the test also states the general property.
+#[test]
+fn an_adt_physical_address_that_wraps_past_the_top_denies() {
+    let bytes = boot_args(0, 20, 0x8000_0000, u64::MAX - 10, 8);
+
+    let result = brainix_adt::adt_window(&bytes);
+
+    assert!(result.is_err(), "a wrapped address must never yield a window");
+    assert_eq!(result.unwrap_err(), BootArgsError::AdtPhysMisaligned);
 }
 
 #[test]
