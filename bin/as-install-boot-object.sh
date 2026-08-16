@@ -32,7 +32,22 @@ PAYLOAD="${HERE}/brainix-boot-stub-apple.bin"
 CRED="${HERE}/.admin"
 EXPECT_SHA="8829d562069985bbe41a714a84a9f02e"   # first 32 of the sha256
 
-exec > >(tee -a "$LOG") 2>&1
+# Log to a file AND to the screen, without process substitution.
+#
+# This was `exec > >(tee -a "$LOG") 2>&1`, which is a bashism: run under `sh`
+# it fails with "syntax error near unexpected token '>'" -- so the one feature
+# added to give us a record is what stopped the script from running at all.
+# A FIFO works in any POSIX shell, and the screen still shows everything,
+# which matters because a camera is how this is being read.
+FIFO="${LOG}.fifo"
+rm -f "$FIFO"; mkfifo "$FIFO" 2>/dev/null && {
+  tee -a "$LOG" < "$FIFO" &
+  TEE_PID=$!
+  exec > "$FIFO" 2>&1
+} || {
+  # No FIFO available: keep the screen output, lose the log, say so.
+  echo "WARNING: could not create $FIFO -- output is on screen only"
+}
 
 say()  { printf '\n=== %s ===\n' "$*"; }
 die()  { printf '\nFAILED: %s\n' "$*"; printf 'log: %s\n' "$LOG"; exit 1; }
@@ -134,3 +149,7 @@ if that stage denied. A dark screen means it did not run, which is a result
 too -- the log above says how far this script got.
 DONE
 printf 'log saved: %s\n' "$LOG"
+# Let the tee drain before the shell exits, or the tail of the log is lost.
+exec >/dev/tty 2>&1 || true
+[ -n "${TEE_PID:-}" ] && wait "$TEE_PID" 2>/dev/null
+rm -f "${LOG}.fifo"

@@ -1,0 +1,21 @@
+# Boot-object payload manifest -- the single source of truth for what gets
+# installed and how.
+#
+# The entry point column exists because getting it wrong is the most expensive
+# mistake this project has made. m1n1 was installed at 0, so it never ran, was
+# judged useless, and was abandoned -- removing the only debugging instrument
+# available (BRINGUP_PLAN.md item 1). Our stub really is entry 0. The two are
+# different and must never be copied from one another, so they are recorded
+# here per payload rather than typed per invocation.
+#
+# Hashes were taken on the workstation and again on the mini under macOS.
+# recoveryOS has no shasum, no openssl and no Perl Digest::SHA -- all three
+# were tried on the real machine -- so scripts running there fall back to the
+# size column, and the hash stands as the record of what that size means.
+#
+# Fields, tab-separated:
+#   name  file  bytes  sha256  entry_point  lowest_virtual_address  source
+#
+name	file	bytes	sha256	entry_point	lowest_virtual_address	source
+brainix-stub	brainix-boot-stub-apple.bin	24897	8829d562069985bbe41a714a84a9f02e5c47bbe091f03517beb7cbb8db949a30	0	0	built from src/boot-stub-apple; entry 0 is ours and is correct
+m1n1	m1n1.bin	1097728	05137464cdacb23d8aed9be1d0ddd4fda757fb57d2b1a769ff3d88409afaafa0	2048	0	m1n1 v1.6.1 stage2; entry 2048 per m1n1 README and asahi-installer step2.sh:125
