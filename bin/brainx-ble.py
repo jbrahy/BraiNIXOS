@@ -52,13 +52,23 @@ NAME_HINTS = ("flipper", "laffzoe", "brainix")
 CHUNK = 180  # under the 243-byte characteristic limit, with headroom
 
 
-async def find_device(timeout: float = 12.0):
-    """Returns the first advertiser that looks like the Flipper."""
-    devices = await BleakScanner.discover(timeout=timeout)
-    for device in devices:
-        name = (device.name or "").lower()
-        if any(hint in name for hint in NAME_HINTS):
-            return device
+async def find_device(timeout: float = 12.0, attempts: int = 3):
+    """Returns the first advertiser that looks like the Flipper.
+
+    Retried, because a single scan misses it often enough to matter. The device
+    advertises on an interval and CoreBluetooth's discovery window does not
+    always overlap one, so a miss is routine rather than meaningful -- and a
+    miss reported as "no Flipper found" reads as "the app is not running",
+    which has now been the wrong conclusion twice.
+    """
+    for attempt in range(1, attempts + 1):
+        devices = await BleakScanner.discover(timeout=timeout)
+        for device in devices:
+            name = (device.name or "").lower()
+            if any(hint in name for hint in NAME_HINTS):
+                return device
+        if attempt < attempts:
+            print(f"scan {attempt} found nothing, retrying ...", file=sys.stderr)
     return None
 
 

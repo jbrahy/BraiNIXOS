@@ -41,7 +41,13 @@ REMOTE_FILE=/tmp/brainix-hid-test
 EXPECT='Test.ABC xyz 123 !@#$%^&*()_+-={}[]|:;"<>,.?/~'
 
 CONFIRM=1
-[ "${1:-}" = "-y" ] && CONFIRM=0
+FORCE=0
+for arg in "$@"; do
+  case "$arg" in
+    -y) CONFIRM=0 ;;
+    --force) FORCE=1 ;;
+  esac
+done
 
 printf 'HID self-test\n'
 printf '  target : %s\n' "$MINI_HOST"
@@ -84,11 +90,17 @@ case "$FRONT" in
   Terminal|iTerm2|Alacritty|kitty|WezTerm)
     printf 'frontmost application: %s\n' "$FRONT" ;;
   "")
-    printf 'FAILED: cannot read which application is frontmost.\n'
-    printf 'osascript needs Accessibility permission for the ssh session, and\n'
-    printf 'without it this test would type into an unknown window. Focus a\n'
-    printf 'Terminal on the mini by hand and re-run with --force to skip this check.\n'
-    [ "${2:-}" = "--force" ] || [ "${1:-}" = "--force" ] || exit 1 ;;
+    if [ "$FORCE" = 1 ]; then
+      printf 'NOTE: cannot read the frontmost application (osascript has no\n'
+      printf 'Accessibility permission over ssh). Proceeding on --force; the\n'
+      printf 'caller is asserting that a terminal has focus.\n'
+    else
+      printf 'FAILED: cannot read which application is frontmost.\n'
+      printf 'osascript needs Accessibility permission for the ssh session, and\n'
+      printf 'without it this test would type into an unknown window. Focus a\n'
+      printf 'Terminal on the mini by hand and re-run with --force to skip this check.\n'
+      exit 1
+    fi ;;
   *)
     printf 'FAILED: frontmost application is "%s", not a terminal.\n' "$FRONT"
     printf 'Refusing to type a shell command into it.\n'
