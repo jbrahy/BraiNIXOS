@@ -118,3 +118,68 @@ pub const UART_DEBUG_CONSOLE_MARKER: &[u8] = b"/arm-io/uart6/debug-console";
 /// Fallback node path, used when [`UART_DEBUG_CONSOLE_MARKER`] is absent.
 /// **Observed.** AS-0 fact table §8.6.
 pub const UART_DEFAULT_PATH: &[u8] = b"/arm-io/uart0";
+
+// ===========================================================================
+// DockChannel UART — the console this hardware actually uses.
+//
+// Source: m1n1 v1.6.1 `src/dockchannel_uart.c`, MIT-licensed, read 2026-08-16,
+// cross-checked against the target machine itself. These are **[O] observed**,
+// not inferred: m1n1 was installed as the mini's boot object and printed
+//
+//     Initialized dockchannel UART at 0x29e528000
+//
+// while the machine's own ADT states the same peripheral's `reg` as
+// `0x9E528000`. Both numbers are in
+// `docs/operations/logs/m1n1-first-boot-20260816.log` and the tree is committed
+// at `src/adt/tests/fixtures/mac14-12-j474s-adt.bin`.
+//
+// WHY THIS BLOCK EXISTS AT ALL
+//
+// Everything above this line describes the s5l UART, and every value in it may
+// well be correct. It is also **inapplicable to `T6020`**: the debug-serial mux
+// presents DockChannel to the Type-C SBU pins, so a flawless s5l implementation
+// transmits into a peripheral nothing is listening to. That is OQ-5, now
+// resolved -- see `docs/platform-specs/apple-s5l-uart.md`. The s5l code is kept
+// because it is correct for the machines it describes; it is simply not the
+// console here.
+// ===========================================================================
+
+/// Byte-wide transmit data register. Writing enqueues one byte. **[O]**
+pub const DOCKCHANNEL_TX_DATA_OFFSET: usize = 0x4004;
+
+/// Free space in the transmit FIFO. Nonzero means a byte may be written. **[O]**
+pub const DOCKCHANNEL_TX_FREE_OFFSET: usize = 0x4014;
+
+/// Byte-wide receive data register. The byte occupies bits `[15:8]`. **[O]**
+pub const DOCKCHANNEL_RX_DATA_OFFSET: usize = 0x401C;
+
+/// Count of bytes waiting in the receive FIFO. **[O]**
+pub const DOCKCHANNEL_RX_COUNT_OFFSET: usize = 0x402C;
+
+/// Times to poll [`DOCKCHANNEL_TX_FREE_OFFSET`] before transmitting anyway.
+///
+/// m1n1 spins unbounded here. We do not, for the same reason the s5l path does
+/// not: an unbounded wait on a machine with no debugger attached turns a wrong
+/// offset into a silent hang, and silence is the one outcome that identifies
+/// nothing. Garbled output names its own cause.
+pub const DOCKCHANNEL_TX_POLL_LIMIT: u32 = 100_000;
+
+/// ADT node holding the DockChannel registers. **[O]** — present in the
+/// target's tree, verified by `src/adt/tests/real_hardware.rs`.
+pub const DOCKCHANNEL_ADT_PATH: &[u8] = b"/arm-io/dockchannel-uart";
+
+/// The node's `compatible` value. **[O]** — read off the machine.
+pub const DOCKCHANNEL_ADT_COMPATIBLE: &[u8] = b"aapl,dock-channels";
+
+/// Translated base observed on the deployment target. **[O] for `T6020` only.**
+///
+/// Unlike [`UART_BASE_FALLBACK`], which is a measurement from a *different* SoC
+/// and is honestly labelled unconfirmed, this number was printed by code
+/// running on this exact machine. It is still a fallback: [`crate::discover`]
+/// resolves the ADT first, because a sibling machine or a firmware update may
+/// move it and a hardcoded address that silently stops matching is precisely
+/// the failure mode the ADT path exists to avoid.
+pub const DOCKCHANNEL_BASE_OBSERVED: u64 = 0x2_9E52_8000;
+
+/// Confidence in [`DOCKCHANNEL_BASE_OBSERVED`] for the deployment target.
+pub const DOCKCHANNEL_BASE_CONFIDENCE: Confidence = Confidence::Documented;
