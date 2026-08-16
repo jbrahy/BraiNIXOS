@@ -1,0 +1,96 @@
+Initialized dockchannel UART at 0x29e528000
+Device info:
+  Model: Mac14,12
+  Target: J474s
+  Board-ID: 0x2
+  Chip-ID: 0x6020
+CPU init (MIDR: 0x611f0340 smp_id:0x0)...
+  CPU part: 0x34 rev: 0x10
+  CPU: M2 Pro Blizzard
+boot_args at 0x10002c5c000
+  revision:     3
+  version:      2
+  virt_base:    0x1020000
+  phys_base:    0x10001020000
+  mem_size:     0x794674000
+  top_of_kdata: 0x10002c60000
+  video:
+    base:       0x10799a48000
+    display:    0x1
+    stride:     0xa00
+    width:      640
+    height:     1136
+    depth:      32bpp
+    density:    1
+  machine_type: 0
+  devtree:      0x2448000
+  devtree_size: 0x78000
+  cmdline:      
+  boot_flags:   0x0
+  mem_size_act: 0x800000000
+m1n1 v1.6.1
+Copyright The Asahi Linux Contributors
+Licensed under the MIT license
+Running in EL2
+OS FW version: unknown (iBoot-11881.140.96.701.1)
+System FW version: unknown (mBoot-18000.161.9)
+Heap base: 0x10002c60000
+MCC: Initializing T6020 MCCs (4 instances)...
+MCC: Initialized T6020 MCCs (4 instances, 4 planes, 4 channels)
+MMU: Initializing...
+MMU: RAM base: 0x10000000000
+MMU: Top of normal RAM: 0x10795694000
+MMU: Unmapping TZ0 region at 0x10795694000..0x1079728c000
+MMU: Unmapping TZ2 region at 0x1079b4ec000..0x107ff4ec000
+MMU: Adding Device-nGnRE mapping at 0x5a0000000 (0x20000000)
+MMU: Adding Device-nGnRE mapping at 0x5c0000000 (0x40000000)
+MMU: Adding Device-nGnRE mapping at 0x800000000 (0x200000000)
+MMU: Adding Device-nGnRE mapping at 0xa00000000 (0x80000000)
+MMU: Adding Device-nGnRE mapping at 0xc00000000 (0x200000000)
+MMU: Adding Device-nGnRE mapping at 0xe00000000 (0x80000000)
+MMU: Adding Device-nGnRE mapping at 0x1000000000 (0x200000000)
+MMU: Adding Device-nGnRE mapping at 0x1200000000 (0x80000000)
+MMU: Adding Device-nGnRE mapping at 0x1400000000 (0x200000000)
+MMU: Adding Device-nGnRE mapping at 0x1600000000 (0x80000000)
+MMU: Adding Device-nGnRE mapping at 0x1800000000 (0x400000000)
+MMU: Adding Device-nGnRE mapping at 0x1700000000 (0x100000000)
+MMU: Adding Normal-NC mapping at 0x107fff18000 (0x40000)
+MMU: Adding Normal-NC mapping at 0x107ffeb8000 (0x20000)
+MMU: Adding Normal-NC mapping at 0x107ffe78000 (0x40000)
+MMU: Adding Normal-NC mapping at 0x107ffe18000 (0x20000)
+MMU: Adding Normal-NC mapping at 0x107ffdd8000 (0x40000)
+MMU: Adding Normal-NC mapping at 0x107ffd78000 (0x20000)
+MMU: Adding Normal-NC mapping at 0x107fffb8000 (0x4000)
+MMU: Adding Normal-NC mapping at 0x107fff70000 (0x4000)
+MMU: SCTLR_EL1: 30100180 -> 30901085
+MMU: running with MMU and caches enabled!
+AIC: Version 2 @ 0x28e100000
+AIC: AIC2 with 1/8 dies, 1961/4096 IRQs, reg_size:0c004, config:02000, extintrcfg_stride:04a00, intmaskset_stride:04a00, intmaskclear_stride:04a00
+AIC: Configuring 4 external interrupts
+Primary WDT register @ 0x29e2c4000
+Primary WDT disabled
+Secondary WDT register @ 0x29e2a002c
+Secondary WDT disabled
+pmgr: Cleaning up device states...
+pmgr: initialized, 411 devices on 1 dies found.
+display: Display is external
+display: Dummy framebuffer found, initializing display
+dcp: dtpx-port is only supported with V13_5 OS firmware.
+display: failed to initialize DCP
+fb init: 640x1136 (32) [s=640] @0x10799a48000
+fb console: max rows 35, max cols 40
+fb: display logo
+Initialization complete.
+Checking for payloads...
+Devicetree compatible value: apple,j474s
+Unknown payload at 0x10002628000 (magic: 5b41464b)
+No valid payload found
+dart: dart /arm-io/dart-usb0 at 0x702f80000 is a t8110
+USB0: initialized at 0x100036a2030
+dart: dart /arm-io/dart-usb1 at 0xb02f80000 is a t8110
+USB1: initialized at 0x100036a2360
+dart: dart /arm-io/dart-usb2 at 0xf02f80000 is a t8110
+USB2: initialized at 0x100036a2690
+dart: dart /arm-io/dart-usb3 at 0x1302f80000 is a t8110
+USB3: initialized at 0x100036a29c0
+Running proxy...

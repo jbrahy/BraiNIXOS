@@ -206,6 +206,46 @@ off at entry (§4), so a physical address is directly usable.
   is-silent, so it is not evidence either way. The experiment that discriminates is running code that
   writes `UTXH` — m1n1 or our own stub — after the Permissive Security downgrade.
 
+  ### RESOLVED 2026-08-16: DockChannel. The legacy UART is not the console on this machine.
+
+  m1n1 v1.6.1 was installed as the BraiNIX volume group's boot object and ran. Its first line settles it:
+
+  ```
+  Initialized dockchannel UART at 0x29e528000
+    Model: Mac14,12   Target: J474s   Chip-ID: 0x6020
+    CPU: M2 Pro Blizzard
+  ```
+
+  Full log: [`../operations/logs/m1n1-first-boot-20260816.log`](../operations/logs/m1n1-first-boot-20260816.log).
+
+  **Consequence for AS-1a.** The boot stub writes `UTXH` on a machine whose debug serial is DockChannel.
+  A *correct* implementation of everything in this document therefore emits zero bytes at the host, which
+  is indistinguishable from the stub never running. That is the failure mode this question warned about,
+  and it is now confirmed rather than suspected. The s5l UART work is not wrong; it is inapplicable to
+  `T6020`, and a DockChannel transmitter is required before serial can be an exit criterion.
+
+  **Where m1n1's output actually arrives**, on this rig: not `/dev/cu.debug-console`, but m1n1's own USB
+  gadget over the ordinary USB-C cable, which enumerates two CDC-ACM ports on the workstation
+  (`/dev/cu.usbmodem*`). The first carries the console, the second the proxy. No `macvdmtool serial` is
+  needed for it.
+
+  ### Also resolved: the framebuffer handed to a custom boot object is a dummy
+
+  iBoot does populate `boot_args.video` — `base 0x10799a48000`, `640x1136`, `stride 0xa00`, `32bpp` — so
+  the ADT/boot-args reading in `src/adt` is correct. But m1n1 reports:
+
+  ```
+  display: Dummy framebuffer found, initializing display
+  dcp: dtpx-port is only supported with V13_5 OS firmware.
+  display: failed to initialize DCP
+  fb init: 640x1136 (32) [s=640] @0x10799a48000
+  ```
+
+  The surface exists in memory and is never scanned out; HDMI reads `No Signal` throughout. **Painting it
+  cannot produce anything visible on this machine**, so the stage-stripe scheme in
+  `src/boot-stub-apple/src/paint.rs` was unobservable by construction, however correct the painting code
+  was. Every dark screen attributed to our code across 2026-08-14/15 has this as a sufficient cause.
+
   **Consequence for the plan:** this raises the value of a second, independent first-light output path
   (ROADMAP Track C row C7, framebuffer via `boot_args.video`), because it means a silent console at
   AS-1a's hardware gate has *four* candidate causes rather than three, and the framebuffer path shares

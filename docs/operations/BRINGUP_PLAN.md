@@ -84,6 +84,25 @@ code, and **chainloading — which replaces a ten-minute recovery trip with a on
 **Do not proceed to Phase 2 until m1n1 prints.** This is the rule we broke, and breaking it is what turned
 one bug into twenty hours.
 
+#### Phase 1 passed, 2026-08-16 16:13 PDT
+
+m1n1 v1.6.1 printed 3,738 bytes on its first boot as the BraiNIX volume group's boot object, over its own
+USB gadget rather than `/dev/cu.debug-console`. Log:
+[`logs/m1n1-first-boot-20260816.log`](logs/m1n1-first-boot-20260816.log). It ends `Running proxy...`, so
+Phase 2 is available.
+
+It immediately answered two questions that had each been mistaken for "our code is broken":
+
+1. **The console is DockChannel, not the s5l UART** (`Initialized dockchannel UART at 0x29e528000`). A
+   correct AS-1a stub writing `UTXH` on this machine emits nothing. See
+   [`../platform-specs/apple-s5l-uart.md`](../platform-specs/apple-s5l-uart.md) OQ-5, now resolved.
+2. **The framebuffer given to a custom boot object is a dummy and is never scanned out**
+   (`display: Dummy framebuffer found`, `display: failed to initialize DCP`, HDMI `No Signal`). The
+   stage-stripe scheme was unobservable by construction.
+
+Both output paths the stub was built around are unavailable on this hardware. That is exactly the class of
+fact Phase 1 exists to establish before any of our code is on trial, and it was obtained in one boot.
+
 ### Phase 2 — iterate BraiNIX over the proxy
 
 With m1n1 resident, the loop becomes:
