@@ -96,10 +96,24 @@ printf 'confirmed Permissive\n'
 # ---------------------------------------------------------------------------
 say "6. install the boot object (once, last)"
 # ---------------------------------------------------------------------------
-TARGET="$(diskutil info "$VG" 2>/dev/null | awk -F': *' '/Mount Point/{print $2}')"
-[ -n "$TARGET" ] && [ -d "$TARGET" ] || TARGET=/Volumes/BraiNIX
+# `diskutil info <volume-group-uuid>` describes the group's **Data** volume,
+# whose mount point is /System/Volumes/Data when booted -- not the system
+# volume kmutil wants. Caught by dry-running this on the real machine; the
+# old fallback never fired because that path is a valid directory, so kmutil
+# would have been handed the wrong target and failed obscurely.
+#
+# Resolve by name, then prove the name belongs to the volume group we just
+# downgraded. A mismatch here would point kmutil at the production install.
+TARGET=/Volumes/BraiNIX
+[ -d "$TARGET" ] || TARGET=/
 printf 'target volume: %s\n' "$TARGET"
 [ -d "$TARGET" ] || die "target volume $TARGET is not mounted"
+
+TARGET_VG="$(diskutil info "$TARGET" 2>/dev/null | awk -F': *' '/Volume Group/{print $2}' | tr -d ' ')"
+printf 'target volume group: %s\n' "${TARGET_VG:-<none>}"
+if [ -n "$TARGET_VG" ] && [ "$TARGET_VG" != "$VG" ]; then
+  die "target $TARGET belongs to volume group $TARGET_VG, not $VG -- refusing to install onto the wrong install"
+fi
 
 kmutil configure-boot \
   -c "$PAYLOAD" \
