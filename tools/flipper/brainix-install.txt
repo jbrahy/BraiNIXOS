@@ -1,24 +1,36 @@
 REM BraiNIX boot-object install -- types one line into the recoveryOS Terminal.
 REM
-REM The Flipper is a keyboard and nothing else: it cannot read the screen, and
-REM it cannot hold the power button for One True Recovery. Its whole job is to
-REM remove transcription errors from a long command typed with no shell
-REM history and no copy-paste, which is where two of this project's failures
-REM came from. See docs/operations/BRINGUP_PLAN.md.
+REM The Flipper is a keyboard and nothing else: it cannot read the screen and
+REM cannot hold the power button for One True Recovery. Its job is to remove
+REM transcription errors from a long command typed with no shell history and
+REM no copy-paste, which is where two of this project's failures came from.
+REM See docs/operations/BRINGUP_PLAN.md.
 REM
-REM PRECONDITIONS -- all of them, or this types into the wrong place:
+REM PRECONDITIONS:
 REM   1. The mini is in recoveryOS (hold power -> Options -> Continue).
-REM   2. Utilities -> Terminal is open and FOCUSED.
-REM   3. The Flipper is plugged into the mini, not into the laptop.
-REM   4. as-install-boot-object.sh, the payload, and .admin are on the other
-REM      volume's data partition.
+REM   2. Terminal has been OPENED at least once (Utilities -> Terminal).
+REM      This script focuses it, but cannot open it -- recoveryOS menu
+REM      positions are not stable enough to navigate blind.
+REM   3. The Flipper is plugged into the MINI, not the laptop.
+REM   4. as-install-boot-object.sh, the payload, and .admin are staged on the
+REM      other volume's data partition.
 REM
-REM Everything it runs is in that script, which was reviewed before deployment.
-REM This file deliberately contains no password and no destructive command.
+REM Contains no password and no destructive command. Everything it runs lives
+REM in the shell script, which was reviewed before deployment.
 
-DELAY 3000
-REM Give the Terminal focus time; a dropped first character silently corrupts
-REM the path and the command fails in a way that looks like a missing file.
+DELAY 2000
+
+REM Focus Terminal. Cmd-Tab reaches the most recent other app, which in
+REM recoveryOS is Terminal once it has been opened -- there are only two.
+GUI TAB
+DELAY 1500
+
+REM A stray character before the command would be prepended to the path and
+REM fail as "no such file", which reads like a staging problem rather than a
+REM typing one. Clear the line first so that cannot happen.
+CTRL u
+DELAY 300
+
 STRING sh /Volumes/Data/Users/Shared/brainix-boot/as-install-boot-object.sh
 DELAY 500
 ENTER
