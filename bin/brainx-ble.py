@@ -25,9 +25,16 @@ been losing days to.
 
 # What arming means
 
-The app refuses to type until armed with the OK button on the Flipper itself.
-That is deliberate: everything sent here lands in a root shell. If lines vanish
-with no effect, check the device — `TYPING: disarmed` is the expected reason.
+Everything sent here lands in a root shell. The Flipper's OK button toggles
+arming and it defaults to armed, so an unattended box still works; if lines
+vanish with no effect, the reply will say `error: disarmed`.
+
+# Why replies are read back
+
+The app answers every command on its notify characteristic, including refusals.
+Three wrong conclusions in this bring-up came from treating a successful write
+as delivery — the write succeeding says only that CoreBluetooth queued it. Wait
+for the reply, or you are guessing again.
 """
 
 from __future__ import annotations
@@ -75,6 +82,20 @@ async def writable_characteristic(client: BleakClient):
     return best
 
 
+async def notify_characteristic(client: BleakClient):
+    """Finds the characteristic the app answers on.
+
+    Discovered the same way as the write characteristic, and for the same
+    reason: a hardcoded UUID that has drifted fails ambiguously, which is the
+    failure mode this project has been losing days to.
+    """
+    for service in client.services:
+        for char in service.characteristics:
+            if "notify" in char.properties:
+                return char
+    return None
+
+
 async def send_lines(lines: list[str], address: str | None) -> int:
     device = None
     if address:
@@ -100,6 +121,17 @@ async def send_lines(lines: list[str], address: str | None) -> int:
             return 1
         print(f"writing to {char.uuid}", file=sys.stderr)
 
+        replies: asyncio.Queue[str] = asyncio.Queue()
+
+        def on_notify(_handle, data: bytearray) -> None:
+            replies.put_nowait(data.decode("utf-8", "replace").strip())
+
+        notify = await notify_characteristic(client)
+        if notify is not None:
+            await client.start_notify(notify, on_notify)
+        else:
+            print("no notify characteristic; replies will not be read", file=sys.stderr)
+
         for line in lines:
             payload = (line.rstrip("\n") + "\n").encode()
             # Chunked because the characteristic caps at 243 bytes, and the app
@@ -109,9 +141,23 @@ async def send_lines(lines: list[str], address: str | None) -> int:
                 await client.write_gatt_char(char, payload[start : start + CHUNK], response=False)
                 await asyncio.sleep(0.05)
             print(f"sent: {line}", file=sys.stderr)
-            # Give the Flipper time to type it. At 12 ms per key a long command
-            # takes seconds, and queueing the next line early interleaves them.
-            await asyncio.sleep(max(1.0, len(line) * 0.03))
+
+            if notify is None:
+                # Blind: pace by length so lines do not interleave while typing.
+                await asyncio.sleep(max(1.0, len(line) * 0.03))
+                continue
+            # Wait for the app to answer rather than guessing how long typing
+            # took. The timeout is generous because a long line is ~12 ms per
+            # character; a timeout here is real information, not impatience.
+            try:
+                reply = await asyncio.wait_for(replies.get(), timeout=5.0 + len(line) * 0.05)
+                print(f"  {reply}", file=sys.stderr)
+            except asyncio.TimeoutError:
+                print("  no reply -- the line was not delivered", file=sys.stderr)
+                return 1
+
+        if notify is not None:
+            await client.stop_notify(notify)
     return 0
 
 
