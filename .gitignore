@@ -115,3 +115,7 @@ Icon
 ehthumbs.db
 Desktop.ini
 brainix-disk.img
+
+# Recovery-mode admin credential staged on the mini, never in the repo.
+# bin/as-install-boot-object.sh reads it from the target's disk.
+.admin
