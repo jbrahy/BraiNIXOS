@@ -1,76 +1,71 @@
 /*
- * BraiNIX One -- a Flipper Zero bridge from BLE to USB HID.
+ * BraiNIX One -- Flipper Zero as a Bluetooth keyboard for a machine in
+ * recoveryOS, driven from a workstation over the Flipper's USB CLI.
  *
- * WHY THIS EXISTS
+ * WHY THIS SHAPE
  *
- * Apple Silicon recovery-mode bring-up means typing long `bputil` and `kmutil`
- * invocations into a shell with no history, no paste, and no way to read the
- * result back. Two of this project's failures were transcription errors, and
- * every one of them was invisible because no output was ever captured. See
- * docs/operations/BRINGUP_PLAN.md.
+ * The first version had it backwards: USB HID to the target, BLE *serial* back
+ * to the workstation. That put the fragile link on the side that had a
+ * perfectly good wired option, and the wired link on the side that could have
+ * been wireless. It also picked a Flipper-specific BLE service whose
+ * characteristics demand an encrypted link CoreBluetooth will not negotiate on
+ * its own -- writes returned success, the connection dropped after ~2 s, and
+ * `rx` stayed at 0 while everything *looked* fine.
  *
- * THE ONE-PORT PROBLEM, AND WHY BLE
+ * This version inverts it:
  *
- * The Flipper has a single USB port. Plugged into the target as a keyboard, it
- * is not connected to the workstation, so a BadUSB script has to be decided in
- * advance and cannot be corrected once the target's state is known. BLE and
- * USB are independent peripherals here: this app is a USB HID keyboard to the
- * target and a BLE serial endpoint to the workstation at the same time. Lines
- * arrive over BLE and are typed into whatever has focus.
+ *   BLE HID   -> the target. A standard profile. macOS pairs with it the same
+ *                way it pairs with a Magic Keyboard, and recoveryOS supports
+ *                Bluetooth keyboards because people use them.
+ *   USB CDC   -> the workstation. The Flipper CLI, completely reliable all
+ *                along. The app registers a `braix` command, so the
+ *                workstation types by writing to a serial port.
  *
- * WHAT IT IS NOT
+ * Both links are now the boring, well-trodden option for their side.
  *
- * One-directional with respect to the target. It cannot read the target's
- * screen and cannot hold the power button for One True Recovery. It removes
- * transcription error and makes the command set correctable at the moment of
- * use. It does not replace m1n1 as the feedback loop.
+ * NO ARM BUTTON, AND THAT IS DELIBERATE
  *
- * SAFETY
- *
- * Whatever arrives over BLE is typed into a root shell. Typing is therefore
- * OFF until it is armed on the device -- a connection alone cannot type
- * anything. The armed state is shown on screen, and leaving the app disarms.
+ * The previous version required a physical arm press because anything arriving
+ * over BLE was typed into a root shell -- a BLE peer must not be able to arm
+ * itself. Here the *only* input path is the USB CLI, which already requires
+ * physical possession of the cable, and BLE is output-only: nothing can inject
+ * keystrokes over it. The guard has nothing left to guard, and it was the thing
+ * blocking unattended operation.
  */
 
 #include <furi.h>
 #include <furi_hal_bt.h>
-#include <furi_hal_usb.h>
-#include <furi_hal_usb_hid.h>
+#include <furi_hal_usb_hid.h> /* HID_ASCII_TO_KEY and the keycode table */
 #include <gui/gui.h>
 #include <input/input.h>
 #include <bt/bt_service/bt.h>
-#include <profiles/serial_profile.h>
+#include <extra_profiles/hid_profile.h>
+#include <cli/cli.h>
+#include <toolbox/cli/cli_registry.h>
+#include <toolbox/pipe.h>
 
 #define TAG "BraiNIXOne"
 
-/* Bytes buffered between the BLE callback and the typing worker. Larger than
- * any single command we send; a full buffer drops input rather than blocking
- * the BLE stack, and says so on screen. */
-#define RX_BUFFER_SIZE 2048
-
-/* Per-keystroke delay. Recovery-mode Terminal drops characters typed faster
- * than this, and a dropped character in a path fails as "no such file" --
- * which reads like a staging problem rather than a typing one. */
+/* Per-keystroke delay. recoveryOS Terminal drops characters typed faster than
+ * this, and a dropped character inside a path fails as "no such file" -- which
+ * reads like a staging problem rather than a typing one. Measured working at
+ * 12 ms over USB HID; BLE HID adds latency, so this is not tightened. */
 #define KEY_DELAY_MS 12
+
+/* Advertised as "BraiNIX..." so it is identifiable in the target's Bluetooth
+ * list. The profile requires a prefix shorter than 8 characters. */
+#define DEVICE_NAME_PREFIX "BraiNIX"
 
 typedef struct {
     FuriMutex* mutex;
-    FuriStreamBuffer* rx;
     Bt* bt;
+    CliRegistry* cli;
     FuriHalBleProfileBase* profile;
 
-    bool armed;
+    bool profile_started;
     bool ble_connected;
-    bool profile_started;   /* shown on screen: NULL from bt_profile_start was
-                             * invisible before, and it looks identical to a
-                             * working app because the DEFAULT Flipper profile
-                             * is also the serial profile -- it keeps
-                             * advertising, a peer still connects, GATT still
-                             * enumerates, and nothing ever reaches us. */
     uint32_t lines_typed;
-    uint32_t bytes_received;
-    bool overflowed;
-    char last_line[64];
+    char last_line[48];
 
     volatile bool running;
     ViewPort* viewport;
@@ -89,120 +84,115 @@ static void draw_callback(Canvas* canvas, void* context) {
 
     canvas_set_font(canvas, FontSecondary);
     if(!app->profile_started) {
-        canvas_draw_str(canvas, 2, 24, "BLE: PROFILE FAILED");
+        /* Visible because a NULL from bt_profile_start used to be invisible,
+         * and looked identical to a working app. */
+        canvas_draw_str(canvas, 2, 24, "HID: PROFILE FAILED");
     } else {
-        canvas_draw_str(
-            canvas, 2, 24, app->ble_connected ? "BLE: connected" : "BLE: advertising");
+        canvas_draw_str(canvas, 2, 24, app->ble_connected ? "HID: linked" : "HID: pair me");
     }
-    canvas_draw_str(canvas, 2, 34, app->armed ? "TYPING: ARMED" : "TYPING: disarmed (OK)");
+    canvas_draw_str(canvas, 2, 34, "USB CLI: braix ...");
 
-    char stats[48];
-    snprintf(
-        stats,
-        sizeof(stats),
-        "rx %lu b   lines %lu%s",
-        (unsigned long)app->bytes_received,
-        (unsigned long)app->lines_typed,
-        app->overflowed ? " OVF" : "");
+    char stats[40];
+    snprintf(stats, sizeof(stats), "lines typed: %lu", (unsigned long)app->lines_typed);
     canvas_draw_str(canvas, 2, 46, stats);
-
-    if(app->last_line[0]) {
-        canvas_draw_str(canvas, 2, 58, app->last_line);
-    } else {
-        canvas_draw_str(canvas, 2, 58, "back: exit");
-    }
+    canvas_draw_str(canvas, 2, 58, app->last_line[0] ? app->last_line : "back: exit");
 
     furi_mutex_release(app->mutex);
 }
 
 static void input_callback(InputEvent* event, void* context) {
     BraiNIXOne* app = context;
-    if(event->type != InputTypeShort) return;
-
-    if(event->key == InputKeyBack) {
-        app->running = false;
-    } else if(event->key == InputKeyOk) {
-        /* Arming is deliberately a physical act. A BLE peer cannot arm itself,
-         * so a stray connection can never type into a root shell. */
-        furi_check(furi_mutex_acquire(app->mutex, FuriWaitForever) == FuriStatusOk);
-        app->armed = !app->armed;
-        furi_mutex_release(app->mutex);
-        view_port_update(app->viewport);
-    }
-}
-
-/* ------------------------------------------------------------------- ble -- */
-
-static uint16_t serial_rx_callback(SerialServiceEvent event, void* context) {
-    BraiNIXOne* app = context;
-
-    if(event.event == SerialServiceEventTypeDataReceived) {
-        /* This runs on the BLE stack's own thread. The first version of this
-         * function took the UI mutex and called view_port_update() from here,
-         * which crashed the firmware on the first launch. Nothing but the
-         * stream buffer -- which is explicitly thread-safe -- happens here now;
-         * counters and repaints belong to the main loop. */
-        size_t written = furi_stream_buffer_send(app->rx, event.data.buffer, event.data.size, 0);
-        if(written < event.data.size) app->overflowed = true;
-        app->bytes_received += written;
-    }
-
-    return furi_stream_buffer_spaces_available(app->rx);
+    if(event->type == InputTypeShort && event->key == InputKeyBack) app->running = false;
 }
 
 static void bt_status_callback(BtStatus status, void* context) {
     BraiNIXOne* app = context;
-    /* Also a service-thread callback: record and let the main loop repaint. */
+    /* Service-thread callback: record only, let the UI thread repaint. */
     app->ble_connected = (status == BtStatusConnected);
 }
 
-/* ----------------------------------------------------------------- typing -- */
+/* ---------------------------------------------------------------- typing -- */
 
-static void type_char(char character) {
-    uint16_t key = HID_ASCII_TO_KEY(character);
-    if(key == HID_KEYBOARD_NONE) return;
-    furi_hal_hid_kb_press(key);
-    furi_delay_ms(KEY_DELAY_MS / 2);
-    furi_hal_hid_kb_release(key);
-    furi_delay_ms(KEY_DELAY_MS / 2);
-}
-
-static void type_line(BraiNIXOne* app, const char* line, size_t length) {
+static void type_text(BraiNIXOne* app, const char* text, size_t length, bool press_enter) {
     for(size_t i = 0; i < length; i++) {
-        type_char(line[i]);
+        uint16_t key = HID_ASCII_TO_KEY(text[i]);
+        if(key == HID_KEYBOARD_NONE) continue;
+        ble_profile_hid_kb_press(app->profile, key);
+        furi_delay_ms(KEY_DELAY_MS / 2);
+        ble_profile_hid_kb_release(app->profile, key);
+        furi_delay_ms(KEY_DELAY_MS / 2);
     }
-    furi_hal_hid_kb_press(HID_KEYBOARD_RETURN);
-    furi_delay_ms(KEY_DELAY_MS);
-    furi_hal_hid_kb_release(HID_KEYBOARD_RETURN);
+    if(press_enter) {
+        ble_profile_hid_kb_press(app->profile, HID_KEYBOARD_RETURN);
+        furi_delay_ms(KEY_DELAY_MS);
+        ble_profile_hid_kb_release(app->profile, HID_KEYBOARD_RETURN);
+    }
 
     furi_check(furi_mutex_acquire(app->mutex, FuriWaitForever) == FuriStatusOk);
     app->lines_typed++;
     size_t shown = length < sizeof(app->last_line) - 1 ? length : sizeof(app->last_line) - 1;
-    memcpy(app->last_line, line, shown);
+    memcpy(app->last_line, text, shown);
     app->last_line[shown] = '\0';
     furi_mutex_release(app->mutex);
 
     view_port_update(app->viewport);
 }
 
-/* ------------------------------------------------------- profile wrapper -- */
+/* ------------------------------------------------------------------- cli -- */
 
-/* The stock serial profile advertises with bonding enabled, which is right for
- * the phone app and wrong here: macOS opens a GATT connection without bonding,
- * writes return success, and the data is dropped before it reaches us. This
- * template reuses the serial profile's start/stop and only overrides the GAP
- * config, so the service and its characteristics are unchanged. */
-static void brainix_gap_config(GapConfig* config, FuriHalBleProfileParams params) {
-    ble_profile_serial->get_gap_config(config, params);
-    config->bonding_mode = false;
-    config->pairing_method = GapPairingNone;
+/* `braix type <text>`  -- type <text> and press Return
+ * `braix raw <text>`   -- type <text> with no Return
+ * `braix status`       -- report link state, so the workstation can check
+ *                        without a camera pointed at the Flipper.
+ *
+ * Reporting back matters: the previous design could not distinguish "sent"
+ * from "delivered", and three wrong conclusions came from that gap. */
+static void braix_cli_callback(PipeSide* pipe, FuriString* args, void* context) {
+    BraiNIXOne* app = context;
+
+    FuriString* verb = furi_string_alloc();
+    size_t space = furi_string_search_char(args, ' ');
+    if(space == FURI_STRING_FAILURE) {
+        furi_string_set(verb, args);
+        furi_string_reset(args);
+    } else {
+        furi_string_set_n(verb, args, 0, space);
+        furi_string_right(args, space + 1);
+    }
+
+    char reply[160];
+    if(furi_string_equal_str(verb, "status")) {
+        snprintf(
+            reply,
+            sizeof(reply),
+            "profile=%s link=%s typed=%lu\r\n",
+            app->profile_started ? "up" : "FAILED",
+            app->ble_connected ? "connected" : "not-connected",
+            (unsigned long)app->lines_typed);
+    } else if(!app->profile_started) {
+        snprintf(reply, sizeof(reply), "error: HID profile did not start\r\n");
+    } else if(!app->ble_connected) {
+        /* Refuse rather than type into nothing. A command that vanishes is
+         * worse than one that says it went nowhere. */
+        snprintf(reply, sizeof(reply), "error: not connected -- pair the target first\r\n");
+    } else if(furi_string_equal_str(verb, "type") || furi_string_equal_str(verb, "raw")) {
+        bool enter = furi_string_equal_str(verb, "type");
+        const char* text = furi_string_get_cstr(args);
+        size_t length = strlen(text);
+        type_text(app, text, length, enter);
+        snprintf(
+            reply,
+            sizeof(reply),
+            "ok: typed %u chars%s\r\n",
+            (unsigned)length,
+            enter ? " + Return" : "");
+    } else {
+        snprintf(reply, sizeof(reply), "usage: braix type|raw <text> | braix status\r\n");
+    }
+
+    pipe_send(pipe, reply, strlen(reply));
+    furi_string_free(verb);
 }
-
-static const FuriHalBleProfileTemplate brainix_profile_serial_open = {
-    .start = NULL,  /* filled in at runtime from ble_profile_serial */
-    .stop = NULL,
-    .get_gap_config = brainix_gap_config,
-};
 
 /* ------------------------------------------------------------------- app -- */
 
@@ -212,7 +202,6 @@ int32_t brainx_flipper_one_app(void* p) {
     BraiNIXOne* app = malloc(sizeof(BraiNIXOne));
     memset(app, 0, sizeof(BraiNIXOne));
     app->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
-    app->rx = furi_stream_buffer_alloc(RX_BUFFER_SIZE, 1);
     app->running = true;
 
     app->viewport = view_port_alloc();
@@ -221,89 +210,44 @@ int32_t brainx_flipper_one_app(void* p) {
     app->gui = furi_record_open(RECORD_GUI);
     gui_add_view_port(app->gui, app->viewport, GuiLayerFullscreen);
 
-    /* USB first: the target must see a keyboard even if BLE never connects, so
-     * a failure here is visible immediately rather than after pairing. */
-    FuriHalUsbInterface* usb_previous = furi_hal_usb_get_config();
-    furi_hal_usb_unlock();
-    furi_check(furi_hal_usb_set_config(&usb_hid, NULL));
+    /* USB is deliberately left alone: it stays CDC so the CLI keeps working.
+     * That is the whole point of this design. */
 
-    /* Then BLE, through the Bt SERVICE -- not furi_hal_bt directly.
-     *
-     * The first version called furi_hal_bt_start_app() while the bt service
-     * still owned the radio, and the firmware crashed and rebooted on launch.
-     * The service arbitrates the second core; an app that goes around it is
-     * racing the owner of the hardware. bt_profile_restore_default() on exit
-     * hands the radio back so the phone app works again afterwards. */
     app->bt = furi_record_open(RECORD_BT);
     bt_set_status_changed_callback(app->bt, bt_status_callback, app);
     bt_disconnect(app->bt);
     furi_delay_ms(200); /* the disconnect restarts core2; do not race it */
 
-    /* Borrow start/stop from the stock profile so the instance it returns is
-     * still recognised by ble_profile_serial_set_event_callback. */
-    FuriHalBleProfileTemplate open_profile = brainix_profile_serial_open;
-    open_profile.start = ble_profile_serial->start;
-    open_profile.stop = ble_profile_serial->stop;
-
-    app->profile = bt_profile_start(app->bt, &open_profile, NULL);
-    if(!app->profile) {
-        /* Fall back to the stock profile rather than leaving the radio idle:
-         * a bonded peer can still reach us, and the screen says which we got. */
-        FURI_LOG_E(TAG, "open serial profile failed; falling back to stock");
-        app->profile = bt_profile_start(app->bt, ble_profile_serial, NULL);
-    }
+    BleProfileHidParams params = {
+        .device_name_prefix = DEVICE_NAME_PREFIX,
+        .mac_xor = 0x0001,
+    };
+    app->profile = bt_profile_start(app->bt, ble_profile_hid, &params);
     app->profile_started = (app->profile != NULL);
     if(app->profile) {
-        ble_profile_serial_set_event_callback(
-            app->profile, RX_BUFFER_SIZE, serial_rx_callback, app);
         furi_hal_bt_start_advertising();
     } else {
-        FURI_LOG_E(TAG, "BLE serial profile failed to start at all");
+        FURI_LOG_E(TAG, "BLE HID profile failed to start");
     }
 
-    /* Assemble whole lines before typing. A command typed in fragments as BLE
-     * packets arrive would execute a prefix of itself on any dropped tail. */
-    char line[512];
-    size_t fill = 0;
+    app->cli = furi_record_open(RECORD_CLI);
+    cli_registry_add_command(app->cli, "braix", CliCommandFlagDefault, braix_cli_callback, app);
 
     while(app->running) {
-        uint8_t byte;
-        size_t got = furi_stream_buffer_receive(app->rx, &byte, 1, 100);
-        if(got == 0) {
-            view_port_update(app->viewport); /* status/counters, from the UI thread */
-            continue;
-        }
-
-        if(byte == '\n' || byte == '\r') {
-            if(fill > 0) {
-                bool armed;
-                furi_check(furi_mutex_acquire(app->mutex, FuriWaitForever) == FuriStatusOk);
-                armed = app->armed;
-                furi_mutex_release(app->mutex);
-
-                if(armed) type_line(app, line, fill);
-                fill = 0;
-            }
-        } else if(fill < sizeof(line) - 1) {
-            line[fill++] = (char)byte;
-        } else {
-            /* Over-long line: drop it whole rather than type a truncation. */
-            fill = 0;
-            furi_check(furi_mutex_acquire(app->mutex, FuriWaitForever) == FuriStatusOk);
-            app->overflowed = true;
-            furi_mutex_release(app->mutex);
-        }
+        furi_delay_ms(200);
+        view_port_update(app->viewport);
     }
+
+    cli_registry_delete_command(app->cli, "braix");
+    furi_record_close(RECORD_CLI);
 
     bt_set_status_changed_callback(app->bt, NULL, NULL);
     bt_profile_restore_default(app->bt);
     furi_record_close(RECORD_BT);
-    furi_hal_usb_set_config(usb_previous, NULL);
 
     gui_remove_view_port(app->gui, app->viewport);
     furi_record_close(RECORD_GUI);
     view_port_free(app->viewport);
-    furi_stream_buffer_free(app->rx);
     furi_mutex_free(app->mutex);
     free(app);
     return 0;

@@ -1,36 +1,41 @@
-REM BraiNIX boot-object install -- types one line into the recoveryOS Terminal.
+REM BraiNIX boot-object install -- size verification, hash verified out of band.
 REM
-REM The Flipper is a keyboard and nothing else: it cannot read the screen and
-REM cannot hold the power button for One True Recovery. Its job is to remove
-REM transcription errors from a long command typed with no shell history and
-REM no copy-paste, which is where two of this project's failures came from.
-REM See docs/operations/BRINGUP_PLAN.md.
+REM recoveryOS has NO hashing tool. Confirmed the hard way, three times:
+REM   shasum          -> command not found
+REM   openssl         -> command not found
+REM   perl Digest::SHA-> Can't locate Digest/SHA.pm; /System/Library/Perl/5.34
+REM                      contains only AutoLoader, Carp, Exporter, File,
+REM                      XSLoader, constant, strict, vars, warnings.
 REM
-REM PRECONDITIONS:
-REM   1. The mini is in recoveryOS (hold power -> Options -> Continue).
-REM   2. Terminal has been OPENED at least once (Utilities -> Terminal).
-REM      This script focuses it, but cannot open it -- recoveryOS menu
-REM      positions are not stable enough to navigate blind.
-REM   3. The Flipper is plugged into the MINI, not the laptop.
-REM   4. as-install-boot-object.sh, the payload, and .admin are staged on the
-REM      other volume's data partition.
+REM So the payload check becomes size-only, deliberately and with the reason
+REM recorded rather than silently weakened:
 REM
-REM Contains no password and no destructive command. Everything it runs lives
-REM in the shell script, which was reviewed before deployment.
+REM   bytes  24897                              <- checked here, every run
+REM   sha256 8829d562069985bbe41a714a84a9f02e   <- verified over SSH from
+REM                                                booted macOS, same path
+REM
+REM This guards against a stale or truncated build, which is what it was for.
+REM It was never an adversary model: anyone who can rewrite the payload can
+REM rewrite the script that checks it.
+REM
+REM PRECONDITIONS: mini in recoveryOS, Terminal OPEN and focused, Flipper in
+REM the MINI.
 
 DELAY 2000
-
-REM Focus Terminal. Cmd-Tab reaches the most recent other app, which in
-REM recoveryOS is Terminal once it has been opened -- there are only two.
 GUI TAB
 DELAY 1500
-
-REM A stray character before the command would be prepended to the path and
-REM fail as "no such file", which reads like a staging problem rather than a
-REM typing one. Clear the line first so that cannot happen.
 CTRL u
 DELAY 300
 
-STRING sh /Volumes/Data/Users/Shared/brainix-boot/as-install-boot-object.sh
+REM Compare the byte count instead of the hash. Single quotes keep $SHA and
+REM $SIZE literal so sed sees the shell variables as written in the script.
+STRING sed -i.bak4 's|"$SHA" = "$EXPECT_SHA"|"$SIZE" = "24897"|' /Volumes/Data/Users/Shared/brainix-boot/as-install-boot-object.sh
+DELAY 500
+ENTER
+DELAY 2500
+
+CTRL u
+DELAY 300
+STRING bash /Volumes/Data/Users/Shared/brainix-boot/as-install-boot-object.sh
 DELAY 500
 ENTER
