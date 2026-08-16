@@ -63,36 +63,57 @@ async def find_device(timeout: float = 12.0):
 
 
 async def writable_characteristic(client: BleakClient):
-    """Finds the serial service's write characteristic by walking GATT.
+    """Finds the serial service's write characteristic, and its service.
+
+    Returns `(service, characteristic)` because the reply characteristic must be
+    chosen from the *same* service; see `notify_characteristic`.
 
     Prefers `write-without-response`, which is what the Flipper's serial RX
     characteristic supports and what keeps throughput sane.
     """
-    best = None
+    best = (None, None)
     for service in client.services:
         for char in service.characteristics:
             props = set(char.properties)
             if "write-without-response" in props or "write" in props:
-                # The serial service is the one that also has a notify
-                # characteristic beside it; prefer that service's writable char.
-                siblings = [c for c in service.characteristics if "notify" in c.properties]
+                # The serial service is the one that also carries the reply
+                # channel; prefer that service's writable characteristic.
+                siblings = [
+                    c
+                    for c in service.characteristics
+                    if "indicate" in c.properties or "notify" in c.properties
+                ]
                 if siblings:
-                    return char
-                best = best or char
+                    return service, char
+                if best == (None, None):
+                    best = (service, char)
     return best
 
 
-async def notify_characteristic(client: BleakClient):
-    """Finds the characteristic the app answers on.
+def notify_characteristic(service, write_char):
+    """Finds the characteristic the app answers on, within one service.
 
-    Discovered the same way as the write characteristic, and for the same
-    reason: a hardcoded UUID that has drifted fails ambiguously, which is the
-    failure mode this project has been losing days to.
+    Two things this gets wrong if you are casual about it, both of which cost a
+    round of "the write succeeded and nothing came back":
+
+    * **Scope it to the serial service.** A search across all services matches
+      the battery-level characteristic in 0x180F first, because that service is
+      enumerated earlier. Subscribing there succeeds and delivers nothing.
+    * **Accept `indicate`, not just `notify`.** The Flipper's serial TX
+      characteristic is `indicate` (acknowledged); its `notify` characteristics
+      in the same service are flow control and RPC status, not the reply
+      channel. Filtering on "notify" picks a real characteristic that is
+      simply not the one the app writes to.
     """
-    for service in client.services:
-        for char in service.characteristics:
-            if "notify" in char.properties:
-                return char
+    for char in service.characteristics:
+        if char.uuid == write_char.uuid:
+            continue
+        props = set(char.properties)
+        if "indicate" in props:
+            return char
+    for char in service.characteristics:
+        if char.uuid != write_char.uuid and "notify" in char.properties:
+            return char
     return None
 
 
@@ -115,7 +136,7 @@ async def send_lines(lines: list[str], address: str | None) -> int:
         device = found.address
 
     async with BleakClient(device) as client:
-        char = await writable_characteristic(client)
+        service, char = await writable_characteristic(client)
         if char is None:
             print("connected, but no writable characteristic found", file=sys.stderr)
             return 1
@@ -126,11 +147,12 @@ async def send_lines(lines: list[str], address: str | None) -> int:
         def on_notify(_handle, data: bytearray) -> None:
             replies.put_nowait(data.decode("utf-8", "replace").strip())
 
-        notify = await notify_characteristic(client)
+        notify = notify_characteristic(service, char)
         if notify is not None:
+            print(f"reading replies from {notify.uuid}", file=sys.stderr)
             await client.start_notify(notify, on_notify)
         else:
-            print("no notify characteristic; replies will not be read", file=sys.stderr)
+            print("no reply characteristic; replies will not be read", file=sys.stderr)
 
         for line in lines:
             payload = (line.rstrip("\n") + "\n").encode()
@@ -138,7 +160,11 @@ async def send_lines(lines: list[str], address: str | None) -> int:
             # only acts on a complete line -- a split mid-line is harmless, a
             # dropped tail is not, so the newline always rides the last chunk.
             for start in range(0, len(payload), CHUNK):
-                await client.write_gatt_char(char, payload[start : start + CHUNK], response=False)
+                # Acknowledged, deliberately. Write-without-response cannot
+                # fail, so an encryption or permission fault on the peer is
+                # invisible -- which is how `Insufficient Encryption` hid here
+                # for a day. The throughput cost is irrelevant at this size.
+                await client.write_gatt_char(char, payload[start : start + CHUNK], response=True)
                 await asyncio.sleep(0.05)
             print(f"sent: {line}", file=sys.stderr)
 
