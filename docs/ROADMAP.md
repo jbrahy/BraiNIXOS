@@ -426,10 +426,11 @@ discharges one of AS-5-T0's five signed preconditions on a laptop.
     | MMU table walk | **done** — our walker and the MMU's own `AT s1e2r` resolve the same address on the live tables |
     | `TTBR` programming and TLB maintenance | **done** — `TTBR0_EL2` pointed at a root table this image placed, read back through it, restored |
     | Image4 / `kmutil` delivery | **done** — this is how m1n1 and the stub were installed |
-    | Generic timer | **half** — `CNTFRQ_EL0` measured at 24 MHz and the counter reads; no interrupt path |
-    | Own table *construction* | not started |
+    | Generic timer | **counting and comparison done** — armed for 24,000 ticks (1 ms) at the measured 24 MHz and fired after **24,002**, two ticks over. Armed with `IMASK` set, so the comparator fires without signalling: that separates *does the timer count and compare* from *does an interrupt get delivered*, and the first needs no AIC. Delivery is the remaining half |
+    | Own table construction | **done** — `aarch64_tables` builds, `aarch64_walk` resolves, and the walker is the one the MMU validated. Blocks at the one level per granule the architecture permits (2 MiB / 32 MiB / 512 MiB) |
     | EL2→EL1, SVC entry | not started |
     | RNDR/PAC-BTI, watchdog reset, secondary-CPU release | not started |
+    | Timer *interrupt delivery* | not started — needs the AIC |
 
     Every "done" above means *observed on the target*, not *written*. Reproduce with
     `kernel_probe` through m1n1's proxy; see [`operations/FIRST_LIGHT_RUNBOOK.md`](operations/FIRST_LIGHT_RUNBOOK.md) §9b.
