@@ -911,6 +911,25 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
                 put(15, doorbells);
                 put(16, ticks);
                 put(17, brainix_kernel::arch::aarch64::smp::report()[5]);
+
+                // Real work on the other core. `sum(1..=1000)` is 500500, which
+                // the boot core knows without running it -- so a wrong answer is
+                // distinguishable from no answer.
+                use brainix_kernel::arch::aarch64::smp;
+                let hz = brainix_kernel::arch::aarch64::registers::counter_frequency_hz();
+                // SAFETY: the target is parked in the dispatch loop, and the
+                // posted function touches no memory, so it is safe to run on a
+                // core with the MMU and caches off.
+                let dispatched =
+                    unsafe { smp::dispatch(released.mpidr, smp::secondary_sum_address(), 1, 1000, hz) };
+                match dispatched {
+                    Some((result, ticks)) => {
+                        put(18, 1);
+                        put(19, result);
+                        put(20, ticks);
+                    }
+                    None => put(18, 0),
+                }
             }
         }
         _ => {}

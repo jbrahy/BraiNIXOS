@@ -551,6 +551,14 @@ else:
     print("  rang 4, observed %d   after %d ticks (%.1f us at 24 MHz)"
           % (bells, bell_ticks, bell_ticks / 24.0))
     print("  IPI_SR_EL1 seen  0x%016x  pending bit %d" % (ipi_sr, ipi_sr & 1))
+    ok_disp, result, disp_ticks = d(18), d(19), d(20)
+    print("  -- work dispatched to the other core --")
+    if ok_disp:
+        print("  sum(1..=1000)    %d  (expected 500500)  %s"
+              % (result, "CORRECT" if result == 500500 else "WRONG"))
+        print("  round trip       %d ticks (%.1f us at 24 MHz)" % (disp_ticks, disp_ticks / 24.0))
+    else:
+        print("  dispatch TIMED OUT")
 
 # The MPIDR is the check that matters. A magic word only proves something wrote
 # the buffer; a DIFFERENT affinity proves it was a different core.
@@ -558,11 +566,13 @@ else:
 # advance before the next, so a coalesced pair cannot be counted twice.
 smp_ok = (rv_ok == 1 and started == 1 and s_mpidr != 0
           and (s_mpidr & 0xFFFFFF) != (r(5) & 0xFFFFFF)
-          and d(15) == 4 and (d(17) & 1) == 1)
+          and d(15) == 4 and (d(17) & 1) == 1
+          and d(18) == 1 and d(19) == 500500)
 print()
 if smp_ok:
     print("  OK: a second core came out of reset into our code, reported an MPIDR")
-    print("      that is not the boot core's, and answered four doorbells.")
+    print("      that is not the boot core's, answered four doorbells, and ran")
+    print("      dispatched work returning the right answer.")
 else:
     print("  SECONDARY NOT PROVEN. See the lines above.")
 

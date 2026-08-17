@@ -132,10 +132,43 @@ brainix_secondary_entry:
     add  x3, x3, #1
     str  x3, [x0, #32]
     dsb  sy
+
+    // Is there work, or was this doorbell only a wake?
+    adrp x4, {work}
+    add  x4, x4, :lo12:{work}
+    ldr  x5, [x4, #0]           // request sequence
+    ldr  x6, [x4, #40]          // completion sequence
+    cmp  x5, x6
+    b.eq 1b
+
+    // A stack, established here rather than at entry because nothing before
+    // this point needed one and a core that never runs work never touches it.
+    adrp x7, {stack}
+    add  x7, x7, :lo12:{stack}
+    add  x7, x7, #16384
+    mov  sp, x7
+
+    ldr  x8, [x4, #8]           // function
+    ldr  x0, [x4, #16]          // arg0
+    ldr  x1, [x4, #24]          // arg1
+    blr  x8
+    // Result first, then the sequence that publishes it. A reader that sees
+    // the sequence match is guaranteed to see this store.
+    str  x0, [x4, #32]
+    dsb  sy
+    str  x5, [x4, #40]
+    dsb  sy
+
+    // x0 was the report base and the call clobbered it. Recover it rather than
+    // carrying it in a callee-saved register the callee is entitled to use.
+    adrp x0, {report}
+    add  x0, x0, :lo12:{report}
     b 1b
 .balign 16384
 "#,
     report = sym SECONDARY_REPORT,
+    work = sym WORK,
+    stack = sym SECONDARY_STACK,
 );
 
 extern "C" {
@@ -159,6 +192,47 @@ static SECONDARY_REPORT: [AtomicU64; 6] = [
     // tell "never woken" from "woken a poison-sized number of times".
     AtomicU64::new(0),
     AtomicU64::new(REPORT_POISON),
+];
+
+/// Stack for the secondary, so it can call Rust.
+///
+/// A core out of reset has no stack. Everything it has done so far -- record
+/// four registers, park, count doorbells -- fits in registers, which is why the
+/// loop needed none. Running arbitrary work does not.
+///
+/// In `.bss`, which the boot core zeroes at entry. That is not a requirement --
+/// a stack does not care what was in it -- but it does mean the whole region is
+/// touched before the secondary reaches it, so no page is first-touched by a
+/// core running with its MMU off.
+#[repr(align(16384))]
+struct SecondaryStack([u8; 16384]);
+
+static mut SECONDARY_STACK: SecondaryStack = SecondaryStack([0; 16384]);
+
+/// The work slot the two cores share.
+///
+/// | index | meaning |
+/// | --- | --- |
+/// | 0 | request sequence, incremented by the boot core |
+/// | 1 | function pointer |
+/// | 2 | first argument |
+/// | 3 | second argument |
+/// | 4 | return value |
+/// | 5 | completion sequence, written by the secondary |
+///
+/// **The sequence pair is what makes this safe without a lock.** The boot core
+/// writes the function and arguments *first*, then bumps the request; the
+/// secondary copies the result *first*, then matches the completion to the
+/// request it served. A reader that sees `completion == request` is guaranteed
+/// to see the result that request produced, and a doorbell that arrives twice
+/// for one request is idempotent rather than a double execution.
+static WORK: [AtomicU64; 6] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
 ];
 
 /// Address the released core begins executing at.
@@ -418,4 +492,81 @@ pub unsafe fn release(cpu: &Cpu, start_base: u64, timeout_ticks: u64) -> Seconda
     result.exception_level = (values[2] >> 2) & 0b11;
     result.sctlr = values[3];
     result
+}
+
+/// Posts one unit of work to a parked core and waits for it.
+///
+/// `function` must be a `extern "C" fn(u64, u64) -> u64` that runs correctly on
+/// a core with **the MMU off and caches off**. That is a real constraint, not a
+/// formality: it may not touch anything the boot core has left dirty in cache,
+/// and every address it uses is physical.
+///
+/// Returns `(result, ticks waited)`, or `None` on timeout.
+///
+/// # Safety
+///
+/// Runs `function` on another CPU. It must be safe to execute there under the
+/// conditions above, and `target_mpidr` must name the core parked in
+/// [`secondary_entry_address`]'s loop.
+pub unsafe fn dispatch(
+    target_mpidr: u64,
+    function: u64,
+    arg0: u64,
+    arg1: u64,
+    timeout_ticks: u64,
+) -> Option<(u64, u64)> {
+    let request = WORK[0].load(Ordering::Relaxed).wrapping_add(1);
+    // Function and arguments before the request that publishes them. The
+    // secondary reads the request first and only then the rest, so this order
+    // is what makes the pair a handshake rather than a race.
+    WORK[1].store(function, Ordering::Relaxed);
+    WORK[2].store(arg0, Ordering::Relaxed);
+    WORK[3].store(arg1, Ordering::Relaxed);
+    WORK[0].store(request, Ordering::Release);
+
+    let work_address = WORK.as_ptr() as u64;
+    // SAFETY: `WORK` is in this image and the secondary reads it with its MMU
+    // off, so it must be visible at the point of coherency before the doorbell.
+    unsafe {
+        clean_to_coherency(work_address, 48);
+        ring(target_mpidr);
+    }
+
+    let start = super::registers::physical_counter();
+    loop {
+        // SAFETY: as above -- the secondary's stores bypass this core's cache.
+        unsafe { refresh_from_memory(work_address, 48) };
+        if WORK[5].load(Ordering::Acquire) == request {
+            return Some((
+                WORK[4].load(Ordering::Relaxed),
+                super::registers::physical_counter().wrapping_sub(start),
+            ));
+        }
+        if super::registers::physical_counter().wrapping_sub(start) > timeout_ticks {
+            return None;
+        }
+    }
+}
+
+/// A work item that proves the mechanism: sums `start..start + count`.
+///
+/// Chosen because its answer is checkable in closed form -- the boot core knows
+/// what it should be without running it -- so a wrong result is distinguishable
+/// from no result. It touches no memory, which keeps this test about dispatch
+/// rather than about cache coherency, and it is `extern "C"` because the stub
+/// calls it through a raw pointer.
+#[no_mangle]
+pub extern "C" fn brainix_secondary_sum(start: u64, count: u64) -> u64 {
+    let mut total = 0u64;
+    let mut index = 0u64;
+    while index < count {
+        total = total.wrapping_add(start.wrapping_add(index));
+        index = index.wrapping_add(1);
+    }
+    total
+}
+
+/// Address of [`brainix_secondary_sum`], for posting it as work.
+pub fn secondary_sum_address() -> u64 {
+    brainix_secondary_sum as *const () as u64
 }
