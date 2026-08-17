@@ -7,5 +7,12 @@ description = "Zero-allocation, no_std tensor kernels for BXW1 weights (P3-T4)"
 
 [dependencies]
 
+# `harness = false` because this bench has its own `fn main()`: the libtest
+# harness needs nightly `#[bench]`, and the measurement wants to print GB/s
+# rather than report per-iteration times.
+[[bench]]
+name = "matmul"
+harness = false
+
 [lints]
 workspace = true

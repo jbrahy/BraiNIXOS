@@ -450,12 +450,26 @@ buys no throughput at all, so trading them would be paying a cost for nothing.
 - Synchronous rendezvous IPC only. No shared-memory IPC, no async queues.
 - No dynamic kernel heap. Fixed-size pool allocators only. "Give all resources to the LLM" is satisfied
   by large fixed reserved regions for weights and KV-cache, never by adding an allocator.
-- No new external crate dependencies. The standing job is to remove the ones still present (multiboot2,
-  sha2, chacha20, `x86_64` — the crate, still vendored by the frozen reference — bitflags, log, uefi-raw,
-  uguid, ptr_meta), not add more. The in-tree crypto set
+- No new external crate dependencies **in anything that ships**. The standing job is to remove the ones
+  still present (multiboot2, sha2, chacha20, `x86_64` — the crate, still vendored by the frozen reference
+  — bitflags, log, uefi-raw, uguid, ptr_meta), not add more. The in-tree crypto set
   is SHA-256, HKDF, ChaCha20, and Poly1305, which deletes `sha2` and `chacha20`. The Ed25519
   *verification* stack is the one family that stays, under the named crypto exception above. The
   inference engine, the device drivers, and every Apple Silicon platform component are in-tree.
+
+  **Carve-out for measurement and test tooling, 2026-08-17.** `[dev-dependencies]` — benchmark harnesses,
+  property-test drivers, fuzzers — are **permitted without limit**. This is not a weakening of the rule; it
+  is the rule declining to reach past its own justification. The dependency-closure principle is about
+  *"every byte that **runs**"*, and a benchmark harness never runs on the machine, never enters an Image4
+  payload, and cannot affect a reproducible build of one. Owner instruction, 2026-08-17.
+
+  The reason this matters now rather than being a tidiness point: the 2026-08-17 ranking makes every
+  security trade conditional on a **measured** win. Measurement is therefore load-bearing, and a rule that
+  made good measurement tooling expensive would have made the new ranking unusable. **Bad measurement is
+  now a correctness problem, not a convenience one.**
+
+  The line that still holds: a dev-dependency may never become a runtime one by drift. If a benchmark
+  helper starts being used by shipped code, it is either reimplemented in-tree or the code stops using it.
 - **NOT SUBJECT TO THE INVERSION.** No secret ever enters a build artifact. Client and admin keys are enrolled at runtime and persisted
   by the kernel's credential store; none is ever compiled in. Session keys come from a symmetric HKDF
   ratchet — session key *n* is derived from chain key *n*, the chain then advances and the old key is
