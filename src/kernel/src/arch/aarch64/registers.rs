@@ -74,6 +74,20 @@ pub fn sctlr_el1() -> u64 {
     read_sysreg!("SCTLR_EL1")
 }
 
+/// `ESR_EL2` — the syndrome of the last exception taken to EL2.
+///
+/// Readable outside a handler because nothing clears it until the next
+/// exception. That is what makes it usable as a cross-check on what a handler
+/// reported.
+pub fn esr_el2() -> u64 {
+    read_sysreg!("ESR_EL2")
+}
+
+/// `ELR_EL2` — the return address of the last exception taken to EL2.
+pub fn elr_el2() -> u64 {
+    read_sysreg!("ELR_EL2")
+}
+
 /// `ID_AA64MMFR0_EL1` — the memory-model feature register.
 pub fn id_aa64mmfr0_el1() -> u64 {
     read_sysreg!("ID_AA64MMFR0_EL1")

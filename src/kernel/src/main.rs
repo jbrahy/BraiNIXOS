@@ -282,6 +282,14 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
     put(14, caught.count);
     put(15, caught.elr);
     put(16, caught.far);
+    put(19, caught.spsr);
+    // The cross-check: ESR_EL2 read *outside* the handler, after the trap.
+    // Nothing clears it until the next exception, so if the handler reported
+    // zero and this does not, the handler's read is at fault rather than the
+    // hardware never recording it. Two readings of the same register beat any
+    // amount of reasoning about which one ought to be right.
+    put(18, registers::esr_el2());
+    put(20, registers::elr_el2());
     // The address of the trap site, so ELR can be checked against it rather
     // than merely reported.
     put(17, brainix_kernel::arch::aarch64::vectors::table_address());

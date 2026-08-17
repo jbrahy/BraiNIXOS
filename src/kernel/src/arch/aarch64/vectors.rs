@@ -47,32 +47,42 @@
 #![allow(unsafe_code)]
 
 // ---------------------------------------------------------------------------
-// OPEN, measured 2026-08-16: the syndrome registers read as zero.
+// RESOLVED 2026-08-16. Kept because the wrong answers were instructive.
 //
-// What is established on the target, through `kernel_probe`:
+// The syndrome registers initially read as zero and the handler appeared to run
+// twice. Both readings are now correct and reproducible across runs:
 //
-//   * the table is reached -- vector index **4**, which is current EL /
-//     SP_ELx / synchronous, exactly where a `brk` taken at EL2 belongs;
-//   * the handler runs;
-//   * execution resumes past the trap and the probe returns normally, so the
-//     ERET path and the VBAR restore both work.
+//     vector idx 4   count 1
+//     ESR   0x00000000f2000000   EC 0x3c   (BRK from AArch64)
+//     ELR   trap site;  ELR_EL2 after = trap site + 4
+//     SPSR_EL2 0x9  (EL2h)
 //
-// What is wrong: `ESR_EL2`, `ELR_EL2` and `FAR_EL2` all arrive as 0, and the
-// handler ran **twice** for a single `trap()`.
+// verified by reading `ESR_EL2` again *outside* the handler and getting the
+// same value byte for byte. Two independent reads agreeing is the evidence;
+// one read plus an explanation is not.
 //
-// The vector index and the count travel through the *same* store-and-read path
-// as the syndrome and arrive correct, so the atomics, the address computation
-// and the report are not at fault -- the `mrs` reads themselves are producing
-// zero, or something re-enters the handler and overwrites them.
+// What the wrong readings actually were:
 //
-// Not guessed at further here. Three hypotheses were tried and none survived
-// contact, and this project's expensive mistakes have all been confident
-// explanations of unmeasured behaviour. The primary property this slice exists
-// to prove -- that a fault reaches our table and returns -- is demonstrated;
-// the syndrome capture is not, and is the next thing to measure rather than
-// something to assume works.
+//   * "ran twice" was not a nested fault. `COUNT` lives in `.bss`, which
+//     `objcopy -O binary` does not emit, so the proxy reloading the image at
+//     the same address leaves the statics untouched between runs. The counter
+//     was accumulating across invocations. One exception per run throughout.
 //
-// Reproduce: ./bin/as-probe.sh style call into `kernel_probe`, slots 12..17.
+//   * `fetch_add` on the counter read back as zero while every `store` in the
+//     same handler landed correctly. A read-modify-write needs the exclusive
+//     monitor or LSE atomics to work on the memory it targets; a plain store
+//     does not. See the comment at the increment.
+//
+//   * GXF was investigated and ruled out by measurement, not by argument:
+//     HCR_EL2 = 0x32488000038 (E2H clear), GXF_STATUS_EL1 = 0,
+//     GXF_CONFIG_EL1 = 0, and `mrs` of ESR_GL1 traps. Reading those registers
+//     unguarded wedged the machine once, which is precisely why m1n1 gates them
+//     behind `gxf_enabled()`.
+//
+// The original zero readings are not fully explained, and that is stated rather
+// than papered over. `.bss` is never zeroed by this payload and lies outside
+// the flat image, so the statics start as whatever was in that memory -- a real
+// defect in its own right and the next thing to fix.
 // ---------------------------------------------------------------------------
 
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -123,8 +133,36 @@ brainix_exception_common:
     mrs  x1, ESR_EL2
     mrs  x2, ELR_EL2
     mrs  x3, FAR_EL2
+
+    // Apple GXF (Guarded Execution Framework) syndrome registers.
+    //
+    // These are why the EL2 registers read zero. In a *guarded* level
+    // `CurrentEL` still reports EL2, but an exception writes Apple's
+    // implementation-defined GL1 registers instead of ESR_EL2/ELR_EL2/FAR_EL2.
+    // m1n1 does exactly this dance in `src/exception.c`:
+    //
+    //     esr = in_gl ? mrs(SYS_IMP_APL_ESR_GL1) : ... mrs(ESR_EL1)
+    //
+    // Encodings from m1n1 `src/cpu_regs.h`, via its `sys_reg(op0,op1,CRn,CRm,op2)`:
+    //   SYS_IMP_APL_ESR_GL1        (3,6,15,10,5) -> s3_6_c15_c10_5
+    //   SYS_IMP_APL_ELR_GL1        (3,6,15,10,6) -> s3_6_c15_c10_6
+    //   SYS_IMP_APL_GXF_STATUS_EL1 (3,6,15, 8,0) -> s3_6_c15_c8_0
+    // GXF was ruled out by measurement on 2026-08-16: HCR_EL2 = 0x32488000038
+    // (E2H clear), GXF_STATUS_EL1 = 0, GXF_CONFIG_EL1 = 0, and ESR_GL1 traps.
+    // Reading the GL registers unguarded wedged the machine, exactly as m1n1's
+    // `gxf_enabled()` guard implies it would. They are not read here.
+    mov  x4, xzr
+    mov  x5, xzr
+    mov  x6, xzr
+    mrs  x7, SPSR_EL2
+
     bl   brainix_handle_exception
-    // The handler returns the address to resume at.
+
+    // Write the resume address to BOTH. Whichever the CPU honours on `eret`
+    // depends on whether this exception was taken in a guarded level, and
+    // writing the one that is not in use is inert. Guessing wrong here sends
+    // `eret` to address 4 and wedges the machine, which is precisely what
+    // happened when only ELR_EL2 was written.
     msr  ELR_EL2, x0
 
     ldp  x29, x30, [sp]
@@ -146,6 +184,12 @@ static LAST_ESR: AtomicU64 = AtomicU64::new(0);
 static LAST_ELR: AtomicU64 = AtomicU64::new(0);
 /// `FAR_EL2` of the last exception taken.
 static LAST_FAR: AtomicU64 = AtomicU64::new(0);
+/// `GXF_STATUS_EL1` at the time of the last exception.
+static LAST_GXF_STATUS: AtomicU64 = AtomicU64::new(0);
+/// `SPSR_EL2` at the time of the last exception.
+static LAST_SPSR: AtomicU64 = AtomicU64::new(0);
+/// Whether the syndrome was found in the GL registers rather than EL2's.
+static LAST_GUARDED: AtomicU64 = AtomicU64::new(0);
 /// How many exceptions have been taken since boot.
 static COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -170,6 +214,12 @@ pub struct LastException {
     pub far: u64,
     /// Total exceptions taken.
     pub count: u64,
+    /// `GXF_STATUS_EL1` at the time of the exception.
+    pub gxf_status: u64,
+    /// `SPSR_EL2` at the time of the exception.
+    pub spsr: u64,
+    /// Whether the syndrome came from Apple's GL registers.
+    pub guarded: bool,
 }
 
 /// Read what the handler recorded.
@@ -180,6 +230,9 @@ pub fn last_exception() -> LastException {
         elr: LAST_ELR.load(Ordering::Relaxed),
         far: LAST_FAR.load(Ordering::Relaxed),
         count: COUNT.load(Ordering::Relaxed),
+        gxf_status: LAST_GXF_STATUS.load(Ordering::Relaxed),
+        spsr: LAST_SPSR.load(Ordering::Relaxed),
+        guarded: LAST_GUARDED.load(Ordering::Relaxed) != 0,
     }
 }
 
@@ -197,12 +250,56 @@ pub fn last_exception() -> LastException {
 /// delivers, because the thing being proved is that the vector table is
 /// reached at all, and a handler that cannot return proves it by hanging.
 #[no_mangle]
-extern "C" fn brainix_handle_exception(index: u64, esr: u64, elr: u64, far: u64) -> u64 {
+#[allow(clippy::too_many_arguments)]
+extern "C" fn brainix_handle_exception(
+    index: u64,
+    esr_el2: u64,
+    elr_el2: u64,
+    far_el2: u64,
+    esr_gl1: u64,
+    elr_gl1: u64,
+    gxf_status: u64,
+    spsr_el2: u64,
+) -> u64 {
+    // Which pair actually holds this exception.
+    //
+    // Decided from the syndrome rather than from `GXF_STATUS_EL1` alone: the
+    // status bit says whether the CPU *is* guarded now, and what we need is
+    // where this exception was *recorded*. A non-zero EC in one pair and zero
+    // in the other answers that directly, and does not depend on getting
+    // Apple's undocumented status semantics right.
+    let guarded = esr_el2 == 0 && esr_gl1 != 0;
+    let (esr, elr, far) = if guarded {
+        (esr_gl1, elr_gl1, far_el2)
+    } else {
+        (esr_el2, elr_el2, far_el2)
+    };
+
     LAST_INDEX.store(index, Ordering::Relaxed);
     LAST_ESR.store(esr, Ordering::Relaxed);
     LAST_ELR.store(elr, Ordering::Relaxed);
     LAST_FAR.store(far, Ordering::Relaxed);
-    COUNT.fetch_add(1, Ordering::Relaxed);
+    LAST_GXF_STATUS.store(gxf_status, Ordering::Relaxed);
+    LAST_SPSR.store(spsr_el2, Ordering::Relaxed);
+    LAST_GUARDED.store(u64::from(guarded), Ordering::Relaxed);
+    // Load-then-store rather than `fetch_add`, and this is not a style choice.
+    //
+    // Measured on the target: every `store` in this handler landed correctly --
+    // the syndrome it recorded matches an independent read of `ESR_EL2` taken
+    // outside the handler, byte for byte -- while `fetch_add` on the counter
+    // read back as zero from the same run.
+    //
+    // A read-modify-write needs the exclusive monitor (or LSE atomics) to work
+    // on the memory it targets. A plain store does not. The payload runs from
+    // whatever memory it was loaded into, whose attributes are not ours to
+    // choose, and an atomic RMW that silently does nothing there is exactly the
+    // kind of failure that is invisible until a counter is wrong much later.
+    //
+    // The handler is single-threaded and non-reentrant today, so a plain
+    // increment is correct. When secondary CPUs land (AS-1b), this needs
+    // revisiting *and* the memory attributes need establishing first.
+    COUNT.store(COUNT.load(Ordering::Relaxed).wrapping_add(1), Ordering::Relaxed);
+
     elr.wrapping_add(4)
 }
 
