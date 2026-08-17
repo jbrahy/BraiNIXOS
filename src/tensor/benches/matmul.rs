@@ -50,6 +50,7 @@ use brainix_tensor::{
     matmul_q8_0, matmul_q8_0_q8a, quantize_activations, MatMulShape, Q8Weights, Q8_0_BLOCK,
 };
 use std::time::Instant;
+use std::thread;
 
 /// Bytes a `Q8_0` weight element costs: one quant byte plus 4/32 of a scale.
 const BYTES_PER_WEIGHT_ELEMENT: f64 = 1.125;
@@ -174,6 +175,66 @@ fn measure_sdot(label: &str, n_tokens: usize, n_in: usize, n_out: usize) {
     );
 }
 
+/// Aggregate weight-byte throughput with `threads` cores running the same
+/// matmul over the **same** weights.
+///
+/// # What this measures and why it is the shape that matters
+///
+/// Single-core throughput bounds one core. It says nothing about whether N
+/// cores get N times as much, because they share one memory bus -- and on this
+/// machine the bus is the thing everything is eventually bounded by. Sharing
+/// one weight matrix across all threads is the realistic case: a server serving
+/// one model streams the same weights on every core.
+///
+/// The number to watch is not the aggregate but its **shape**. Linear growth
+/// means cores are still cheap and the bus has headroom. A knee means the bus
+/// is saturated and further cores buy nothing -- which is also the answer to
+/// whether spare cores exist for anything else, and therefore to how much
+/// isolation in the scheduler costs.
+fn measure_scaling(n_tokens: usize, n_in: usize, n_out: usize) {
+    let payload = synthetic_payload(n_out, n_in);
+    let weights = Q8Weights::new(&payload, n_out, n_in).expect("payload is well formed");
+    let shape = MatMulShape { n_tokens, n_in, n_out };
+    let x = vec![0.5_f32; n_tokens * n_in];
+    let weight_bytes = n_out as f64 * n_in as f64 * BYTES_PER_WEIGHT_ELEMENT;
+    let iterations = (1_000_000_000.0 / weight_bytes).max(3.0) as usize;
+
+    let mut single = 0.0f64;
+    for threads in [1usize, 2, 4, 6, 8] {
+        let start = Instant::now();
+        thread::scope(|scope| {
+            for _ in 0..threads {
+                scope.spawn(|| {
+                    let mut y = vec![0.0_f32; n_tokens * n_out];
+                    let mut scratch = vec![
+                        0u8;
+                        Q8Weights::derived_payload_len(n_tokens, n_in)
+                            .expect("activation len")
+                    ];
+                    for _ in 0..iterations {
+                        quantize_activations(n_tokens, n_in, &x, &mut scratch).expect("quantize");
+                        let view =
+                            Q8Weights::new(&scratch, n_tokens, n_in).expect("view");
+                        matmul_q8_0_q8a(shape, &weights, &view, &mut y).expect("matmul");
+                    }
+                    std::hint::black_box(&y);
+                });
+            }
+        });
+        let seconds = start.elapsed().as_secs_f64();
+        let aggregate = weight_bytes * iterations as f64 * threads as f64 / seconds / 1e9;
+        if threads == 1 {
+            single = aggregate;
+        }
+        println!(
+            "  {threads} thread{}   {aggregate:7.2} GB/s   {:5.1}% of bus   {:.2}x vs 1 core",
+            if threads == 1 { " " } else { "s" },
+            aggregate / REFERENCE_BANDWIDTH_GB_S * 100.0,
+            aggregate / single
+        );
+    }
+}
+
 fn main() {
     println!();
     println!("  matmul_q8_0 — weight-byte throughput, single core");
@@ -208,6 +269,21 @@ fn main() {
     measure_sdot("4096x4096, 1 token", 1, 4096, 4096);
     measure_sdot("4096x11008 (ffn), 1 token", 1, 4096, 11008);
     measure_sdot("2048x2048, 1 token", 1, 2048, 2048);
+
+    println!();
+    println!("  Multi-core scaling — same weights, SDOT path, 1 token");
+    println!();
+    // Two working sets, and the gap between them is the point.
+    //
+    // 18.9 MB may sit largely in the system-level cache, so threads sharing it
+    // are not all reaching DRAM and the scaling flatters itself. 151 MB exceeds
+    // any cache on a current Apple part, and a real decode streams ~460 MB per
+    // token, so the larger figure is the representative one.
+    println!("  [18.9 MB matrix -- may be substantially SLC-resident]");
+    measure_scaling(1, 4096, 4096);
+    println!();
+    println!("  [151 MB matrix -- exceeds any cache, streams from DRAM]");
+    measure_scaling(1, 4096, 32768);
 
     println!();
     println!("  Interpretation:");
