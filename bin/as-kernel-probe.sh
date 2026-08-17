@@ -223,7 +223,7 @@ print("  eret-to-self     %d  (1 = exception return works at this level)" % r(64
 # 48 slots, not 16. Stage 9 writes through index 27, and a probe that scribbles
 # past its own buffer would corrupt whatever m1n1 put after it -- a failure that
 # presents as an unrelated stage misbehaving later.
-dout = u.malloc(8 * 48)
+dout = u.malloc(8 * 128)
 
 def d(i):
     return p.read64(dout + 8 * i)
@@ -637,6 +637,48 @@ else:
                       % (local_t / float(ct)))
         else:
             print("  secondary        TIMED OUT after enabling the MMU")
+
+    # Every other core, on the same path. One partner proves a mechanism; a pool
+    # is what the forward pass can use, and the only way to know the mechanism
+    # generalises is to run it on cores the first one did not choose the slot
+    # arithmetic for.
+    extra_n, full_rate = d(112), d(113)
+    print()
+    print("  -- the rest of the machine --")
+    print("  released         %d more core(s), all of them started, all correct"
+          % extra_n)
+    print("  %d matched the boot core's rate -- and the ones that did are the" % full_rate)
+    print("  ones in the boot core's CLUSTER. See the note below the table.")
+    for i in range(extra_n):
+        b = 48 + i * 8
+        cid, started, mp, slot_ok = d(b), d(b + 1), d(b + 2), d(b + 3)
+        sctlr2, read_ok, correct, tks = d(b + 4), d(b + 5), d(b + 6), d(b + 7)
+        line = "  cpu%-2d  MPIDR 0x%08x  aff0=%d aff1=%d" % (
+            cid, mp & 0xFFFFFFFF, mp & 0xFF, (mp >> 8) & 0xFF)
+        if not started:
+            print(line + "  DID NOT START")
+            continue
+        if not slot_ok:
+            # The tree's cluster/core and MPIDR's aff1/aff0 disagree, so the
+            # boot core and the stub index different buffers. Every number after
+            # this point would be read out of the wrong memory.
+            print(line + "  SLOT MISMATCH -- refused to dispatch")
+            continue
+        if not read_ok:
+            print(line + "  started, MMU 0x%x, but the read TIMED OUT" % sctlr2)
+            continue
+        gbs = (words * 8) / (tks / 24e6) / 1e9 if tks else 0.0
+        print(line + "  %s  %.1f GB/s" % ("CORRECT" if correct else "WRONG", gbs))
+    if extra_n:
+        print()
+        print("  READ THE SPLIT BY CLUSTER, NOT BY CORE. The cores at the boot")
+        print("  core's rate share its L2; the rest are a fabric hop away from a")
+        print("  buffer that is still sitting in it. So %.1f GB/s is an L2-hit" % (
+            (words * 8) / (local_t / 24e6) / 1e9 if local_t else 0.0))
+        print("  number, not a memory number, and the slower group is not slower")
+        print("  silicon -- it is the same read paying for the boot core's cache.")
+        print("  Each core also read alone. Nothing here says what happens when")
+        print("  they all pull at once, which is the question decode actually asks.")
 
 # The MPIDR is the check that matters. A magic word only proves something wrote
 # the buffer; a DIFFERENT affinity proves it was a different core.

@@ -186,3 +186,100 @@ pub fn start_enable_bit(cpu: &Cpu) -> u32 {
 pub fn start_core_bit(cpu: &Cpu) -> u32 {
     1u32.checked_shl(cpu.core).unwrap_or(0)
 }
+
+// ---------------------------------------------------------------------------
+// Per-core state slots
+// ---------------------------------------------------------------------------
+
+/// Per-core state slots a released core can index.
+///
+/// Three bits of `MPIDR.aff0` and two of `aff1`, so 32. Larger than any Apple
+/// part's core count on purpose: a spare slot costs 16 KiB of `.bss` that is
+/// never touched, and one too few costs two cores sharing a stack.
+pub const MAX_SLOTS: usize = 32;
+
+/// Which per-core slot a core with this `MPIDR` uses.
+///
+/// **This function and the four instructions at the top of the secondary stub
+/// compute the same thing, and nothing but this comment enforces that.** The
+/// stub cannot call it -- it runs before there is a stack -- so the arithmetic
+/// exists twice. It lives here rather than beside the stub because this module
+/// is compiled for the host and the `arch` tree is not, and arithmetic that
+/// decides which buffer ten cores write to should be tested somewhere.
+///
+/// `release` checks the answer against the `MPIDR` the core actually reports,
+/// which is how a divergence becomes a reading rather than two cores quietly
+/// sharing a stack.
+pub const fn slot_for_mpidr(mpidr: u64) -> usize {
+    let aff0 = (mpidr & 0b111) as usize;
+    let aff1 = ((mpidr >> 8) & 0b11) as usize;
+    aff0 + (aff1 << 3)
+}
+
+/// Which slot the tree says a core will use, before it has ever run.
+///
+/// The ADT's `cluster-id` and `cluster-core-id` are the same two numbers
+/// `MPIDR` reports as `aff1` and `aff0`. That they agree is checked rather than
+/// assumed.
+pub const fn slot_for_cpu(cluster: u32, core: u32) -> usize {
+    ((core as usize) & 0b111) + (((cluster as usize) & 0b11) << 3)
+}
+
+#[cfg(test)]
+mod slot_tests {
+    use super::*;
+
+    /// The four instructions at the top of the stub, transcribed. Any change to
+    /// the stub's arithmetic has to be made here too, and this test is what
+    /// says so out loud.
+    fn stub_arithmetic(mpidr: u64) -> usize {
+        let aff0 = mpidr & 0b111;
+        let aff1 = (mpidr >> 8) & 0b11;
+        (aff0 + (aff1 << 3)) as usize
+    }
+
+    #[test]
+    fn slot_matches_the_arithmetic_the_stub_performs() {
+        for mpidr in 0u64..=0xFFFF {
+            assert_eq!(slot_for_mpidr(mpidr), stub_arithmetic(mpidr));
+        }
+    }
+
+    #[test]
+    fn every_mpidr_lands_in_an_allocated_slot() {
+        for mpidr in 0u64..=0xFFFF {
+            assert!(slot_for_mpidr(mpidr) < MAX_SLOTS);
+        }
+    }
+
+    /// Measured on the target: cpu1 reports `0x8000_0001`, which the tree calls
+    /// cluster 0, core 1. A table that put those two anywhere but the same slot
+    /// would have the boot core and the stub reading different buffers.
+    #[test]
+    fn the_mpidr_the_target_reported_lands_where_the_tree_says() {
+        assert_eq!(slot_for_mpidr(0x8000_0001), 1);
+        assert_eq!(slot_for_cpu(0, 1), 1);
+    }
+
+    #[test]
+    fn cluster_and_core_index_the_same_slot_as_the_mpidr_they_produce() {
+        for cluster in 0u32..4 {
+            for core in 0u32..8 {
+                let mpidr = 0x8000_0000 | u64::from(core) | (u64::from(cluster) << 8);
+                assert_eq!(slot_for_cpu(cluster, core), slot_for_mpidr(mpidr));
+            }
+        }
+    }
+
+    #[test]
+    fn distinct_cores_never_share_a_slot() {
+        let mut seen = [false; MAX_SLOTS];
+        for cluster in 0u32..4 {
+            for core in 0u32..8 {
+                let slot = slot_for_cpu(cluster, core);
+                assert!(!seen[slot], "cluster {cluster} core {core} reused a slot");
+                seen[slot] = true;
+            }
+        }
+    }
+}

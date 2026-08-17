@@ -70,7 +70,10 @@
 
 #![allow(unsafe_code)]
 
-use crate::aarch64_cpus::{start_core_bit, start_enable_bit, Cpu, RVBAR_ADDRESS, RVBAR_LOCK};
+use crate::aarch64_cpus::{
+    slot_for_cpu, slot_for_mpidr, start_core_bit, start_enable_bit, Cpu, MAX_SLOTS,
+    RVBAR_ADDRESS, RVBAR_LOCK,
+};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Written by the secondary once it has recorded everything else.
@@ -101,6 +104,13 @@ const REPORT_SLOTS: usize = 14;
 
 /// The report's size in bytes.
 const REPORT_BYTES: u64 = (REPORT_SLOTS * 8) as u64;
+
+/// Bytes in one core's work slot: request, function, two arguments, result,
+/// completion.
+const WORK_BYTES: u64 = 48;
+
+/// Bytes of stack per core.
+const STACK_BYTES: u64 = 16384;
 
 /// What every slot reads before a secondary has touched it.
 ///
@@ -137,20 +147,25 @@ brainix_secondary_entry:
     // so it resolves against the physical address this image was loaded at,
     // which is the same as its virtual address only because the boot core runs
     // under an identity map -- stated because it is load-bearing, not obvious.
-    // x21, x19 and x20 rather than x0, x4 and x5, and this is not style.
+    // Every core runs THIS code, so nothing here may name a single buffer.
     //
-    // This loop holds three things across a `blr` into a Rust function: the
-    // report base, the work base, and the request sequence. x0-x18 are
-    // caller-saved -- the callee is entitled to destroy every one of them --
-    // so holding anything there across the call is a bug that the callee
-    // decides whether to trigger. `brainix_secondary_sum` is small enough that
-    // the compiler never touched x4 or x5, and the loop looked correct for as
-    // long as that was the only thing dispatched. The first work item large
-    // enough to need more registers stored its result through a clobbered base
-    // and hung the core. x19-x28 are callee-saved, so the callee has to give
-    // them back.
-    adrp x21, {report}
-    add  x21, x21, :lo12:{report}
+    // The report, the work slot and the stack are one per core, and a core
+    // finds its own by computing a slot number from its `MPIDR` -- the only
+    // thing it has that distinguishes it from its siblings. `aff0` is the core
+    // within a cluster and `aff1` is the cluster; three bits and two bits give
+    // 32 slots, which is more than this part has cores.
+    //
+    // It has to be computed rather than assigned because it has to be
+    // recomputed after every `wfi` (see below), and anything handed to the core
+    // once would have to survive the sleep to be useful.
+    mrs  x22, MPIDR_EL1
+    ubfx x23, x22, #0, #3
+    ubfx x24, x22, #8, #2
+    add  x23, x23, x24, lsl #3
+    adrp x21, {reports}
+    add  x21, x21, :lo12:{reports}
+    mov  x25, {report_bytes}
+    madd x21, x23, x25, x21
 
     mrs  x1, MPIDR_EL1
     str  x1, [x21, #8]
@@ -202,9 +217,17 @@ brainix_secondary_entry:
     // registers are not retained -- m1n1 names its own version `deep_wfi`. Two
     // instructions of `adrp`/`add` after each wake costs nothing next to the
     // sleep and removes the assumption entirely: nothing is carried across the
-    // `wfi`, so nothing can be lost across it.
-    adrp x21, {report}
-    add  x21, x21, :lo12:{report}
+    // `wfi`, so nothing can be lost across it. That is also why the slot is
+    // recomputed from `MPIDR` here rather than kept: `MPIDR` is not a general
+    // register and does survive.
+    mrs  x22, MPIDR_EL1
+    ubfx x23, x22, #0, #3
+    ubfx x24, x22, #8, #2
+    add  x23, x23, x24, lsl #3
+    adrp x21, {reports}
+    add  x21, x21, :lo12:{reports}
+    mov  x25, {report_bytes}
+    madd x21, x23, x25, x21
     // SYS_IMP_APL_IPI_SR_EL1 -- s3_5_c15_c1_1, bit 0 is pending.
     mrs  x2, s3_5_c15_c1_1
     tst  x2, #1
@@ -224,9 +247,12 @@ brainix_secondary_entry:
     str  x3, [x21, #32]
     dsb  sy
 
-    // Is there work, or was this doorbell only a wake?
-    adrp x19, {work}
-    add  x19, x19, :lo12:{work}
+    // Is there work, or was this doorbell only a wake? This core's work slot,
+    // not the machine's -- x23 still holds the slot computed after the wake.
+    adrp x19, {works}
+    add  x19, x19, :lo12:{works}
+    mov  x25, {work_bytes}
+    madd x19, x23, x25, x19
     ldr  x20, [x19, #0]         // request sequence
     ldr  x6,  [x19, #40]        // completion sequence
     cmp  x20, x6
@@ -234,9 +260,14 @@ brainix_secondary_entry:
 
     // A stack, established here rather than at entry because nothing before
     // this point needed one and a core that never runs work never touches it.
-    adrp x7, {stack}
-    add  x7, x7, :lo12:{stack}
-    add  x7, x7, #16384
+    // One per core: two cores sharing a stack is two cores writing each other's
+    // saved registers, which is the same corruption this loop has already been
+    // bitten by once from a different direction.
+    adrp x7, {stacks}
+    add  x7, x7, :lo12:{stacks}
+    mov  x25, {stack_bytes}
+    madd x7, x23, x25, x7
+    add  x7, x7, {stack_bytes}
     mov  sp, x7
 
     ldr  x8, [x19, #8]          // function
@@ -259,11 +290,19 @@ brainix_secondary_entry:
     // callee is *required* to give x19-x21 back, but this loop has now been
     // wrong twice about which registers survive what, and the cost of not
     // relying on it is four instructions on a path that just ran a matmul.
-    // x0 holds the result and no `adrp` touches it.
-    adrp x19, {work}
-    add  x19, x19, :lo12:{work}
-    adrp x21, {report}
-    add  x21, x21, :lo12:{report}
+    // x0 holds the result and nothing below touches it.
+    mrs  x22, MPIDR_EL1
+    ubfx x23, x22, #0, #3
+    ubfx x24, x22, #8, #2
+    add  x23, x23, x24, lsl #3
+    adrp x19, {works}
+    add  x19, x19, :lo12:{works}
+    mov  x25, {work_bytes}
+    madd x19, x23, x25, x19
+    adrp x21, {reports}
+    add  x21, x21, :lo12:{reports}
+    mov  x25, {report_bytes}
+    madd x21, x23, x25, x21
     ldr  x20, [x19, #0]         // the request being served, re-read
     // Result first, then the sequence that publishes it. A reader that sees
     // the sequence match is guaranteed to see this store.
@@ -298,10 +337,17 @@ brainix_secondary_vectors:
 .endr
 
 brainix_secondary_fault:
-    // x22/x23 so this cannot corrupt the loop's own state on the way to
-    // recording why the loop failed.
-    adrp x22, {report}
-    add  x22, x22, :lo12:{report}
+    // x26-x28 so this cannot corrupt the loop's own state on the way to
+    // recording why the loop failed -- including x21 and x23, which are the two
+    // values most worth reading back.
+    mrs  x26, MPIDR_EL1
+    ubfx x27, x26, #0, #3
+    ubfx x28, x26, #8, #2
+    add  x27, x27, x28, lsl #3
+    adrp x22, {reports}
+    add  x22, x22, :lo12:{reports}
+    mov  x28, {report_bytes}
+    madd x22, x27, x28, x22
     mrs  x23, ESR_EL2
     str  x23, [x22, #48]
     mrs  x23, ELR_EL2
@@ -325,9 +371,12 @@ brainix_secondary_fault:
     b 1b
 .balign 16384
 "#,
-    report = sym SECONDARY_REPORT,
-    work = sym WORK,
-    stack = sym SECONDARY_STACK,
+    reports = sym SECONDARY_REPORTS,
+    works = sym WORKS,
+    stacks = sym SECONDARY_STACKS,
+    report_bytes = const REPORT_BYTES,
+    work_bytes = const WORK_BYTES,
+    stack_bytes = const STACK_BYTES,
 );
 
 extern "C" {
@@ -337,45 +386,29 @@ extern "C" {
     static brainix_secondary_vectors: u8;
 }
 
-/// `[magic, MPIDR_EL1, CurrentEL, SCTLR_EL1]`, written by the secondary.
+/// One report per core, laid out back to back so the stub can index it.
 ///
-/// In `.data` by virtue of the poison initialiser, so it is carried in the flat
-/// image. A `.bss` buffer would start as whatever was in that memory, and the
-/// difference between "the core wrote this" and "this was already here" is the
-/// entire measurement.
-/// The slot meanings, and why some start at zero rather than poison, are in
-/// [`REPORT_INITIAL`] -- which is also what a release resets them to.
-static SECONDARY_REPORT: [AtomicU64; REPORT_SLOTS] = [
-    AtomicU64::new(REPORT_INITIAL[0]),
-    AtomicU64::new(REPORT_INITIAL[1]),
-    AtomicU64::new(REPORT_INITIAL[2]),
-    AtomicU64::new(REPORT_INITIAL[3]),
-    AtomicU64::new(REPORT_INITIAL[4]),
-    AtomicU64::new(REPORT_INITIAL[5]),
-    AtomicU64::new(REPORT_INITIAL[6]),
-    AtomicU64::new(REPORT_INITIAL[7]),
-    AtomicU64::new(REPORT_INITIAL[8]),
-    AtomicU64::new(REPORT_INITIAL[9]),
-    AtomicU64::new(REPORT_INITIAL[10]),
-    AtomicU64::new(REPORT_INITIAL[11]),
-    AtomicU64::new(REPORT_INITIAL[12]),
-    AtomicU64::new(REPORT_INITIAL[13]),
-];
+/// In `.bss` and therefore all zeros in the image, which is the opposite of
+/// what a report wants -- "never wrote" has to be distinguishable from "wrote
+/// zero". [`release`] writes [`REPORT_INITIAL`] into the slot it is about to
+/// use and cleans it, which is a stronger guarantee than the image carrying the
+/// poison: it is re-established immediately before each core starts rather than
+/// once at load.
+static SECONDARY_REPORTS: [AtomicU64; REPORT_SLOTS * MAX_SLOTS] =
+    [const { AtomicU64::new(0) }; REPORT_SLOTS * MAX_SLOTS];
 
-/// Stack for the secondary, so it can call Rust.
+/// One stack per core, so it can call Rust.
 ///
-/// A core out of reset has no stack. Everything it has done so far -- record
-/// four registers, park, count doorbells -- fits in registers, which is why the
-/// loop needed none. Running arbitrary work does not.
-///
-/// In `.bss`, which the boot core zeroes at entry. That is not a requirement --
-/// a stack does not care what was in it -- but it does mean the whole region is
-/// touched before the secondary reaches it, so no page is first-touched by a
-/// core running with its MMU off.
+/// A core out of reset has no stack. Everything it does before its first
+/// dispatched call -- record four registers, park, count doorbells -- fits in
+/// registers, which is why the loop needed none. Running arbitrary work does
+/// not, and two cores running arbitrary work on one stack would each be
+/// overwriting the other's saved registers.
 #[repr(align(16384))]
-struct SecondaryStack([u8; 16384]);
+struct SecondaryStacks([u8; STACK_BYTES as usize * MAX_SLOTS]);
 
-static mut SECONDARY_STACK: SecondaryStack = SecondaryStack([0; 16384]);
+static mut SECONDARY_STACKS: SecondaryStacks =
+    SecondaryStacks([0; STACK_BYTES as usize * MAX_SLOTS]);
 
 /// The work slot the two cores share.
 ///
@@ -394,14 +427,21 @@ static mut SECONDARY_STACK: SecondaryStack = SecondaryStack([0; 16384]);
 /// request it served. A reader that sees `completion == request` is guaranteed
 /// to see the result that request produced, and a doorbell that arrives twice
 /// for one request is idempotent rather than a double execution.
-static WORK: [AtomicU64; 6] = [
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-];
+/// One per core: a request posted to one core must not be visible as work to
+/// another, and two cores completing at once must not write the same slot.
+static WORKS: [AtomicU64; 6 * MAX_SLOTS] = [const { AtomicU64::new(0) }; 6 * MAX_SLOTS];
+
+/// The six `WORKS` entries belonging to `slot`.
+fn work_for(slot: usize) -> &'static [AtomicU64] {
+    let base = slot * 6;
+    &WORKS[base..base + 6]
+}
+
+/// The report entries belonging to `slot`.
+fn report_for(slot: usize) -> &'static [AtomicU64] {
+    let base = slot * REPORT_SLOTS;
+    &SECONDARY_REPORTS[base..base + REPORT_SLOTS]
+}
 
 /// Address the released core begins executing at.
 pub fn secondary_entry_address() -> u64 {
@@ -436,6 +476,15 @@ pub struct SecondaryReport {
     pub exception_level: u64,
     /// `SCTLR_EL1` as the secondary read it.
     pub sctlr: u64,
+    /// The per-core state slot this core was given, chosen from the tree.
+    pub slot: usize,
+    /// Whether the slot the reported `MPIDR` implies is the same one.
+    ///
+    /// False means the ADT's `cluster-id`/`cluster-core-id` and `MPIDR`'s
+    /// `aff1`/`aff0` disagree on this part, and the boot core and the stub are
+    /// indexing different buffers. Nothing downstream is trustworthy after
+    /// that, which is why it is reported rather than assumed.
+    pub slot_matches: bool,
 }
 
 /// Clean a range to the point of coherency.
@@ -482,21 +531,22 @@ unsafe fn refresh_from_memory(start: u64, len: u64) {
 /// this core's cache; after it has them they may still be sitting in its own.
 /// Either way a plain read can return a line this core cached earlier, and the
 /// stale value is a plausible-looking number rather than an obvious error.
-pub fn report() -> [u64; REPORT_SLOTS] {
-    // SAFETY: the report is in this image and 112 bytes long.
-    unsafe { refresh_from_memory(SECONDARY_REPORT.as_ptr() as u64, REPORT_BYTES) };
+pub fn report(slot: usize) -> [u64; REPORT_SLOTS] {
+    let entries = report_for(slot);
+    // SAFETY: the report is in this image and `REPORT_BYTES` long.
+    unsafe { refresh_from_memory(entries.as_ptr() as u64, REPORT_BYTES) };
     let mut out = [0u64; REPORT_SLOTS];
     let mut index = 0;
     while index < out.len() {
-        out[index] = SECONDARY_REPORT[index].load(Ordering::Relaxed);
+        out[index] = entries[index].load(Ordering::Relaxed);
         index += 1;
     }
     out
 }
 
-/// Where the report lives, so a reader can check it is the buffer it means.
-pub fn report_address() -> u64 {
-    SECONDARY_REPORT.as_ptr() as u64
+/// Where `slot`'s report lives, so a reader can check it is the buffer it means.
+pub fn report_address(slot: usize) -> u64 {
+    report_for(slot).as_ptr() as u64
 }
 
 /// Address of the secondary's vector table.
@@ -544,35 +594,32 @@ pub unsafe fn ring(target_mpidr: u64) {
 ///
 /// As [`ring`].
 pub unsafe fn ring_and_confirm(target_mpidr: u64, count: u64, timeout_ticks: u64) -> (u64, u64) {
-    let report_address = SECONDARY_REPORT.as_ptr() as u64;
-    // The count slot is poisoned along with the rest of the report before the
-    // core is released, so what matters is how far it advances, not its value.
-    let baseline = SECONDARY_REPORT[4].load(Ordering::Relaxed);
+    let entries = report_for(slot_for_mpidr(target_mpidr));
+    let report_address = entries.as_ptr() as u64;
+    // The count slot is reset along with the rest of the report before the core
+    // is released, so what matters is how far it advances, not its value.
+    let baseline = entries[4].load(Ordering::Relaxed);
     let start = super::registers::physical_counter();
     for _ in 0..count {
-        let before = SECONDARY_REPORT[4].load(Ordering::Relaxed);
+        let before = entries[4].load(Ordering::Relaxed);
         // SAFETY: delegated to `ring`'s contract.
         unsafe { ring(target_mpidr) };
         loop {
             // SAFETY: the report lives in this image, which is mapped.
             unsafe { refresh_from_memory(report_address, REPORT_BYTES) };
-            if SECONDARY_REPORT[4].load(Ordering::Relaxed) != before {
+            if entries[4].load(Ordering::Relaxed) != before {
                 break;
             }
             if super::registers::physical_counter().wrapping_sub(start) > timeout_ticks {
                 return (
-                    SECONDARY_REPORT[4]
-                        .load(Ordering::Relaxed)
-                        .wrapping_sub(baseline),
+                    entries[4].load(Ordering::Relaxed).wrapping_sub(baseline),
                     super::registers::physical_counter().wrapping_sub(start),
                 );
             }
         }
     }
     (
-        SECONDARY_REPORT[4]
-            .load(Ordering::Relaxed)
-            .wrapping_sub(baseline),
+        entries[4].load(Ordering::Relaxed).wrapping_sub(baseline),
         super::registers::physical_counter().wrapping_sub(start),
     )
 }
@@ -593,13 +640,25 @@ pub unsafe fn release(cpu: &Cpu, start_base: u64, timeout_ticks: u64) -> Seconda
     // values, not to poison across the board: two of these slots are counters
     // that start at zero, and blanket-poisoning them made "one call ran" read
     // as a number in the quintillions.
-    let mut slot = 0;
-    while slot < REPORT_SLOTS {
-        SECONDARY_REPORT[slot].store(REPORT_INITIAL[slot], Ordering::Relaxed);
-        slot += 1;
+    // Which slot this core will use, predicted from the tree. Checked against
+    // what it reports below rather than trusted: if `cluster-core-id` and
+    // `MPIDR.aff0` ever disagree, two cores share a stack and the failure is
+    // silent corruption rather than an error.
+    let slot = slot_for_cpu(cpu.cluster, cpu.core);
+    let entries = report_for(slot);
+    let mut index = 0;
+    while index < REPORT_SLOTS {
+        entries[index].store(REPORT_INITIAL[index], Ordering::Relaxed);
+        index += 1;
+    }
+    // A released core's work slot starts empty, so its first doorbell is a wake
+    // and not a stale request left by a previous run.
+    for entry in work_for(slot) {
+        entry.store(0, Ordering::Relaxed);
     }
 
-    let report_address = SECONDARY_REPORT.as_ptr() as u64;
+    let report_address = entries.as_ptr() as u64;
+    let stack_base = core::ptr::addr_of!(SECONDARY_STACKS) as u64 + slot as u64 * STACK_BYTES;
     // SAFETY: all four ranges are inside this image, which is mapped.
     unsafe {
         clean_to_coherency(report_address, REPORT_BYTES);
@@ -619,9 +678,9 @@ pub unsafe fn release(cpu: &Cpu, start_base: u64, timeout_ticks: u64) -> Seconda
         // faithful save-and-restore into a restore of zero. The symptom was a
         // data abort at the next doorbell reading address 0x20 -- the loop's
         // own `[x21, #32]` with x21 handed back as nothing.
-        clean_to_coherency(core::ptr::addr_of!(SECONDARY_STACK) as u64, 16384);
+        clean_to_coherency(stack_base, STACK_BYTES);
         // Same reasoning for the work slot, which is also `.bss`.
-        clean_to_coherency(WORK.as_ptr() as u64, 48);
+        clean_to_coherency(work_for(slot).as_ptr() as u64, WORK_BYTES);
     }
 
     // SAFETY: reading this core's reset vector register. It is powered down and
@@ -652,6 +711,8 @@ pub unsafe fn release(cpu: &Cpu, start_base: u64, timeout_ticks: u64) -> Seconda
         mpidr: 0,
         exception_level: 0,
         sctlr: 0,
+        slot,
+        slot_matches: false,
     };
     // Refuse rather than start a core that will begin executing somewhere we
     // did not choose. That core cannot be stopped and would be running
@@ -682,7 +743,7 @@ pub unsafe fn release(cpu: &Cpu, start_base: u64, timeout_ticks: u64) -> Seconda
     loop {
         // SAFETY: the report is inside this image.
         unsafe { refresh_from_memory(report_address, REPORT_BYTES) };
-        if SECONDARY_REPORT[0].load(Ordering::Relaxed) == SECONDARY_MAGIC {
+        if entries[0].load(Ordering::Relaxed) == SECONDARY_MAGIC {
             result.started = true;
             break;
         }
@@ -692,10 +753,14 @@ pub unsafe fn release(cpu: &Cpu, start_base: u64, timeout_ticks: u64) -> Seconda
         }
     }
 
-    let values = report();
+    let values = report(slot);
     result.mpidr = values[1];
     result.exception_level = (values[2] >> 2) & 0b11;
     result.sctlr = values[3];
+    // The core wrote its own `MPIDR` into a slot chosen from the tree. If the
+    // slot that `MPIDR` implies is a different one, the two indexings disagree
+    // and every per-core buffer from here on is the wrong buffer.
+    result.slot_matches = result.started && slot_for_mpidr(result.mpidr) == slot;
     result
 }
 
@@ -720,32 +785,66 @@ pub unsafe fn dispatch(
     arg1: u64,
     timeout_ticks: u64,
 ) -> Option<(u64, u64)> {
-    let request = WORK[0].load(Ordering::Relaxed).wrapping_add(1);
+    // SAFETY: delegated to this function's contract.
+    let request = unsafe { post(target_mpidr, function, arg0, arg1) };
+    let start = super::registers::physical_counter();
+    // SAFETY: `request` is the one just posted to this core.
+    unsafe { collect(target_mpidr, request, timeout_ticks) }
+        .map(|result| (result, super::registers::physical_counter().wrapping_sub(start)))
+}
+
+/// Posts work to a parked core and returns without waiting for it.
+///
+/// Split from [`dispatch`] so a caller can start every core before waiting for
+/// any of them. Posting and collecting in one call serialises the pool: with
+/// four cores it would run four chunks one after another and report the
+/// slowest-plus-the-rest, which is exactly the shape of a parallel speedup that
+/// is not there.
+///
+/// Returns the request sequence to hand to [`collect`].
+///
+/// # Safety
+///
+/// As [`dispatch`]. Additionally, the caller must not post again to the same
+/// core until the previous request has been collected -- the slot holds one
+/// request, and overwriting it loses the first.
+pub unsafe fn post(target_mpidr: u64, function: u64, arg0: u64, arg1: u64) -> u64 {
+    let work = work_for(slot_for_mpidr(target_mpidr));
+    let request = work[0].load(Ordering::Relaxed).wrapping_add(1);
     // Function and arguments before the request that publishes them. The
     // secondary reads the request first and only then the rest, so this order
     // is what makes the pair a handshake rather than a race.
-    WORK[1].store(function, Ordering::Relaxed);
-    WORK[2].store(arg0, Ordering::Relaxed);
-    WORK[3].store(arg1, Ordering::Relaxed);
-    WORK[0].store(request, Ordering::Release);
+    work[1].store(function, Ordering::Relaxed);
+    work[2].store(arg0, Ordering::Relaxed);
+    work[3].store(arg1, Ordering::Relaxed);
+    work[0].store(request, Ordering::Release);
 
-    let work_address = WORK.as_ptr() as u64;
-    // SAFETY: `WORK` is in this image and the secondary reads it with its MMU
-    // off, so it must be visible at the point of coherency before the doorbell.
+    // SAFETY: the slot is in this image and a secondary without its MMU reads
+    // it from memory, so it must be visible at the point of coherency before
+    // the doorbell that sends it looking.
     unsafe {
-        clean_to_coherency(work_address, 48);
+        clean_to_coherency(work.as_ptr() as u64, WORK_BYTES);
         ring(target_mpidr);
     }
+    request
+}
 
+/// Waits for a request posted by [`post`] and returns its result.
+///
+/// `None` on timeout.
+///
+/// # Safety
+///
+/// `target_mpidr` must be the core `request` was posted to.
+pub unsafe fn collect(target_mpidr: u64, request: u64, timeout_ticks: u64) -> Option<u64> {
+    let work = work_for(slot_for_mpidr(target_mpidr));
+    let work_address = work.as_ptr() as u64;
     let start = super::registers::physical_counter();
     loop {
-        // SAFETY: as above -- the secondary's stores bypass this core's cache.
-        unsafe { refresh_from_memory(work_address, 48) };
-        if WORK[5].load(Ordering::Acquire) == request {
-            return Some((
-                WORK[4].load(Ordering::Relaxed),
-                super::registers::physical_counter().wrapping_sub(start),
-            ));
+        // SAFETY: the secondary's stores may bypass this core's cache.
+        unsafe { refresh_from_memory(work_address, WORK_BYTES) };
+        if work[5].load(Ordering::Acquire) == request {
+            return Some(work[4].load(Ordering::Relaxed));
         }
         if super::registers::physical_counter().wrapping_sub(start) > timeout_ticks {
             return None;
@@ -1017,3 +1116,4 @@ pub extern "C" fn brainix_secondary_sum(start: u64, count: u64) -> u64 {
 pub fn secondary_sum_address() -> u64 {
     brainix_secondary_sum as *const () as u64
 }
+

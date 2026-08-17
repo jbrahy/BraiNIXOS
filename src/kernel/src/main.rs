@@ -865,6 +865,10 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
             put(2, pmgr);
             put(3, start_base);
 
+            // Eight extra cores, which is every non-boot core this part has
+            // and the width of the report block reserved for them.
+            const MAX_EXTRA_CORES: u64 = 8;
+
             let Some(target) = aarch64_cpus::first_waiting_cpu(list.get(..found).unwrap_or(&[]))
             else {
                 put(4, u64::MAX);
@@ -885,8 +889,9 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
             // boot-core problem -- a bad address or a bad index -- not a
             // secondary that misbehaved. Without this the two are
             // indistinguishable, and an hour went into telling them apart.
-            let before_release = brainix_kernel::arch::aarch64::smp::report();
-            put(43, brainix_kernel::arch::aarch64::smp::report_address());
+            let first_slot = brainix_kernel::aarch64_cpus::slot_for_cpu(target.cluster, target.core);
+            let before_release = brainix_kernel::arch::aarch64::smp::report(first_slot);
+            put(43, brainix_kernel::arch::aarch64::smp::report_address(first_slot));
             put(44, before_release[9]);
             put(45, before_release[10]);
             put(46, before_release[12]);
@@ -923,7 +928,7 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
                 };
                 put(15, doorbells);
                 put(16, ticks);
-                put(17, brainix_kernel::arch::aarch64::smp::report()[5]);
+                put(17, brainix_kernel::arch::aarch64::smp::report(released.slot)[5]);
 
                 // Real work on the other core. `sum(1..=1000)` is 500500, which
                 // the boot core knows without running it -- so a wrong answer is
@@ -1023,7 +1028,7 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
                 // whether or not the enable returned: a timeout with a fault
                 // recorded is a diagnosis, and a timeout without one is a
                 // different problem entirely.
-                let after = smp::report();
+                let after = smp::report(released.slot);
                 put(33, after[9]);
                 put(34, after[6]);
                 put(35, after[7]);
@@ -1064,6 +1069,88 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
                     }
                     None => put(28, 0),
                 }
+
+                // Every remaining core, on the same path. One partner is a
+                // mechanism; a pool is what the forward pass can actually use,
+                // and the only way to know the mechanism generalises is to run
+                // it on cores the first one's slot arithmetic did not choose.
+                //
+                // Each gets: released, checked that the slot the tree predicted
+                // is the slot its own MPIDR selects, handed the MMU, and then
+                // asked to read the same megabyte. Eight report slots each,
+                // starting at 48.
+                let mut released_count = 0u64;
+                let mut at_full_rate = 0u64;
+                let mut index = 0usize;
+                while index < found && released_count < MAX_EXTRA_CORES {
+                    let cpu = list[index];
+                    index += 1;
+                    if cpu.running || cpu.cpu_id == target.cpu_id {
+                        continue;
+                    }
+                    let out_base = 48 + (released_count as usize) * 8;
+                    released_count += 1;
+
+                    // SAFETY: as the first release -- a core the tree says is
+                    // not running, a start base translated from the ADT, and a
+                    // boot core under an identity map.
+                    let extra = unsafe { smp::release(&cpu, start_base, timeout) };
+                    put(out_base, u64::from(extra.cpu_id));
+                    put(out_base + 1, u64::from(extra.started));
+                    put(out_base + 2, extra.mpidr);
+                    put(out_base + 3, u64::from(extra.slot_matches));
+
+                    // A core whose two slot numbers disagree is a core writing
+                    // buffers the boot core is not reading. Stop before it is
+                    // handed anything, rather than collecting numbers from the
+                    // wrong memory.
+                    if !extra.started || !extra.slot_matches {
+                        continue;
+                    }
+
+                    // SAFETY: the core is parked in the dispatch loop and the
+                    // handoff describes the map it already resolves under.
+                    let on = unsafe {
+                        smp::dispatch(
+                            extra.mpidr,
+                            smp::secondary_enable_mmu_address(),
+                            handoff,
+                            0,
+                            hz,
+                        )
+                    };
+                    let Some((sctlr, _)) = on else {
+                        continue;
+                    };
+                    put(out_base + 4, sctlr);
+
+                    // SAFETY: the buffer is unchanged and this core is now
+                    // translating the same way every other one is.
+                    let read = unsafe {
+                        smp::dispatch(
+                            extra.mpidr,
+                            smp::secondary_checksum_address(),
+                            base,
+                            words,
+                            hz.saturating_mul(8),
+                        )
+                    };
+                    if let Some((result, ticks)) = read {
+                        put(out_base + 5, 1);
+                        put(out_base + 6, u64::from(result == expected));
+                        put(out_base + 7, ticks);
+                        // "Full rate" measured against the boot core rather
+                        // than against a constant, so a slower machine or a
+                        // different buffer size cannot make this pass by
+                        // accident. A tenth of slack covers an E core.
+                        if result == expected && ticks <= local_ticks.saturating_mul(11) / 10 {
+                            at_full_rate += 1;
+                        }
+                    }
+                }
+                // Past the per-core blocks, which run 48..112.
+                put(112, released_count);
+                put(113, at_full_rate);
             }
         }
         _ => {}
