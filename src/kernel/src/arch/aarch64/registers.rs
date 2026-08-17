@@ -218,3 +218,43 @@ pub unsafe fn random() -> Option<u64> {
         Some(value)
     }
 }
+
+/// `TCR_EL1` — translation control for EL1.
+pub fn tcr_el1() -> u64 {
+    read_sysreg!("TCR_EL1")
+}
+
+/// `TTBR0_EL1` — the low-half stage-1 table base for EL1.
+pub fn ttbr0_el1() -> u64 {
+    read_sysreg!("TTBR0_EL1")
+}
+
+/// `HCR_EL2` — hypervisor configuration.
+pub fn hcr_el2() -> u64 {
+    read_sysreg!("HCR_EL2")
+}
+
+/// Ask the MMU to translate `virtual_address` as an **EL1** read.
+///
+/// The counterpart of [`translate_el2_read`], and the one that matters before
+/// dropping to EL1: instruction fetch there uses EL1's translation regime, not
+/// EL2's. An address that translates fine at EL2 and not at EL1 is a landing
+/// pad that never executes, on a machine with no way to say so.
+///
+/// Returns `PAR_EL1`; bit 0 set means the translation failed.
+pub fn translate_el1_read(virtual_address: u64) -> u64 {
+    let par: u64;
+    // SAFETY: `at s1e1r` performs a lookup and writes `PAR_EL1`. It cannot
+    // fault; failure is reported in `PAR_EL1.F`.
+    unsafe {
+        core::arch::asm!(
+            "at s1e1r, {va}",
+            "isb",
+            "mrs {par}, PAR_EL1",
+            va = in(reg) virtual_address,
+            par = out(reg) par,
+            options(nostack)
+        )
+    }
+    par
+}

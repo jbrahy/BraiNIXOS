@@ -74,10 +74,20 @@
 //     does not. See the comment at the increment.
 //
 //   * GXF was investigated and ruled out by measurement, not by argument:
-//     HCR_EL2 = 0x32488000038 (E2H clear), GXF_STATUS_EL1 = 0,
-//     GXF_CONFIG_EL1 = 0, and `mrs` of ESR_GL1 traps. Reading those registers
-//     unguarded wedged the machine once, which is precisely why m1n1 gates them
-//     behind `gxf_enabled()`.
+//     GXF_STATUS_EL1 = 0, GXF_CONFIG_EL1 = 0, and `mrs` of ESR_GL1 traps.
+//     Reading those registers unguarded wedged the machine once, which is
+//     precisely why m1n1 gates them behind `gxf_enabled()`.
+//
+//     CORRECTION, 2026-08-16: that note originally read "HCR_EL2 =
+//     0x32488000038 (E2H clear)". **E2H is set.** The nibbles were mis-indexed.
+//     `HCR_EL2 = 0x32488000038` has bit 34 (E2H) **and** bit 27 (TGE) set, so
+//     the machine runs in **VHE** with general exceptions trapped to EL2.
+//     Confirmed independently rather than by re-reading the arithmetic:
+//     `TCR_EL1` and `TCR_EL2` read identical (`0x37510b510`), as do `TTBR0_EL1`
+//     and `TTBR0_EL2` (`0x1000369c000`). That is VHE aliasing, not coincidence.
+//     The GXF conclusion is unaffected -- it rested on the GXF registers, not
+//     on E2H -- but the parenthetical was wrong and is corrected here rather
+//     than quietly deleted.
 //
 // The original zero readings are not fully explained, and that is stated rather
 // than papered over. `.bss` is never zeroed by this payload and lies outside

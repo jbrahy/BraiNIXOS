@@ -325,6 +325,20 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
     put(25, probe_va);
     put(26, par);
 
+    // Can we even survive at EL1? Read-only pre-check, before any transition.
+    //
+    // Dropping to EL1 means instruction fetch uses EL1's translation regime.
+    // If SCTLR_EL1.M is set and this address does not translate there, the
+    // landing pad never executes and there is nothing left to report it. Three
+    // conditions decide it: HCR_EL2.RW must select AArch64 for EL1, HCR_EL2.TGE
+    // must be clear or EL1 is not really there, and the code must resolve.
+    let hcr = registers::hcr_el2();
+    put(48, hcr);
+    put(49, registers::sctlr_el1());
+    put(50, registers::tcr_el1());
+    put(51, registers::ttbr0_el1());
+    put(52, registers::translate_el1_read(probe_va));
+
     // CPU features. Reads only, and each gates something the kernel would
     // otherwise assume: using RNDR without FEAT_RNG raises an
     // undefined-instruction exception at the first call for entropy, during

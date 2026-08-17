@@ -71,3 +71,33 @@ pub use crate::aarch64_ident::MemoryModel;
 pub use registers::memory_model;
 pub use timer::Timer;
 pub use vectors::{last_exception, with_vectors, LastException, NO_EXCEPTION};
+
+// ---------------------------------------------------------------------------
+// EL2 -> EL1: why it is not a bounded probe under m1n1.
+//
+// Measured on the target 2026-08-16, read-only, before attempting anything:
+//
+//     HCR_EL2   0x32488000038    RW=1  TGE=1  E2H=1
+//     TCR_EL1   0x37510b510      identical to TCR_EL2
+//     TTBR0_EL1 0x1000369c000    identical to TTBR0_EL2
+//
+// The machine runs in **VHE** (`E2H=1`) with **`TGE=1`**. Under that
+// configuration the EL1-named registers are aliases of the EL2 ones -- which is
+// why the two pairs above are identical, and why `SCTLR_EL1` reports the MMU
+// enabled -- and `TGE` routes general exceptions to EL2, so EL1 is not a place
+// code can simply be dropped into.
+//
+// Getting to a genuine EL1 therefore means clearing `TGE`, deciding what to do
+// about `E2H`, and establishing a real EL1 translation regime. That is a
+// wholesale change to the machine's configuration, and m1n1 -- which is
+// resident, hosting the measurement, and the only reason we can see anything at
+// all -- depends on the configuration being changed.
+//
+// So this belongs in the boot path, entered from iBoot with the machine ours,
+// not in a probe. Attempting it here would trade the debugging loop for the
+// thing being debugged.
+//
+// The pre-check that establishes all of this is in `kernel_probe` and is
+// read-only: `HCR_EL2` for RW/TGE, and `AT s1e1r` for whether a landing pad
+// would even translate. It refused, and refusing was correct.
+// ---------------------------------------------------------------------------
