@@ -560,6 +560,12 @@ pub const EL1_PROBE_MAGIC: u64 = 0x4B72_6E6C_4E49_5803; // "Krnl NIX\x03"
 /// | 2 | drop to EL1, read `CurrentEL`, return via `HVC` | yes; this is the experiment |
 /// | 3 | enable pointer authentication and prove a forged signature is rejected | yes; writes `SCTLR` |
 /// | 4 | stage 2, and `SVC` at EL1 with a return to the instruction after it | yes |
+/// | 5 | install page tables this repository built | yes; writes `TTBR0_EL2` |
+/// | 6 | look at the boot seed **without** consuming it | no |
+///
+/// Stage 6 exists apart from stage 3 because stage 3 **erases** the seed. A
+/// measurement that destroys what it measures cannot be repeated, and every run
+/// after the first would report "no entropy" and read as a regression.
 ///
 /// # Report layout
 ///
@@ -582,7 +588,7 @@ pub const EL1_PROBE_MAGIC: u64 = 0x4B72_6E6C_4E49_5803; // "Krnl NIX\x03"
 /// written -- see `arch::aarch64::pac`.
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
-pub unsafe extern "C" fn el1_probe(stage: u64, out: *mut u64) -> u64 {
+pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u64) -> u64 {
     // This entry point never passes through `_start` either, and the redirect
     // slots it depends on live in `.bss`.
     //
@@ -654,7 +660,7 @@ pub unsafe extern "C" fn el1_probe(stage: u64, out: *mut u64) -> u64 {
             // than a poisoned pointer.
             let report = unsafe {
                 brainix_kernel::arch::aarch64::with_vectors(|| {
-                    brainix_kernel::arch::aarch64::pac::enable_and_verify(plain, 0)
+                    brainix_kernel::arch::aarch64::pac::enable_and_verify(plain, 0, boot_args)
                 })
             };
             put(1, report.sctlr_before);
@@ -709,6 +715,30 @@ pub unsafe extern "C" fn el1_probe(stage: u64, out: *mut u64) -> u64 {
             put(11, built.restored_root);
             put(12, built.error);
         }
+        6 => {
+            // Look at the boot seed WITHOUT consuming it.
+            //
+            // Separate from stage 3 on purpose. Stage 3 erases the seed, and a
+            // measurement that destroys what it measures cannot be repeated --
+            // every run after the first would report "no entropy" and look like
+            // a regression. This stage answers the only question that matters
+            // about the source, which is whether it changes between boots, and
+            // leaves it intact for stage 3 to spend.
+            //
+            // SAFETY: the caller supplies the firmware `boot_args` pointer, and
+            // `peek` neither writes nor retains the slice.
+            let seed = unsafe { brainix_kernel::arch::aarch64::entropy::peek(boot_args) };
+            put(1, u64::from(seed.present));
+            put(2, seed.len as u64);
+            put(3, seed.nonzero as u64);
+            put(4, seed.distinct as u64);
+            put(5, u64::from(seed.usable));
+            // Eight bytes, not sixty-four. Enough to see the value change
+            // between boots; not enough to reconstruct a key from a transcript
+            // of this probe, which is printed and scrolled back through.
+            put(6, seed.first_eight);
+            put(7, u64::from(seed.erased));
+        }
         _ => {}
     }
     EL1_PROBE_MAGIC
@@ -718,7 +748,7 @@ pub unsafe extern "C" fn el1_probe(stage: u64, out: *mut u64) -> u64 {
 /// [`KERNEL_PROBE_KEEPALIVE`].
 #[cfg(target_arch = "aarch64")]
 #[used]
-static EL1_PROBE_KEEPALIVE: unsafe extern "C" fn(u64, *mut u64) -> u64 = el1_probe;
+static EL1_PROBE_KEEPALIVE: unsafe extern "C" fn(u64, *const u8, *mut u64) -> u64 = el1_probe;
 
 /// Arm the watchdog so the machine resets, and return.
 ///

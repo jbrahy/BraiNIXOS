@@ -219,7 +219,7 @@ def d(i):
 
 print()
 print("  -- stage 1: what EL1 can reach, asked without going there ---------")
-if p.call(code + DROP_OFF, 1, dout) != DROP_MAGIC:
+if p.call(code + DROP_OFF, 1, ba, dout) != DROP_MAGIC:
     print("  stage 1 did not return the magic")
     raise SystemExit(1)
 print("  HCR while asking 0x%016x  TGE %d" % (d(1), (d(1) >> 27) & 1))
@@ -235,7 +235,7 @@ if unreachable:
 
 print()
 print("  -- stage 2: dropping to EL1 (this is the one that can hang) -------")
-if p.call(code + DROP_OFF, 2, dout) != DROP_MAGIC:
+if p.call(code + DROP_OFF, 2, ba, dout) != DROP_MAGIC:
     print("  stage 2 did not return the magic")
     raise SystemExit(1)
 
@@ -264,7 +264,7 @@ else:
 
 print()
 print("  -- stage 4: SVC dispatched at EL1, and resumed from ---------------")
-if p.call(code + DROP_OFF, 4, dout) != DROP_MAGIC:
+if p.call(code + DROP_OFF, 4, ba, dout) != DROP_MAGIC:
     print("  stage 4 did not return the magic")
     raise SystemExit(1)
 svc_count, svc_esr, svc_elr = d(9), d(10), d(11)
@@ -296,9 +296,32 @@ if svc_ok:
 else:
     print("  SVC NOT PROVEN. All of: one dispatch, EC 0x15, ISS 0x42, no fault.")
 
+def seed_line(label):
+    present, ln, nz, distinct, usable, first8, erased = (d(1), d(2), d(3), d(4), d(5), d(6), d(7))
+    if not present:
+        print("  %-16s ABSENT" % label)
+        return None
+    print("  %-16s %d bytes, %d non-zero, %d distinct values, usable=%d"
+          % (label, ln, nz, distinct, usable))
+    # Eight bytes only. Enough to see it change between boots, not enough to
+    # rebuild a key from a scrollback of this probe.
+    print("                   first 8: %016x" % first8)
+    return (present, ln, nz, distinct, usable, first8)
+
+print()
+print("  -- stage 6: the boot seed, before anything spends it --------------")
+if p.call(code + DROP_OFF, 6, ba, dout) != DROP_MAGIC:
+    print("  stage 6 did not return the magic")
+    raise SystemExit(1)
+seed_before = seed_line("/chosen/random-seed")
+if seed_before is None:
+    print("  No seed. PAC below will refuse to install a key, which is the")
+    print("  correct outcome -- an all-zero key looks like a mitigation.")
+seed_usable = bool(seed_before and seed_before[4])
+
 print()
 print("  -- stage 3: enabling pointer authentication -----------------------")
-if p.call(code + DROP_OFF, 3, dout) != DROP_MAGIC:
+if p.call(code + DROP_OFF, 3, ba, dout) != DROP_MAGIC:
     print("  stage 3 did not return the magic")
     raise SystemExit(1)
 sctlr_before, sctlr_on, sctlr_after, apctl = d(1), d(2), d(3), d(4)
@@ -323,13 +346,11 @@ print("  SCTLR after      0x%016x  %s" % (sctlr_after,
       "RESTORED" if sctlr_after == sctlr_before else "NOT RESTORED"))
 print("  APCTL_EL1        0x%016x%s" % (apctl, "  (read trapped)" if apctl == 0xDEAD0000DEAD0000 else ""))
 if keys & 1:
-    print("  keys from RNDR   installed")
-elif keys & 2:
-    print("  keys from RNDR   NOT installed -- FEAT_RNG present but declined to")
-    print("                   supply a number. PAC below runs on whatever key was")
-    print("                   already loaded, which is not this kernel's to trust.")
+    print("  key installed    yes -- %s"
+          % ("RNDR" if keys & 2 else "derived from /chosen/random-seed"))
 else:
-    print("  keys from RNDR   NOT installed -- FEAT_RNG absent on this part")
+    print("  key installed    NO. PAC below runs on whatever key was already")
+    print("                   loaded, which is not this kernel's to trust.")
 print()
 print("  plain            0x%016x" % plain)
 print("  signed as found  0x%016x  %s" % (as_found,
@@ -352,9 +373,29 @@ if verdict:
 else:
     print("  PAC NOT PROVEN. All three conditions must hold; see the lines above.")
 
+# The seed is key material. Deriving from it and leaving it in DRAM keeps a
+# key-equivalent readable for the rest of the boot, so `consume` erases it --
+# and an erase that the optimiser deleted looks exactly like one that worked.
+# This is the only way to tell the two apart.
+print()
+print("  -- stage 6 again: was the seed actually erased? -------------------")
+if p.call(code + DROP_OFF, 6, ba, dout) != DROP_MAGIC:
+    print("  stage 6 did not return the magic")
+    raise SystemExit(1)
+seed_after = seed_line("/chosen/random-seed")
+erased_ok = True
+if seed_usable:
+    erased_ok = bool(seed_after and seed_after[2] == 0 and seed_after[5] == 0)
+    print()
+    if erased_ok:
+        print("  OK: the seed is gone. It was single-use, as it has to be.")
+    else:
+        print("  SEED STILL PRESENT after being consumed. Key material is sitting")
+        print("  in DRAM readable by anything that can map that page.")
+
 print()
 print("  -- stage 5: installing tables THIS REPO built ---------------------")
-if p.call(code + DROP_OFF, 5, dout) != DROP_MAGIC:
+if p.call(code + DROP_OFF, 5, ba, dout) != DROP_MAGIC:
     print("  stage 5 did not return the magic")
     raise SystemExit(1)
 gl, block, live_desc, attrs = d(1), d(2), d(3), d(4)
@@ -392,9 +433,11 @@ if mmu_ok:
 else:
     print("  BUILT TABLES NOT PROVEN. See the lines above.")
 
+entropy_ok = seed_usable and (keys & 1) == 1 and erased_ok
 print()
-if el1_ok and svc_ok and verdict and mmu_ok:
-    print("  EL1 DROP, SVC ENTRY, PAC AND OUR OWN PAGE TABLES ALL VERIFIED.")
+if el1_ok and svc_ok and verdict and mmu_ok and entropy_ok:
+    print("  EL1 DROP, SVC ENTRY, OUR OWN PAGE TABLES, AND PAC ON A KEY THIS")
+    print("  KERNEL DERIVED FROM A PER-BOOT SEED IT THEN ERASED.")
 else:
     raise SystemExit(1)
 PYEOF

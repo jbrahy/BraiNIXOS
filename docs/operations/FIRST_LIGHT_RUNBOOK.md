@@ -641,10 +641,53 @@ Two Apple specifics. `ID_AA64ISAR1_EL1.APA` (QARMA) is **0** and `API`
 (implementation defined) is **4**: check only `APA` and you conclude PAC is
 absent on hardware that has it, with `FEAT_FPAC` on top. And
 `ID_AA64ISAR0_EL1 = 0x0221100110212120` — the `RNDR` field is **zero**, so
-**this part has no hardware RNG**. Key installation needs entropy, so PAC here
-still runs on the key firmware loaded. It differs per boot, which beats a
-constant, but it is not a key this kernel chose, and closing that depends on
-finding another entropy source.
+**this part has no hardware RNG**. The key comes from the boot seed instead;
+see below.
+
+## 9h. Entropy on a part with no RNG
+
+**`/chosen/random-seed`.** iBoot leaves 64 bytes there. `/chosen/cl4-entropy`
+is the other candidate and is **192 bytes of zeros** on this machine — named
+here so nobody spends the hour again.
+
+**That it exists proves nothing.** A constant baked into the firmware image
+would look identical to a fresh seed in any single read. Read it across boots
+before trusting it:
+
+```
+fixture  7558166c851e9572
+boot 1   3a182c6dcf382651
+boot 2   fdee395561310b24
+boot 3   4825d9b55323425a
+```
+
+All different, 63-64 of 64 bytes non-zero. That is a real per-boot seed.
+
+**Hash it, do not slice it.** Two reasons. Firmware bytes should not reach a key
+register as themselves — a partial disclosure of a derived key then says nothing
+about the seed. And one seed has many consumers: PAC alone wants five key pairs,
+and handing each a different slice of the same 64 bytes correlates them. A
+domain separator gives each an independent-looking value.
+
+**Erase it after use, and check that the erase happened.** Deriving from the
+seed and leaving it in DRAM keeps a key-equivalent readable by anything that can
+map that page, for the rest of the boot. Use `write_volatile`: an ordinary write
+to memory that is never read again is precisely what an optimiser may delete,
+and a deleted erase is indistinguishable from a successful one until someone
+dumps the page. Read it back to confirm — `0 non-zero` is the only evidence that
+counts.
+
+**Refuse a bad seed rather than deriving from it.** An all-zero key
+authenticates perfectly, passes every self-test, and protects nobody, because it
+is the same key on every machine. `SeedQuality::usable` rejects absent, short,
+all-zero and single-byte-pattern buffers. Refusing to install a key is the
+honest outcome; installing a known one looks like a mitigation.
+
+Note what this does and does not establish. That the seed is fresh per boot is
+measured on hardware; that different seeds give different keys is proved by host
+test. The composition gives per-boot keys. Comparing two signatures across boots
+would *not* show it, because the signed pointer is the load address and that
+moves on its own.
 
 ## 10. Driving the machine when you are not next to it
 

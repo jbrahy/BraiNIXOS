@@ -60,6 +60,7 @@
 pub mod bss;
 pub mod console;
 pub mod el;
+pub mod entropy;
 pub mod halt;
 pub mod mmu;
 pub mod pac;

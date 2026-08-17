@@ -32,6 +32,20 @@
 //!
 //! # Keys
 //!
+//! This part has **no `RNDR`** -- `ID_AA64ISAR0_EL1 = 0x0221100110212120`, the
+//! field is zero -- so the key comes from the boot seed instead: 64 bytes iBoot
+//! leaves at `/chosen/random-seed`, measured to differ on every boot, hashed
+//! with a domain separator. See [`crate::aarch64_entropy`] for why it is hashed
+//! rather than sliced, and [`super::entropy`] for why it is erased on use.
+//!
+//! Enabling PAC on a key this kernel did not choose is the failure this avoids.
+//! A fixed key authenticates perfectly, passes every test in this module, and
+//! protects nobody: it is the same key on every machine and every boot, so a
+//! signature forged once is valid everywhere. `keys_installed` reports whether
+//! a key was actually installed, and refusing is the correct outcome when no
+//! entropy is available -- an all-zero key that looks like a mitigation is worse
+//! than none.
+//!
 //! m1n1 does not use pointer authentication -- it neither writes the key
 //! registers nor emits a signing instruction; the only mention in its source is
 //! mapping Apple's `APCTL` for its own hypervisor mode. So installing keys here
@@ -121,6 +135,11 @@ pub struct PacReport {
     /// declined to produce a number", which need different responses and are
     /// otherwise the same reading.
     pub random_present: bool,
+    /// What the boot seed looked like, when one was consulted.
+    ///
+    /// `None` when `RNDR` supplied the key and the seed was never touched,
+    /// which also means it was not erased.
+    pub seed: Option<super::entropy::SeedReport>,
 }
 
 impl PacReport {
@@ -244,11 +263,12 @@ unsafe fn apctl() -> u64 {
 ///
 /// # Safety
 ///
-/// Writes `SCTLR` and the key A registers, and executes authentication
-/// instructions that can fault. Must be called inside [`vectors::with_vectors`].
-/// `SCTLR` is restored; the keys are not, for the reason given in the module
-/// documentation.
-pub unsafe fn enable_and_verify(plain: u64, modifier: u64) -> PacReport {
+/// Writes `SCTLR` and the key A registers, **erases the boot seed**, and
+/// executes authentication instructions that can fault. Must be called inside
+/// [`vectors::with_vectors`], and `boot_args` must be the firmware pointer or
+/// null. `SCTLR` is restored; the keys are not, for the reason given in the
+/// module documentation.
+pub unsafe fn enable_and_verify(plain: u64, modifier: u64, boot_args: *const u8) -> PacReport {
     let sctlr_before = registers::sctlr_el1();
     // SAFETY: inside `with_vectors` per this function's contract.
     let apctl_value = unsafe { apctl() };
@@ -266,19 +286,42 @@ pub unsafe fn enable_and_verify(plain: u64, modifier: u64) -> PacReport {
     // same key on every machine and every boot, so a signature forged once is
     // valid everywhere. Enabling PAC with a fixed key is the kind of mitigation
     // that passes its own tests and stops nobody.
-    // Guarded, because `registers::random` says to be. `RNDR` on a part without
-    // `FEAT_RNG` is an undefined instruction, and calling it unguarded here --
-    // which an earlier draft of this function did -- relies on the vector table
-    // catching it. That works, and it is still wrong: the reported "no keys" then
-    // means "the read trapped" rather than "the entropy source declined", and
-    // those need different responses.
+    // `RNDR` is checked first and is expected to be absent: measured on this
+    // part, `ID_AA64ISAR0_EL1.RNDR` is zero. It is still checked rather than
+    // assumed away, because this module should do the right thing on a part
+    // that has one.
+    //
+    // SAFETY: guarded by the FEAT_RNG check.
     let random_present =
         crate::aarch64_features::RandomSupport::from_isar0(registers::id_aa64isar0_el1()).present;
-    // SAFETY: guarded by the FEAT_RNG check immediately above.
-    let key_lo = if random_present { unsafe { registers::random() } } else { None };
-    let key_hi = if random_present { unsafe { registers::random() } } else { None };
-    let keys_installed = match (key_lo, key_hi) {
-        (Some(lo), Some(hi)) => {
+    let from_rndr = if random_present {
+        match (unsafe { registers::random() }, unsafe { registers::random() }) {
+            (Some(lo), Some(hi)) => Some((lo, hi)),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    // Otherwise the boot seed. `/chosen/random-seed` is 64 bytes iBoot leaves in
+    // the device tree, measured to differ on every boot, hashed with a domain
+    // separator rather than sliced -- see `crate::aarch64_entropy`. `consume`
+    // erases it before returning, so this is the only thing that gets to use it.
+    //
+    // SAFETY: the caller supplies the firmware `boot_args` pointer, and the
+    // device tree is not in use by anything else during a probe.
+    let (key_source, seed_report) = match from_rndr {
+        Some(pair) => (Some(pair), None),
+        None => match unsafe { super::entropy::consume(boot_args, b"pac.apia") } {
+            Some((pair, report)) => (Some(pair), Some(report)),
+            // SAFETY: as above; a non-consuming look, so the report can say
+            // *why* there was no key.
+            None => (None, Some(unsafe { super::entropy::peek(boot_args) })),
+        },
+    };
+
+    let keys_installed = match key_source {
+        Some((lo, hi)) => {
             // SAFETY: `APIAKeyLo_EL1`/`APIAKeyHi_EL1` are writable at EL2 and
             // affect only the key A computation. m1n1 signs nothing, so no live
             // signature is invalidated.
@@ -297,7 +340,7 @@ pub unsafe fn enable_and_verify(plain: u64, modifier: u64) -> PacReport {
         // Deliberately not falling back to a constant. Refusing to install a key
         // leaves PAC measurably in whatever state it was in, which is honest;
         // installing a known one would look like success.
-        _ => false,
+        None => false,
     };
 
     // SAFETY: setting the enable bits. Bits for features the part does not
@@ -347,5 +390,6 @@ pub unsafe fn enable_and_verify(plain: u64, modifier: u64) -> PacReport {
         vector: vectors::last_exception().index,
         keys_installed,
         random_present,
+        seed: seed_report,
     }
 }
