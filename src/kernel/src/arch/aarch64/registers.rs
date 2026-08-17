@@ -128,6 +128,16 @@ pub fn ttbr0_el2() -> u64 {
     read_sysreg!("TTBR0_EL2")
 }
 
+/// `MAIR_EL2` — the memory attribute indirection table for EL2.
+pub fn mair_el2() -> u64 {
+    read_sysreg!("MAIR_EL2")
+}
+
+/// `SCTLR_EL2` — system control for EL2, including `M`, `C` and `I`.
+pub fn sctlr_el2() -> u64 {
+    read_sysreg!("SCTLR_EL2")
+}
+
 /// Ask the MMU itself to translate `virtual_address` for an EL2 read.
 ///
 /// Returns `PAR_EL1`. Bit 0 set means the translation **failed**, which is

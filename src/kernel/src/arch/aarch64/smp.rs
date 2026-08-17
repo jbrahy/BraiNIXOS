@@ -46,6 +46,27 @@
 //! `std::sync::Barrier` costing roughly 30 us; a doorbell thirty times cheaper
 //! makes far smaller work worth splitting, and a threshold measured against the
 //! wrong synchronization primitive would be wrong by that factor.
+//!
+//! # A core with its caches off cannot be given work worth having
+//!
+//! Dispatch working is not the same as dispatch being useful, and the gap
+//! between them is two orders of magnitude. Measured on the target, the same
+//! read loop over the same 1 MiB buffer:
+//!
+//! | core | rate |
+//! | --- | --- |
+//! | boot core | **11.4 GB/s** |
+//! | secondary, as it arrives out of reset | **0.09 GB/s** |
+//! | secondary, sharing the boot core's translation | **11.4 GB/s** |
+//!
+//! **131x.** A matmul chunk handed to a core in the middle state loses to not
+//! splitting the work at all -- by so much that every threshold in
+//! `Dispatch::minimum_split_bytes` would be meaningless. So a secondary is not
+//! a worker until it has adopted the boot core's `MMU`, and
+//! [`brainix_secondary_enable_mmu`] is what makes it one. Sharing the tables
+//! rather than building new ones is deliberate: the stub already depends on the
+//! identity map to resolve its own `adrp`, and a private root would have to
+//! reproduce that map exactly to keep it true.
 
 #![allow(unsafe_code)]
 
@@ -65,6 +86,45 @@ pub const SECONDARY_MAGIC: u64 = 0x5EC0_11DA_00B0_0757;
 /// inference.
 const REPORT_POISON: u64 = 0x5EC0_DEAD_5EC0_DEAD;
 
+/// Slots in the report, and the size every cache-maintenance site derives from.
+///
+/// **This is a constant because a literal here was wrong once and cost hours.**
+/// The report was 6 slots and three sites cleaned "48". Growing it to 14 left
+/// those three behind, and the consequence is not a missing value: the proxy
+/// loads this image *through the boot core's caches*, so the tail of the report
+/// sits dirty in cache while DRAM still holds whatever was there before. The
+/// boot core reads its own cached copy and sees the shipped initialiser; the
+/// secondary reads DRAM with its caches off and sees the previous run's
+/// garbage. Both are self-consistent, neither is right, and they disagree only
+/// past the 48th byte.
+const REPORT_SLOTS: usize = 14;
+
+/// The report's size in bytes.
+const REPORT_BYTES: u64 = (REPORT_SLOTS * 8) as u64;
+
+/// What every slot reads before a secondary has touched it.
+///
+/// One list, used both as the static's initialiser and as the reset before a
+/// release, so the two cannot drift. They did: the reset poisoned all of them
+/// including the two counters, and a counter that reads `poison + 1` does not
+/// look like a counter at all.
+const REPORT_INITIAL: [u64; REPORT_SLOTS] = [
+    REPORT_POISON, // 0 magic
+    REPORT_POISON, // 1 MPIDR_EL1
+    REPORT_POISON, // 2 CurrentEL
+    REPORT_POISON, // 3 SCTLR_EL1
+    0,             // 4 doorbells observed
+    REPORT_POISON, // 5 IPI_SR_EL1 as seen
+    REPORT_POISON, // 6 ESR_EL2 at fault
+    REPORT_POISON, // 7 ELR_EL2 at fault
+    REPORT_POISON, // 8 FAR_EL2 at fault
+    0,             // 9 faulted
+    0,             // 10 calls entered
+    REPORT_POISON, // 11 last function dispatched
+    0,             // 12 calls returned
+    REPORT_POISON, // 13 x21 at fault
+];
+
 core::arch::global_asm!(
     r#"
 .section .text.secondary, "ax"
@@ -77,15 +137,27 @@ brainix_secondary_entry:
     // so it resolves against the physical address this image was loaded at,
     // which is the same as its virtual address only because the boot core runs
     // under an identity map -- stated because it is load-bearing, not obvious.
-    adrp x0, {report}
-    add  x0, x0, :lo12:{report}
+    // x21, x19 and x20 rather than x0, x4 and x5, and this is not style.
+    //
+    // This loop holds three things across a `blr` into a Rust function: the
+    // report base, the work base, and the request sequence. x0-x18 are
+    // caller-saved -- the callee is entitled to destroy every one of them --
+    // so holding anything there across the call is a bug that the callee
+    // decides whether to trigger. `brainix_secondary_sum` is small enough that
+    // the compiler never touched x4 or x5, and the loop looked correct for as
+    // long as that was the only thing dispatched. The first work item large
+    // enough to need more registers stored its result through a clobbered base
+    // and hung the core. x19-x28 are callee-saved, so the callee has to give
+    // them back.
+    adrp x21, {report}
+    add  x21, x21, :lo12:{report}
 
     mrs  x1, MPIDR_EL1
-    str  x1, [x0, #8]
+    str  x1, [x21, #8]
     mrs  x1, CurrentEL
-    str  x1, [x0, #16]
+    str  x1, [x21, #16]
     mrs  x1, SCTLR_EL1
-    str  x1, [x0, #24]
+    str  x1, [x21, #24]
 
     // The magic LAST, and after a barrier. A reader that sees it is guaranteed
     // to see the three values above; without the `dsb` it could observe the
@@ -96,7 +168,7 @@ brainix_secondary_entry:
     movk x1, #0xB0, lsl #16
     movk x1, #0x11DA, lsl #32
     movk x1, #0x5EC0, lsl #48
-    str  x1, [x0, #0]
+    str  x1, [x21, #0]
     dsb  sy
 
     // Park, and wake on the doorbell.
@@ -114,6 +186,25 @@ brainix_secondary_entry:
     // without ever being delivered as an exception, which is why this loop can
     // be eleven instructions with no handler, no stack and no `VBAR`.
 1:  wfi
+    // **Re-derive the bases after every wake. Registers do not survive `wfi`
+    // on this part.**
+    //
+    // This was found the hard way. The loop kept its report base in x21 across
+    // the sleep, and after a dispatched call returned and the core went back to
+    // `wfi` for a few milliseconds, the next doorbell resumed with x21 as
+    // *zero* -- so `ldr x3, [x21, #32]` read address 0x20 and took a
+    // synchronous external abort. The callees were checked and exonerated:
+    // both are leaf functions touching only x8-x10, and moving the bases from
+    // caller-saved to callee-saved registers to protect them from callees did
+    // not help, because the callee was never the problem.
+    //
+    // Apple's `wfi` can drop the core into a state deep enough that general
+    // registers are not retained -- m1n1 names its own version `deep_wfi`. Two
+    // instructions of `adrp`/`add` after each wake costs nothing next to the
+    // sleep and removes the assumption entirely: nothing is carried across the
+    // `wfi`, so nothing can be lost across it.
+    adrp x21, {report}
+    add  x21, x21, :lo12:{report}
     // SYS_IMP_APL_IPI_SR_EL1 -- s3_5_c15_c1_1, bit 0 is pending.
     mrs  x2, s3_5_c15_c1_1
     tst  x2, #1
@@ -121,24 +212,24 @@ brainix_secondary_entry:
     // ours. Going back to sleep rather than counting it is what keeps the
     // count a count of doorbells.
     b.eq 1b
-    str  x2, [x0, #40]
+    str  x2, [x21, #40]
     // Acknowledge by writing the pending bit back. Until this happens the
     // condition stays asserted and the next `wfe` returns immediately, which
     // presents as a core spinning at 100% rather than as a missed wake.
     mov  x3, #1
     msr  s3_5_c15_c1_1, x3
     // Load, add, store -- see the note on the exclusive monitor in `vectors`.
-    ldr  x3, [x0, #32]
+    ldr  x3, [x21, #32]
     add  x3, x3, #1
-    str  x3, [x0, #32]
+    str  x3, [x21, #32]
     dsb  sy
 
     // Is there work, or was this doorbell only a wake?
-    adrp x4, {work}
-    add  x4, x4, :lo12:{work}
-    ldr  x5, [x4, #0]           // request sequence
-    ldr  x6, [x4, #40]          // completion sequence
-    cmp  x5, x6
+    adrp x19, {work}
+    add  x19, x19, :lo12:{work}
+    ldr  x20, [x19, #0]         // request sequence
+    ldr  x6,  [x19, #40]        // completion sequence
+    cmp  x20, x6
     b.eq 1b
 
     // A stack, established here rather than at entry because nothing before
@@ -148,21 +239,89 @@ brainix_secondary_entry:
     add  x7, x7, #16384
     mov  sp, x7
 
-    ldr  x8, [x4, #8]           // function
-    ldr  x0, [x4, #16]          // arg0
-    ldr  x1, [x4, #24]          // arg1
-    blr  x8
-    // Result first, then the sequence that publishes it. A reader that sees
-    // the sequence match is guaranteed to see this store.
-    str  x0, [x4, #32]
-    dsb  sy
-    str  x5, [x4, #40]
+    ldr  x8, [x19, #8]          // function
+    ldr  x0, [x19, #16]         // arg0
+    ldr  x1, [x19, #24]         // arg1
+
+    // Entered, and what was entered, recorded BEFORE the call. The boot core
+    // sees one timeout for three different failures -- work that never
+    // started, work that never returned, and work that returned an answer that
+    // was lost on the way back -- and cannot tell them apart from the outside.
+    // These two counters and the function pointer separate them.
+    ldr  x9, [x21, #80]
+    add  x9, x9, #1
+    str  x9, [x21, #80]
+    str  x8, [x21, #88]
     dsb  sy
 
-    // x0 was the report base and the call clobbered it. Recover it rather than
-    // carrying it in a callee-saved register the callee is entitled to use.
-    adrp x0, {report}
-    add  x0, x0, :lo12:{report}
+    blr  x8
+    // Re-derive rather than trust, for the same reason as after the `wfi`. A
+    // callee is *required* to give x19-x21 back, but this loop has now been
+    // wrong twice about which registers survive what, and the cost of not
+    // relying on it is four instructions on a path that just ran a matmul.
+    // x0 holds the result and no `adrp` touches it.
+    adrp x19, {work}
+    add  x19, x19, :lo12:{work}
+    adrp x21, {report}
+    add  x21, x21, :lo12:{report}
+    ldr  x20, [x19, #0]         // the request being served, re-read
+    // Result first, then the sequence that publishes it. A reader that sees
+    // the sequence match is guaranteed to see this store.
+    str  x0, [x19, #32]
+    dsb  sy
+    str  x20, [x19, #40]
+    dsb  sy
+    ldr  x9, [x21, #96]
+    add  x9, x9, #1
+    str  x9, [x21, #96]
+    dsb  sy
+    b 1b
+
+// A vector table for the secondary, and the reason it exists.
+//
+// Until the MMU is turned on, this core cannot fault in any way it would
+// survive: `VBAR_EL2` is 0 out of reset, so the first abort branches to
+// address 0 and executes whatever is there. That is not a core that stops --
+// it is a core running arbitrary instructions with full EL2 privilege beside
+// the boot core, and it took the whole machine down once before this table
+// existed. The symptom was not a fault report; it was the proxy going silent.
+//
+// All sixteen entries land in the same place. Distinguishing a synchronous
+// abort from an SError is what `ESR_EL2` is for, and sixteen different
+// handlers would be sixteen chances to get one wrong.
+.balign 2048
+.globl brainix_secondary_vectors
+brainix_secondary_vectors:
+.rept 16
+    b brainix_secondary_fault
+    .balign 128
+.endr
+
+brainix_secondary_fault:
+    // x22/x23 so this cannot corrupt the loop's own state on the way to
+    // recording why the loop failed.
+    adrp x22, {report}
+    add  x22, x22, :lo12:{report}
+    mrs  x23, ESR_EL2
+    str  x23, [x22, #48]
+    mrs  x23, ELR_EL2
+    str  x23, [x22, #56]
+    mrs  x23, FAR_EL2
+    str  x23, [x22, #64]
+    // x21, the loop's own report base. If a fault says it read from a small
+    // address, this says whether the base was destroyed or the offset was.
+    str  x21, [x22, #104]
+    // The flag last and after a barrier, for the same reason the magic is
+    // written last: a reader that sees it must be guaranteed to see the three
+    // registers that explain it.
+    dsb  sy
+    mov  x23, #1
+    str  x23, [x22, #72]
+    dsb  sy
+    // Park for good. Returning would re-execute the faulting instruction and
+    // fault again, and a core spinning through this handler is a core writing
+    // to the report forever.
+1:  wfi
     b 1b
 .balign 16384
 "#,
@@ -174,6 +333,8 @@ brainix_secondary_entry:
 extern "C" {
     /// The secondary entry point, defined above.
     static brainix_secondary_entry: u8;
+    /// The secondary's vector table, defined above.
+    static brainix_secondary_vectors: u8;
 }
 
 /// `[magic, MPIDR_EL1, CurrentEL, SCTLR_EL1]`, written by the secondary.
@@ -182,16 +343,23 @@ extern "C" {
 /// image. A `.bss` buffer would start as whatever was in that memory, and the
 /// difference between "the core wrote this" and "this was already here" is the
 /// entire measurement.
-static SECONDARY_REPORT: [AtomicU64; 6] = [
-    AtomicU64::new(REPORT_POISON),
-    AtomicU64::new(REPORT_POISON),
-    AtomicU64::new(REPORT_POISON),
-    AtomicU64::new(REPORT_POISON),
-    // Doorbell count, zeroed rather than poisoned: it is incremented from
-    // zero, so a poison would have to be subtracted out and a reader could not
-    // tell "never woken" from "woken a poison-sized number of times".
-    AtomicU64::new(0),
-    AtomicU64::new(REPORT_POISON),
+/// The slot meanings, and why some start at zero rather than poison, are in
+/// [`REPORT_INITIAL`] -- which is also what a release resets them to.
+static SECONDARY_REPORT: [AtomicU64; REPORT_SLOTS] = [
+    AtomicU64::new(REPORT_INITIAL[0]),
+    AtomicU64::new(REPORT_INITIAL[1]),
+    AtomicU64::new(REPORT_INITIAL[2]),
+    AtomicU64::new(REPORT_INITIAL[3]),
+    AtomicU64::new(REPORT_INITIAL[4]),
+    AtomicU64::new(REPORT_INITIAL[5]),
+    AtomicU64::new(REPORT_INITIAL[6]),
+    AtomicU64::new(REPORT_INITIAL[7]),
+    AtomicU64::new(REPORT_INITIAL[8]),
+    AtomicU64::new(REPORT_INITIAL[9]),
+    AtomicU64::new(REPORT_INITIAL[10]),
+    AtomicU64::new(REPORT_INITIAL[11]),
+    AtomicU64::new(REPORT_INITIAL[12]),
+    AtomicU64::new(REPORT_INITIAL[13]),
 ];
 
 /// Stack for the secondary, so it can call Rust.
@@ -309,15 +477,32 @@ unsafe fn refresh_from_memory(start: u64, len: u64) {
 }
 
 /// Read what the secondary recorded.
-pub fn report() -> [u64; 6] {
-    [
-        SECONDARY_REPORT[0].load(Ordering::Relaxed),
-        SECONDARY_REPORT[1].load(Ordering::Relaxed),
-        SECONDARY_REPORT[2].load(Ordering::Relaxed),
-        SECONDARY_REPORT[3].load(Ordering::Relaxed),
-        SECONDARY_REPORT[4].load(Ordering::Relaxed),
-        SECONDARY_REPORT[5].load(Ordering::Relaxed),
-    ]
+///
+/// Invalidates first. Before the secondary has its caches the stores bypassed
+/// this core's cache; after it has them they may still be sitting in its own.
+/// Either way a plain read can return a line this core cached earlier, and the
+/// stale value is a plausible-looking number rather than an obvious error.
+pub fn report() -> [u64; REPORT_SLOTS] {
+    // SAFETY: the report is in this image and 112 bytes long.
+    unsafe { refresh_from_memory(SECONDARY_REPORT.as_ptr() as u64, REPORT_BYTES) };
+    let mut out = [0u64; REPORT_SLOTS];
+    let mut index = 0;
+    while index < out.len() {
+        out[index] = SECONDARY_REPORT[index].load(Ordering::Relaxed);
+        index += 1;
+    }
+    out
+}
+
+/// Where the report lives, so a reader can check it is the buffer it means.
+pub fn report_address() -> u64 {
+    SECONDARY_REPORT.as_ptr() as u64
+}
+
+/// Address of the secondary's vector table.
+pub fn secondary_vectors_address() -> u64 {
+    // SAFETY: address of an `extern` symbol defined in this crate's assembly.
+    unsafe { core::ptr::addr_of!(brainix_secondary_vectors) as u64 }
 }
 
 /// Rings another core's doorbell.
@@ -370,7 +555,7 @@ pub unsafe fn ring_and_confirm(target_mpidr: u64, count: u64, timeout_ticks: u64
         unsafe { ring(target_mpidr) };
         loop {
             // SAFETY: the report lives in this image, which is mapped.
-            unsafe { refresh_from_memory(report_address, 48) };
+            unsafe { refresh_from_memory(report_address, REPORT_BYTES) };
             if SECONDARY_REPORT[4].load(Ordering::Relaxed) != before {
                 break;
             }
@@ -403,20 +588,40 @@ pub unsafe fn ring_and_confirm(target_mpidr: u64, count: u64, timeout_ticks: u64
 pub unsafe fn release(cpu: &Cpu, start_base: u64, timeout_ticks: u64) -> SecondaryReport {
     let entry = secondary_entry_address();
 
-    // Poison the report before anything can write it, so a value left over
-    // from an earlier attempt cannot be mistaken for a fresh one.
-    for slot in &SECONDARY_REPORT {
-        slot.store(REPORT_POISON, Ordering::Relaxed);
+    // Reset the report before anything can write it, so a value left over from
+    // an earlier attempt cannot be mistaken for a fresh one. To the *shipped*
+    // values, not to poison across the board: two of these slots are counters
+    // that start at zero, and blanket-poisoning them made "one call ran" read
+    // as a number in the quintillions.
+    let mut slot = 0;
+    while slot < REPORT_SLOTS {
+        SECONDARY_REPORT[slot].store(REPORT_INITIAL[slot], Ordering::Relaxed);
+        slot += 1;
     }
 
     let report_address = SECONDARY_REPORT.as_ptr() as u64;
-    // SAFETY: both ranges are inside this image, which is mapped.
+    // SAFETY: all four ranges are inside this image, which is mapped.
     unsafe {
-        clean_to_coherency(report_address, 48);
+        clean_to_coherency(report_address, REPORT_BYTES);
         // The stub itself. The secondary fetches it with the MMU off, so it has
         // to be visible at the point of coherency, not merely at the point of
         // unification where the loader left it.
         clean_to_coherency(entry, 16384);
+        // **The stack, and this one is not obvious.** The boot core zeroes
+        // `.bss` at entry, which leaves the stack's lines *dirty in the boot
+        // core's cache*. The secondary then pushes to that stack with its
+        // caches off, so its stores land in DRAM -- and a later eviction of the
+        // boot core's dirty zero-line writes zero straight over them.
+        //
+        // What that destroys is whatever a dispatched function saved there:
+        // the callee-saved registers. The loop keeps its report base in x21
+        // precisely so a callee cannot clobber it, and this turns the callee's
+        // faithful save-and-restore into a restore of zero. The symptom was a
+        // data abort at the next doorbell reading address 0x20 -- the loop's
+        // own `[x21, #32]` with x21 handed back as nothing.
+        clean_to_coherency(core::ptr::addr_of!(SECONDARY_STACK) as u64, 16384);
+        // Same reasoning for the work slot, which is also `.bss`.
+        clean_to_coherency(WORK.as_ptr() as u64, 48);
     }
 
     // SAFETY: reading this core's reset vector register. It is powered down and
@@ -476,7 +681,7 @@ pub unsafe fn release(cpu: &Cpu, start_base: u64, timeout_ticks: u64) -> Seconda
     let start = super::registers::physical_counter();
     loop {
         // SAFETY: the report is inside this image.
-        unsafe { refresh_from_memory(report_address, 48) };
+        unsafe { refresh_from_memory(report_address, REPORT_BYTES) };
         if SECONDARY_REPORT[0].load(Ordering::Relaxed) == SECONDARY_MAGIC {
             result.started = true;
             break;
@@ -546,6 +751,248 @@ pub unsafe fn dispatch(
             return None;
         }
     }
+}
+
+/// The four registers a secondary needs to translate the way the boot core does.
+///
+/// | index | register |
+/// | --- | --- |
+/// | 0 | `MAIR_EL2` |
+/// | 1 | `TCR_EL2` |
+/// | 2 | `TTBR0_EL2` |
+/// | 3 | `SCTLR_EL2`, the value to install |
+/// | 4 | `HCR_EL2`, which must be installed **first** |
+/// | 5 | `TTBR1_EL2` |
+/// | 6 | `VBAR_EL2`, the secondary's own, not the boot core's |
+///
+/// **The tables are shared, not copied.** Both cores point `TTBR0_EL2` at the
+/// same root, which is what makes the identity map the secondary already relies
+/// on stay true after it starts translating -- a private root would have to
+/// reproduce m1n1's map exactly, and any discrepancy would show up as the
+/// secondary faulting on an address the boot core can read.
+///
+/// **`HCR_EL2` is in this list because of VHE, and leaving it out is a silent
+/// disaster.** m1n1 runs with `HCR_EL2.E2H` set, and with `E2H` set `TCR_EL2`
+/// and `SCTLR_EL2` take the *EL1* layout -- different fields in different bits.
+/// A core out of reset has `E2H` clear. Handing it the boot core's `TCR_EL2`
+/// without first handing it the boot core's `HCR_EL2` gives it a value it will
+/// decode under the other layout, which is not an error the hardware reports:
+/// it is a translation regime configured out of the wrong bits, and the first
+/// symptom is the core vanishing on its next instruction fetch.
+/// `TTBR1_EL2` is copied even though nothing here uses a high address, because
+/// with `E2H` set `TCR_EL2` configures both halves and a `TTBR1` left at its
+/// reset value is a live root pointer into whatever happens to be at zero.
+static MMU_HANDOFF: [AtomicU64; 7] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+/// Captures this core's translation state for a secondary to adopt.
+///
+/// Returns the address to post as the argument to
+/// [`brainix_secondary_enable_mmu`].
+///
+/// # Safety
+///
+/// Reads EL2 system registers. Must be called at EL2, with the translation
+/// regime the secondary is meant to share already installed.
+pub unsafe fn publish_mmu_handoff() -> u64 {
+    use super::registers;
+    MMU_HANDOFF[0].store(registers::mair_el2(), Ordering::Relaxed);
+    MMU_HANDOFF[1].store(registers::tcr_el2(), Ordering::Relaxed);
+    MMU_HANDOFF[2].store(registers::ttbr0_el2(), Ordering::Relaxed);
+    MMU_HANDOFF[3].store(registers::sctlr_el2(), Ordering::Relaxed);
+    MMU_HANDOFF[4].store(registers::hcr_el2(), Ordering::Relaxed);
+    MMU_HANDOFF[5].store(registers::ttbr1_el2(), Ordering::Relaxed);
+    MMU_HANDOFF[6].store(secondary_vectors_address(), Ordering::Release);
+    let address = MMU_HANDOFF.as_ptr() as u64;
+    // The secondary reads this with its MMU still off, so it must be at the
+    // point of coherency. This is the last time that is true of anything it
+    // reads, which is the point of the exercise.
+    // SAFETY: the handoff is in this image and 56 bytes long.
+    unsafe { clean_to_coherency(address, 56) };
+    address
+}
+
+/// Turns the MMU and caches on, on the core that calls it.
+///
+/// Runs on the secondary as ordinary dispatched work. It is the last thing that
+/// core does with its caches off: after the `msr`, every fetch and every load it
+/// makes goes through the same translation tables the boot core uses, and the
+/// cache-maintenance dance the rest of this module performs stops being
+/// necessary for it.
+///
+/// Returns `SCTLR_EL2` read back, so the boot core sees the value that actually
+/// took rather than the value that was requested.
+///
+/// # Why the barriers are where they are
+///
+/// `tlbi alle2` before enabling, because a core out of reset has no defined TLB
+/// contents and a stale entry for an address this code is about to fetch from
+/// would be fatal and silent. `isb` after the `msr` because the very next
+/// instruction fetch is the first one translated, and without it the pipeline
+/// may already hold instructions fetched under the old regime.
+///
+/// # Safety
+///
+/// `handoff` must point at four `u64`s written by [`publish_mmu_handoff`] on a
+/// core whose translation tables identity-map this function's own address.
+/// Anything else and this core faults on its next instruction fetch with no
+/// vector table to catch it.
+#[no_mangle]
+pub unsafe extern "C" fn brainix_secondary_enable_mmu(handoff: u64, _unused: u64) -> u64 {
+    let slots = handoff as *const u64;
+    // SAFETY: the caller's contract says seven readable `u64`s live here.
+    let (mair, tcr, ttbr0, sctlr, hcr, ttbr1, vbar) = unsafe {
+        (
+            core::ptr::read_volatile(slots),
+            core::ptr::read_volatile(slots.add(1)),
+            core::ptr::read_volatile(slots.add(2)),
+            core::ptr::read_volatile(slots.add(3)),
+            core::ptr::read_volatile(slots.add(4)),
+            core::ptr::read_volatile(slots.add(5)),
+            core::ptr::read_volatile(slots.add(6)),
+        )
+    };
+
+    let installed: u64;
+    // SAFETY: installs a translation regime this core is not yet using and then
+    // enables it. Sound only under the contract above; unrecoverable if that
+    // contract is broken, which is why the boot core dispatches this under a
+    // timeout rather than assuming it returns.
+    unsafe {
+        core::arch::asm!(
+            // E2H first, and alone, with an `isb` before anything else is
+            // written: it decides which layout the three registers below are
+            // read in. Writing them first would write them into the other
+            // view's fields.
+            "msr HCR_EL2,   {hcr}",
+            "isb",
+            // Vectors BEFORE translation, so the first thing that can go wrong
+            // has somewhere to be recorded. Installed while the MMU is still
+            // off means this is a physical address, which stays correct after
+            // the switch only because the map is an identity map.
+            "msr VBAR_EL2,  {vbar}",
+            "msr MAIR_EL2,  {mair}",
+            "msr TCR_EL2,   {tcr}",
+            "msr TTBR0_EL2, {ttbr0}",
+            // By encoding: `TTBR1_EL2` is gated on `FEAT_VHE` in the assembler
+            // and this target is not built with `+vh`. The register exists on
+            // the part -- `registers::ttbr1_el2` already reads it the same way.
+            "msr s3_4_c2_c0_1, {ttbr1}",
+            "isb",
+            "tlbi alle2",
+            "dsb sy",
+            "isb",
+            "msr SCTLR_EL2, {sctlr}",
+            "isb",
+            "mrs {out}, SCTLR_EL2",
+            mair = in(reg) mair,
+            tcr = in(reg) tcr,
+            ttbr0 = in(reg) ttbr0,
+            sctlr = in(reg) sctlr,
+            hcr = in(reg) hcr,
+            ttbr1 = in(reg) ttbr1,
+            vbar = in(reg) vbar,
+            out = out(reg) installed,
+            options(nostack)
+        );
+    }
+    installed
+}
+
+/// Address of [`brainix_secondary_enable_mmu`], for posting it as work.
+pub fn secondary_enable_mmu_address() -> u64 {
+    brainix_secondary_enable_mmu as *const () as u64
+}
+
+/// Words in the buffer the memory-rate measurement reads.
+///
+/// 1 MiB. Chosen to be far larger than a 128 KiB L1 and far smaller than the
+/// 16 MiB cluster L2, so the boot core's number is an L2 number rather than an
+/// L1 one -- a buffer that fitted in L1 would flatter the cached side and
+/// exaggerate the ratio this is being run to find.
+pub const BENCH_WORDS: usize = 1 << 17;
+
+/// Buffer for measuring what a core with its MMU off can actually read.
+///
+/// In `.bss`, so it costs nothing in the image. Its contents are written by the
+/// boot core immediately before the measurement, which is also what makes the
+/// answer checkable in closed form.
+#[repr(align(64))]
+struct BenchBuffer([u64; BENCH_WORDS]);
+
+static mut BENCH_BUFFER: BenchBuffer = BenchBuffer([0; BENCH_WORDS]);
+
+/// Fills the measurement buffer and returns the checksum a correct read yields.
+///
+/// Word `i` is set to `i`, so the sum is `n(n-1)/2` and the boot core knows the
+/// answer without reading the buffer back. A checksum that comes out zero then
+/// means "read memory that was never written", which is exactly the failure a
+/// core with its caches off produces when the writes are still dirty elsewhere.
+///
+/// # Safety
+///
+/// Takes a mutable reference to a static. No other core may be reading the
+/// buffer, which on the dispatch path means: call this before posting work.
+pub unsafe fn fill_bench_buffer() -> u64 {
+    let base = core::ptr::addr_of_mut!(BENCH_BUFFER) as *mut u64;
+    let mut index = 0usize;
+    let mut expected = 0u64;
+    while index < BENCH_WORDS {
+        // SAFETY: `index` is bounded by the buffer's length.
+        unsafe { core::ptr::write_volatile(base.add(index), index as u64) };
+        expected = expected.wrapping_add(index as u64);
+        index += 1;
+    }
+    // The secondary reads with its MMU off, so these stores must have reached
+    // the point of coherency. Without this the checksum comes back as whatever
+    // was in that memory, which for a `.bss` buffer is zero -- a plausible
+    // number that means the opposite of what it looks like.
+    // SAFETY: the buffer is mapped and the length is its own.
+    unsafe { clean_to_coherency(base as u64, (BENCH_WORDS * 8) as u64) };
+    expected
+}
+
+/// Base address of the measurement buffer, for posting it as an argument.
+pub fn bench_buffer_address() -> u64 {
+    core::ptr::addr_of!(BENCH_BUFFER) as u64
+}
+
+/// Sums `words` `u64`s starting at `base`.
+///
+/// The point is the memory traffic, not the arithmetic: this is the smallest
+/// thing that cannot run out of a register file, so the time it takes is the
+/// time the core takes to pull `words * 8` bytes in. Volatile because the sum
+/// is not the reason it is being called and an optimiser is entitled to notice
+/// that.
+///
+/// # Safety
+///
+/// `base` must point at `words` readable `u64`s. Called on a core with its MMU
+/// off, where that means a physical address.
+#[no_mangle]
+pub unsafe extern "C" fn brainix_secondary_checksum(base: u64, words: u64) -> u64 {
+    let pointer = base as *const u64;
+    let mut total = 0u64;
+    let mut index = 0u64;
+    while index < words {
+        // SAFETY: delegated to the caller's contract on `base` and `words`.
+        let value = unsafe { core::ptr::read_volatile(pointer.add(index as usize)) };
+        total = total.wrapping_add(value);
+        index = index.wrapping_add(1);
+    }
+    total
+}
+
+/// Address of [`brainix_secondary_checksum`], for posting it as work.
+pub fn secondary_checksum_address() -> u64 {
+    brainix_secondary_checksum as *const () as u64
 }
 
 /// A work item that proves the mechanism: sums `start..start + count`.

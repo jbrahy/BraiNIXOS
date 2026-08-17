@@ -879,6 +879,19 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
             // base came from the ADT with translation checked, and the boot core
             // is under an identity map so the secondary resolves the same
             // addresses with its MMU off.
+            // The report as the image ships it, read before any other core can
+            // have touched it. Every slot below is compared against what the
+            // secondary leaves behind, and a slot that reads wrong *here* is a
+            // boot-core problem -- a bad address or a bad index -- not a
+            // secondary that misbehaved. Without this the two are
+            // indistinguishable, and an hour went into telling them apart.
+            let before_release = brainix_kernel::arch::aarch64::smp::report();
+            put(43, brainix_kernel::arch::aarch64::smp::report_address());
+            put(44, before_release[9]);
+            put(45, before_release[10]);
+            put(46, before_release[12]);
+            put(47, before_release[13]);
+
             let released = unsafe {
                 brainix_kernel::arch::aarch64::smp::release(&target, start_base, timeout)
             };
@@ -929,6 +942,127 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
                         put(20, ticks);
                     }
                     None => put(18, 0),
+                }
+
+                // What the other core can do with MEMORY, which is the only
+                // question that decides whether a matmul chunk belongs on it.
+                //
+                // `sum(1..=1000)` above proves the mechanism and nothing else:
+                // it touches no memory, so it says nothing about a core whose
+                // caches are off. The same read loop is run on both cores over
+                // the same buffer, and the ratio between the two times is the
+                // cost of running with the MMU off.
+                //
+                // SAFETY: nothing else is reading the buffer -- the secondary
+                // is parked, and the work that will read it is posted after.
+                let expected = unsafe { smp::fill_bench_buffer() };
+                let base = smp::bench_buffer_address();
+                let words = smp::BENCH_WORDS as u64;
+                put(21, expected);
+                put(22, words);
+
+                // The boot core's own time over the same loop, so the
+                // comparison is between two cores and not between two
+                // different pieces of code.
+                let before = brainix_kernel::arch::aarch64::registers::physical_counter();
+                // SAFETY: the buffer was just filled and is `words` long.
+                let local = unsafe { smp::brainix_secondary_checksum(base, words) };
+                let local_ticks = brainix_kernel::arch::aarch64::registers::physical_counter()
+                    .wrapping_sub(before);
+                put(23, local);
+                put(24, local_ticks);
+
+                // SAFETY: the target is parked in the dispatch loop and the
+                // buffer has been cleaned to the point of coherency, which is
+                // what makes it readable by a core running without caches.
+                let remote = unsafe {
+                    smp::dispatch(
+                        released.mpidr,
+                        smp::secondary_checksum_address(),
+                        base,
+                        words,
+                        // Generous: an uncached read of a megabyte is the thing
+                        // being measured, and guessing its duration low would
+                        // report a timeout as the answer.
+                        hz.saturating_mul(8),
+                    )
+                };
+                match remote {
+                    Some((result, ticks)) => {
+                        put(25, 1);
+                        put(26, result);
+                        put(27, ticks);
+                    }
+                    None => put(25, 0),
+                }
+
+                // Now give that core the MMU and the caches, and read the same
+                // megabyte again. This is the whole point of the stage: the
+                // number above says a core running the way a core arrives out
+                // of reset cannot be given work worth having, and the number
+                // below says whether adopting the boot core's translation
+                // tables fixes it.
+                //
+                // SAFETY: at EL2, under the translation regime the secondary is
+                // about to share.
+                let handoff = unsafe { smp::publish_mmu_handoff() };
+                // SAFETY: the target is parked in the dispatch loop, and the
+                // handoff describes the identity map it is already resolving
+                // its own addresses under. A wrong handoff costs a timeout
+                // rather than a hang, which is why this is dispatched.
+                let enabled = unsafe {
+                    smp::dispatch(
+                        released.mpidr,
+                        smp::secondary_enable_mmu_address(),
+                        handoff,
+                        0,
+                        hz,
+                    )
+                };
+                // What the secondary's own vectors caught, if anything. Read
+                // whether or not the enable returned: a timeout with a fault
+                // recorded is a diagnosis, and a timeout without one is a
+                // different problem entirely.
+                let after = smp::report();
+                put(33, after[9]);
+                put(34, after[6]);
+                put(35, after[7]);
+                put(36, after[8]);
+                put(37, after[10]);
+                put(38, after[11]);
+                put(39, after[12]);
+                put(40, after[13]);
+                // The two addresses the loop could legitimately have been
+                // handed, so "last fn" is identifiable rather than a number.
+                put(41, smp::secondary_checksum_address());
+                put(42, smp::secondary_sum_address());
+
+                match enabled {
+                    Some((sctlr, _)) => {
+                        put(28, 1);
+                        put(29, sctlr);
+
+                        // SAFETY: as the first remote checksum. The buffer is
+                        // unchanged and the core is back in the same loop.
+                        let cached = unsafe {
+                            smp::dispatch(
+                                released.mpidr,
+                                smp::secondary_checksum_address(),
+                                base,
+                                words,
+                                hz.saturating_mul(8),
+                            )
+                        };
+                        match cached {
+                            Some((result, ticks)) => {
+                                put(30, 1);
+                                put(31, result);
+                                put(32, ticks);
+                            }
+                            None => put(30, 0),
+                        }
+                    }
+                    None => put(28, 0),
                 }
             }
         }

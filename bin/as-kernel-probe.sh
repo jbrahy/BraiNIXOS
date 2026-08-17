@@ -26,6 +26,14 @@
 #     never passes through `_start`.
 #   * Not all m1n1 USB interfaces answer the proxy. Two of four time out with
 #     "Expected 1 bytes, got 0", which looks exactly like a dead proxy.
+#   * STAGE 9 IS NOT REPEATABLE WITHOUT A REBOOT. It takes a core out of reset
+#     and parks it; a second run cannot take it out of reset again, so it
+#     reports `started 0` and every measurement below it reads zero. That looks
+#     exactly like a regression in the release path and is not one. The tell is
+#     `RVBAR before` holding an entry address from the previous run instead of
+#     the SoC default. Reboot between runs:
+#
+#         sudo macvdmtool reboot   # then wait ~15 s for the port to reappear
 #
 # REQUIREMENTS
 #
@@ -212,7 +220,10 @@ print("  eret-to-self     %d  (1 = exception return works at this level)" % r(64
 # Each EL1 stage is its own p.call. A returning call leaves m1n1 alive for the
 # next one, so a stage that hangs costs only itself -- everything already printed
 # stays printed.
-dout = u.malloc(8 * 16)
+# 48 slots, not 16. Stage 9 writes through index 27, and a probe that scribbles
+# past its own buffer would corrupt whatever m1n1 put after it -- a failure that
+# presents as an unrelated stage misbehaving later.
+dout = u.malloc(8 * 48)
 
 def d(i):
     return p.read64(dout + 8 * i)
@@ -560,6 +571,73 @@ else:
     else:
         print("  dispatch TIMED OUT")
 
+    # The measurement that decides whether a matmul chunk can go on that core.
+    # sum(1..=1000) proves the mechanism and touches no memory; this reads a
+    # megabyte on each core in turn and compares.
+    expected, words, local, local_t = d(21), d(22), d(23), d(24)
+    ok_rem, remote, remote_t = d(25), d(26), d(27)
+    mib = words * 8 / 1048576.0
+    print("  -- memory rate, same loop on each core, %.0f MiB --" % mib)
+    print("  boot core        %s  %d ticks (%.1f us, %.1f GB/s)"
+          % ("CORRECT" if local == expected else "WRONG",
+             local_t, local_t / 24.0,
+             (words * 8) / (local_t / 24e6) / 1e9 if local_t else 0.0))
+    if ok_rem:
+        print("  secondary        %s  %d ticks (%.1f us, %.2f GB/s)"
+              % ("CORRECT" if remote == expected else "WRONG",
+                 remote_t, remote_t / 24.0,
+                 (words * 8) / (remote_t / 24e6) / 1e9 if remote_t else 0.0))
+        if local_t and remote_t:
+            print("  secondary is %.1fx slower, and that factor is the MMU and"
+                  % (remote_t / float(local_t)))
+            print("  caches being off -- not the core being slower.")
+    else:
+        print("  secondary        TIMED OUT reading %.0f MiB uncached" % mib)
+
+    # Same core, same buffer, same loop -- now translating through the boot
+    # core's own tables with its caches on.
+    ok_mmu, sctlr2, ok_c, cres, ct = d(28), d(29), d(30), d(31), d(32)
+    faulted, f_esr, f_elr, f_far = d(33), d(34), d(35), d(36)
+    entered, lastfn, returned, f_x21 = d(37), d(38), d(39), d(40)
+    print("  -- how far the secondary's loop got --")
+    # Slots 9, 10 and 12 ship as 0 and slot 13 ships as poison. If they do not
+    # read that way BEFORE the second core exists, the fault is in how the boot
+    # core addresses the report, not in what the secondary did to it.
+    print("  report at        0x%016x" % d(43))
+    print("  ships as         fault=%d entered=%d returned=%d x21=0x%x  (want 0 0 0 poison)"
+          % (d(44), d(45), d(46), d(47)))
+    print("  calls entered    %d   returned %d   last fn 0x%016x"
+          % (entered, returned, lastfn))
+    print("  x21 at fault     0x%016x  (the loop's report base; 0 means a"
+          % f_x21)
+    print("                   callee gave it back as nothing)")
+    print("  checksum fn is   0x%016x   sum fn is 0x%016x"
+          % (d(41), d(42)))
+    print("  -- the same core, after adopting the boot core's translation --")
+    if faulted:
+        print("  IT FAULTED, and its own vectors caught it:")
+        print("    ESR_EL2        0x%016x  EC 0x%02x  ISS 0x%x"
+              % (f_esr, (f_esr >> 26) & 0x3F, f_esr & 0x1FFFFFF))
+        print("    ELR_EL2        0x%016x" % f_elr)
+        print("    FAR_EL2        0x%016x" % f_far)
+    if not ok_mmu:
+        print("  enabling the MMU on the secondary TIMED OUT (it did not return)")
+    else:
+        print("  SCTLR_EL2        0x%016x  M=%d C=%d I=%d"
+              % (sctlr2, sctlr2 & 1, (sctlr2 >> 2) & 1, (sctlr2 >> 12) & 1))
+        if ok_c:
+            print("  secondary        %s  %d ticks (%.1f us, %.1f GB/s)"
+                  % ("CORRECT" if cres == expected else "WRONG",
+                     ct, ct / 24.0,
+                     (words * 8) / (ct / 24e6) / 1e9 if ct else 0.0))
+            if remote_t and ct:
+                print("  %.0fx faster than the same core with its caches off, and"
+                      % (remote_t / float(ct)))
+                print("  %.2fx the boot core -- which is what makes it worth work."
+                      % (local_t / float(ct)))
+        else:
+            print("  secondary        TIMED OUT after enabling the MMU")
+
 # The MPIDR is the check that matters. A magic word only proves something wrote
 # the buffer; a DIFFERENT affinity proves it was a different core.
 # Four rings must produce four observed wakes. Each ring waits for the count to
@@ -588,5 +666,10 @@ PYEOF
 
 echo "==> running on the target"
 cd "${PROXYCLIENT}"
-LLDDIR="${LLDDIR}" M1N1DEVICE="${M1N1DEVICE}" PYTHONPATH=. \
+# The proxy's default read timeout is 3 s, and stage 9 legitimately exceeds
+# that: it waits out a one-second release timeout, then reads a megabyte on a
+# core whose caches are off. At the default a slow stage throws UartTimeout,
+# which is indistinguishable from a target that died -- and once was read as
+# exactly that.
+LLDDIR="${LLDDIR}" M1N1DEVICE="${M1N1DEVICE}" M1N1TIMEOUT="${M1N1TIMEOUT:-30}" PYTHONPATH=. \
   "${VENV_PY}" "${SCRATCH}/as_kernel_probe_run.py"
