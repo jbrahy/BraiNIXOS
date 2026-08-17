@@ -58,13 +58,41 @@ impl Sha256 {
                 let block = self.block;
                 self.compress(&block);
                 self.filled = 0;
+            } else {
+                // The partial block did not fill, which means `rest` is now
+                // empty. Returning here is not an optimization -- it is the fix
+                // for a hang.
+                //
+                // Falling through ran `chunks_exact(64)` over an empty slice,
+                // whose remainder is also empty, and then reached
+                // `self.filled = tail.len()` at the bottom of this function --
+                // **resetting the partial block that was just accumulated**.
+                //
+                // `finish` pads with `while self.filled != 56 { update(&[0]) }`,
+                // so `filled` oscillated 0,1,0,1,... and never reached 56.
+                // `digest` never returned, for any input. That is why this
+                // converter had never once produced a `.bxw1` file.
+                return;
             }
         }
         let mut chunks = rest.chunks_exact(64);
         for chunk in &mut chunks {
-            let mut block = [0u8; 64];
-            block.copy_from_slice(chunk);
-            self.compress(&block);
+            // Borrow the chunk as a fixed-size array rather than copying it
+            // into one. `compress` only reads its argument, so the copy was
+            // pure overhead -- and it was not free: profiling the converter
+            // showed **76% of all samples inside `memcpy`**, reached through
+            // the dynamic-linker stub, at one call per 64-byte block. For a
+            // 518 MB blob that is 8.1 million stub calls to move data that was
+            // already in the right place.
+            //
+            // `try_from` on a slice of exactly 64 bytes is a reference
+            // conversion and compiles to nothing.
+            match <&[u8; 64]>::try_from(chunk) {
+                Ok(block) => self.compress(block),
+                // `chunks_exact(64)` cannot yield anything else; the arm exists
+                // because this crate does not use `unwrap`.
+                Err(_) => continue,
+            }
         }
         let tail = chunks.remainder();
         self.block[..tail.len()].copy_from_slice(tail);
@@ -173,5 +201,71 @@ mod tests {
             hex(&digest(&[b'a'; 1_000_000])),
             "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
         );
+    }
+
+    /// FIPS 180-4 vectors. Present because this file's own bug was not a wrong
+    /// digest but a **hang**, and a hang is invisible to a test suite that was
+    /// never written.
+    #[test]
+    fn matches_the_published_vectors() {
+        let cases: [(&[u8], &str); 3] = [
+            (
+                b"",
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            ),
+            (
+                b"abc",
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            ),
+            (
+                b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+                "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+            ),
+        ];
+        for (input, want) in cases {
+            assert_eq!(hex(&digest(input)), want, "input of {} bytes", input.len());
+        }
+    }
+
+    /// The regression test for the defect this file shipped with.
+    ///
+    /// `update` reset `filled` to zero whenever a call left a partial block
+    /// without completing it, so `finish`'s padding loop
+    /// (`while filled != 56`) never terminated. **`digest` never returned, for
+    /// any input**, and the converter that depends on it had therefore never
+    /// once produced a weight blob.
+    ///
+    /// Feeding a byte at a time is exactly the shape that triggered it, and
+    /// covering every length across two block boundaries is what makes this a
+    /// test rather than an anecdote.
+    #[test]
+    fn streaming_a_byte_at_a_time_agrees_with_one_shot() {
+        let data: Vec<u8> = (0..200u16).map(|value| value as u8).collect();
+        for length in 0..=200usize {
+            let one_shot = digest(&data[..length]);
+            let mut hasher = Sha256::new();
+            for byte in &data[..length] {
+                hasher.update(&[*byte]);
+            }
+            assert_eq!(
+                hasher.finish(),
+                one_shot,
+                "byte-at-a-time disagreed with one-shot at length {length}"
+            );
+        }
+    }
+
+    /// Chunk sizes that straddle the 64-byte block in different ways.
+    #[test]
+    fn arbitrary_chunkings_agree_with_one_shot() {
+        let data: Vec<u8> = (0..500u16).map(|value| (value * 7) as u8).collect();
+        let one_shot = digest(&data);
+        for chunk in [1usize, 3, 17, 63, 64, 65, 127, 128, 129] {
+            let mut hasher = Sha256::new();
+            for piece in data.chunks(chunk) {
+                hasher.update(piece);
+            }
+            assert_eq!(hasher.finish(), one_shot, "chunk size {chunk}");
+        }
     }
 }
