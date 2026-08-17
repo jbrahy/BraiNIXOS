@@ -193,12 +193,22 @@ brainix_exception_common:
 
     bl   brainix_handle_exception
 
-    // Write the resume address to BOTH. Whichever the CPU honours on `eret`
-    // depends on whether this exception was taken in a guarded level, and
-    // writing the one that is not in use is inert. Guessing wrong here sends
-    // `eret` to address 4 and wedges the machine, which is precisely what
-    // happened when only ELR_EL2 was written.
+    // Install BOTH halves of the return: address in x0, processor state in x1.
+    //
+    // `ExceptionReturn` is a 16-byte `#[repr(C)]` pair and comes back in x0/x1.
+    // Writing only `ELR_EL2` leaves `SPSR_EL2` holding whatever exception entry
+    // put there, which is right exactly when the return resumes at the level the
+    // exception came from -- and silently wrong otherwise.
+    //
+    // That is what hung the EL1 excursion, and why the bisect steps all passed:
+    // `hvc` from EL1 enters with `SPSR_EL2` = EL1h, the redirect asks to resume
+    // at EL2h, and without this store the `eret` landed back at **EL1**. The next
+    // instruction there was the `msr HCR_EL2` that restores the excursion --
+    // undefined at EL1 -- so the machine took a fault into an EL1 vector base
+    // nothing had ever set. A `brk` taken at EL2 could never show it: there the
+    // two levels agree and the stale `SPSR_EL2` happens to be correct.
     msr  ELR_EL2, x0
+    msr  SPSR_EL2, x1
 
     ldp  x0, x1,   [sp, #(16 * 0)]
     ldp  x2, x3,   [sp, #(16 * 1)]
@@ -221,6 +231,118 @@ extern "C" {
     static brainix_vector_table: u8;
 }
 
+// ---------------------------------------------------------------------------
+// A second table, for EL1.
+//
+// The EL2 table above cannot be reused at EL1. It reads `ESR_EL2`/`ELR_EL2`/
+// `FAR_EL2`, all of which are undefined at EL1: pointing `VBAR_EL1` at it makes
+// the first EL1 fault raise an undefined-instruction exception *inside the
+// handler*, which re-enters the handler, forever. So the excursion originally
+// left EL1's vectors alone -- and that turned any EL1 fault into a silent hang,
+// because nothing had ever written `VBAR_EL1` on this machine either.
+//
+// This table is the smallest thing that removes both problems. It reads only
+// EL1 registers, records them, and leaves EL1 immediately via `hvc`, which the
+// EL2 handler's redirect turns into a normal return. It never returns to EL1 and
+// therefore never has to preserve anything: an excursion that faulted is over.
+// ---------------------------------------------------------------------------
+
+/// Value each slot of [`EL1_FAULT_RECORD`] starts at.
+///
+/// Not zero, and not in `.bss`. Zero would be indistinguishable from a handler
+/// that ran and read genuine zeroes, and `.bss` is not emitted by
+/// `objcopy -O binary` -- a zero-initialised static here would start as whatever
+/// was in that memory. A recognisable non-zero initialiser puts the array in
+/// `.data`, where the flat image carries it, and makes "never ran" a value you
+/// can read rather than infer.
+const EL1_FAULT_POISON: u64 = 0xE11_FA017_0000_0000;
+
+/// What an EL1 fault recorded: vector index, `ESR_EL1`, `ELR_EL1`, `FAR_EL1`.
+///
+/// Written from assembly, which is why it is a plain array at a known layout
+/// rather than a struct with accessors.
+static EL1_FAULT_RECORD: [AtomicU64; 4] = [
+    AtomicU64::new(EL1_FAULT_POISON),
+    AtomicU64::new(EL1_FAULT_POISON),
+    AtomicU64::new(EL1_FAULT_POISON),
+    AtomicU64::new(EL1_FAULT_POISON),
+];
+
+core::arch::global_asm!(
+    r#"
+.section .text.vectors, "ax"
+.balign 2048
+.globl brainix_el1_vector_table
+brainix_el1_vector_table:
+
+.macro EL1_VECTOR_ENTRY index
+    mov x0, #\index
+    b   brainix_el1_fault_common
+    .balign 0x80
+.endm
+
+    EL1_VECTOR_ENTRY 0      // current EL, SP_EL0, synchronous
+    EL1_VECTOR_ENTRY 1
+    EL1_VECTOR_ENTRY 2
+    EL1_VECTOR_ENTRY 3
+    EL1_VECTOR_ENTRY 4      // current EL, SP_ELx, synchronous
+    EL1_VECTOR_ENTRY 5
+    EL1_VECTOR_ENTRY 6
+    EL1_VECTOR_ENTRY 7
+    EL1_VECTOR_ENTRY 8      // lower EL, AArch64, synchronous
+    EL1_VECTOR_ENTRY 9
+    EL1_VECTOR_ENTRY 10
+    EL1_VECTOR_ENTRY 11
+    EL1_VECTOR_ENTRY 12     // lower EL, AArch32, synchronous
+    EL1_VECTOR_ENTRY 13
+    EL1_VECTOR_ENTRY 14
+    EL1_VECTOR_ENTRY 15
+
+// No stack, no frame, no register preservation.
+//
+// `adrp`/`:lo12:` rather than a literal address: this image is loaded wherever
+// the proxy's allocator put it, not where it was linked, so every reference to
+// its own data has to be PC-relative or it addresses someone else's memory.
+brainix_el1_fault_common:
+    adrp x1, {record}
+    add  x1, x1, :lo12:{record}
+    str  x0, [x1, #0]
+    mrs  x2, ESR_EL1
+    str  x2, [x1, #8]
+    mrs  x2, ELR_EL1
+    str  x2, [x1, #16]
+    mrs  x2, FAR_EL1
+    str  x2, [x1, #24]
+    // Straight back to EL2. The redirect the excursion registered is still
+    // pending, so this arrives at EL2 vector 8 and returns to the landing pad
+    // like an ordinary `hvc` home -- with the syndrome already recorded.
+    hvc  #0
+"#,
+    record = sym EL1_FAULT_RECORD,
+);
+
+extern "C" {
+    /// The EL1 table, defined above.
+    static brainix_el1_vector_table: u8;
+}
+
+/// The address of the EL1 vector table, for `VBAR_EL12`.
+pub fn el1_table_address() -> u64 {
+    // SAFETY: taking the address of an `extern` symbol defined in this crate's
+    // own assembly. Never dereferenced.
+    unsafe { core::ptr::addr_of!(brainix_el1_vector_table) as u64 }
+}
+
+/// What an EL1 fault recorded, or all [`EL1_FAULT_POISON`] if none was taken.
+pub fn el1_fault() -> [u64; 4] {
+    [
+        EL1_FAULT_RECORD[0].load(Ordering::Relaxed),
+        EL1_FAULT_RECORD[1].load(Ordering::Relaxed),
+        EL1_FAULT_RECORD[2].load(Ordering::Relaxed),
+        EL1_FAULT_RECORD[3].load(Ordering::Relaxed),
+    ]
+}
+
 /// Vector index of the last exception taken, or [`NO_EXCEPTION`].
 static LAST_INDEX: AtomicU64 = AtomicU64::new(NO_EXCEPTION);
 /// `ESR_EL2` of the last exception taken.
@@ -237,6 +359,45 @@ static LAST_SPSR: AtomicU64 = AtomicU64::new(0);
 static LAST_GUARDED: AtomicU64 = AtomicU64::new(0);
 /// How many exceptions have been taken since boot.
 static COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Where a lower-EL trap should resume, and with which `SPSR`.
+///
+/// Set before dropping to EL1 and consumed by the handler when the trap comes
+/// back up. Zero means "no redirection pending", so an ordinary exception
+/// returns where it came from.
+static REDIRECT_PC: AtomicU64 = AtomicU64::new(0);
+/// `SPSR` to install alongside [`REDIRECT_PC`].
+static REDIRECT_SPSR: AtomicU64 = AtomicU64::new(0);
+
+/// Arrange for the next lower-EL synchronous trap to resume at `pc` with `spsr`.
+///
+/// # Safety
+///
+/// The caller must ensure `pc` is a valid return site at the level `spsr`
+/// selects. Getting it wrong lands execution at an arbitrary address with an
+/// arbitrary level, which on this platform is a hang.
+pub unsafe fn redirect_lower_el_trap(pc: u64, spsr: u64) {
+    REDIRECT_SPSR.store(spsr, Ordering::Relaxed);
+    REDIRECT_PC.store(pc, Ordering::Relaxed);
+}
+
+/// Raw slots for [`redirect_lower_el_trap`], for assembly that must register
+/// its own return site.
+///
+/// A block that computes its landing pad with `adr` cannot hand that value to
+/// Rust before it needs to be stored -- the label only exists inside the block.
+/// Storing through these pointers keeps the registration and the `eret` in one
+/// instruction stream, which matters because after `TGE` is cleared a stray
+/// exception has nowhere else to go.
+pub fn redirect_slots() -> (*mut u64, *mut u64) {
+    (REDIRECT_PC.as_ptr(), REDIRECT_SPSR.as_ptr())
+}
+
+/// Clear any pending redirection.
+pub fn clear_redirect() {
+    REDIRECT_PC.store(0, Ordering::Relaxed);
+    REDIRECT_SPSR.store(0, Ordering::Relaxed);
+}
 
 /// Sentinel meaning no exception has been taken.
 ///
@@ -294,6 +455,15 @@ pub fn last_exception() -> LastException {
 /// data abort should be handled, not skipped. Skipping is what this slice
 /// delivers, because the thing being proved is that the vector table is
 /// reached at all, and a handler that cannot return proves it by hanging.
+/// What the assembly tail installs before `eret`.
+#[repr(C)]
+pub struct ExceptionReturn {
+    /// Address to resume at.
+    pub elr: u64,
+    /// Processor state to resume with.
+    pub spsr: u64,
+}
+
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 extern "C" fn brainix_handle_exception(
@@ -305,7 +475,7 @@ extern "C" fn brainix_handle_exception(
     elr_gl1: u64,
     gxf_status: u64,
     spsr_el2: u64,
-) -> u64 {
+) -> ExceptionReturn {
     // Which pair actually holds this exception.
     //
     // Decided from the syndrome rather than from `GXF_STATUS_EL1` alone: the
@@ -364,10 +534,23 @@ extern "C" fn brainix_handle_exception(
     // revisiting *and* the memory attributes need establishing first.
     COUNT.store(COUNT.load(Ordering::Relaxed).wrapping_add(1), Ordering::Relaxed);
 
-    if synchronous {
-        elr.wrapping_add(4)
-    } else {
-        elr
+    // A lower-EL synchronous trap with a redirection pending is the way home
+    // from EL1. Index 8 is that entry; anything else returns where it came
+    // from, at the level it came from.
+    let redirect = REDIRECT_PC.load(Ordering::Relaxed);
+    if index == 8 && redirect != 0 {
+        let spsr = REDIRECT_SPSR.load(Ordering::Relaxed);
+        clear_redirect();
+        return ExceptionReturn { elr: redirect, spsr };
+    }
+
+    ExceptionReturn {
+        elr: if synchronous {
+            elr.wrapping_add(4)
+        } else {
+            elr
+        },
+        spsr: spsr_el2,
     }
 }
 

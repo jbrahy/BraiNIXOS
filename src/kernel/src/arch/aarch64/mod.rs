@@ -59,6 +59,7 @@
 
 pub mod bss;
 pub mod console;
+pub mod el;
 pub mod halt;
 pub mod mmu;
 pub mod registers;

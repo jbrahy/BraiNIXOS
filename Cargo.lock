@@ -60,6 +60,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-boot-stub-apple"
+version = "0.1.0"
+dependencies = [
+ "brainix-adt",
+]
+
+[[package]]
 name = "brainix-bootloader"
 version = "0.1.0"
 dependencies = [
@@ -185,6 +192,8 @@ dependencies = [
 name = "brainix-kernel"
 version = "0.1.0"
 dependencies = [
+ "brainix-adt",
+ "brainix-boot-stub-apple",
  "brainix-bsp",
  "brainix-libsyscall",
  "chacha20",

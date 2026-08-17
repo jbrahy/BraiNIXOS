@@ -442,6 +442,42 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
         put(58, report.saved_daif);
     }
 
+    // BISECT step 1: can TGE be cleared and restored at all, with no level
+    // change? Two attempts at the full excursion hung, and a hang is one bit.
+    //
+    // SAFETY: toggles one HCR_EL2 bit and restores it; nothing changes level.
+    let (hcr_before, hcr_cleared, hcr_restored) =
+        unsafe { brainix_kernel::arch::aarch64::el::toggle_tge() };
+    put(59, hcr_before);
+    put(60, hcr_cleared);
+    put(61, hcr_restored);
+
+    // BISECT step 2: can EL1's regime be programmed through the _EL12 aliases?
+    // The read-back also proves the raw encoding names the register we mean.
+    //
+    // SAFETY: writes EL1's translation state; nothing executes at EL1.
+    let (ttbr_written, ttbr_readback) =
+        unsafe { brainix_kernel::arch::aarch64::el::program_el1_regime() };
+    put(62, ttbr_written);
+    put(63, ttbr_readback);
+
+    // BISECT step 3: does exception return work at all, without changing level?
+    //
+    // SAFETY: erets to a label two instructions ahead, at the current level.
+    put(64, unsafe { brainix_kernel::arch::aarch64::el::eret_to_self() });
+
+    // Everything to do with EL1 now lives in `el1_probe`, deliberately.
+    //
+    // This entry point is the project's evidence base: forty-odd measurements
+    // that are read back and reasoned from. Any experiment that can hang belongs
+    // somewhere else, because a hang takes m1n1's proxy with it and the run
+    // returns *nothing* -- every measurement that had already succeeded included.
+    //
+    // That was not a hypothetical. Adding one EL1 question here turned a probe
+    // that reported forty values into a probe that reported none, and cost a
+    // reboot to find out. `el1_probe` takes a stage argument so each step is its
+    // own returning call, and only the step that actually fails is lost.
+
     // Program TTBR0_EL2 with a table this image owns, and read through it.
     //
     // SAFETY: at EL2 with translation already on, and the installed root is a
@@ -485,6 +521,117 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
 #[cfg(target_arch = "aarch64")]
 #[used]
 static KERNEL_PROBE_KEEPALIVE: unsafe extern "C" fn(*const u8, *mut u64) -> u64 = kernel_probe;
+
+/// The stack EL1 runs on during the excursion.
+///
+/// Named rather than inlined because two callers need the identical address:
+/// the reachability check asks whether EL1 can reach *this* stack, and the drop
+/// then runs on it. A second literal would let the question and the experiment
+/// drift apart.
+#[cfg(target_arch = "aarch64")]
+fn el1_stack_top() -> u64 {
+    #[repr(align(16))]
+    struct El1Stack([u8; 4096]);
+    static mut EL1_STACK: El1Stack = El1Stack([0; 4096]);
+    // SAFETY: single-threaded probe; only the address is taken.
+    unsafe { (core::ptr::addr_of_mut!(EL1_STACK) as u64).wrapping_add(4096) & !0xF }
+}
+
+/// Magic returned by [`el1_probe`].
+#[cfg(target_arch = "aarch64")]
+pub const EL1_PROBE_MAGIC: u64 = 0x4B72_6E6C_4E49_5803; // "Krnl NIX\x03"
+
+/// The EL1 experiments, one stage per call.
+///
+/// # Why a stage argument rather than one function
+///
+/// These are the only operations in this image that can fail by **hanging**, and
+/// a hang takes m1n1's proxy with it: the call never returns, so nothing written
+/// to `out` before it can be read. Anything sharing a call with a step that hangs
+/// is lost with it.
+///
+/// A returning call, by contrast, leaves m1n1 running and ready for the next one.
+/// So each stage is its own call, made in order, and a hang costs exactly the
+/// stage that hung -- not the ones that had already answered.
+///
+/// | stage | what it does | can it hang |
+/// | --- | --- | --- |
+/// | 1 | programme EL1's regime, ask `AT S1E1R` what EL1 could reach | no; `AT` cannot fault |
+/// | 2 | drop to EL1, read `CurrentEL`, return via `HVC` | yes; this is the experiment |
+///
+/// # Report layout
+///
+/// Stage 1: `[magic, HCR while asking, PAR code, PAR vectors, PAR stack]`.
+///
+/// Stage 2: `[magic, observed EL, HCR before, HCR after, return vector,
+/// EL1 fault index, ESR_EL1, ELR_EL1, FAR_EL1]`.
+///
+/// # Safety
+///
+/// `out` must have room for nine `u64`s. Both stages write EL1's registers and
+/// briefly clear `HCR_EL2.TGE`; stage 2 additionally executes at EL1. Both
+/// restore `HCR_EL2` before returning.
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+pub unsafe extern "C" fn el1_probe(stage: u64, out: *mut u64) -> u64 {
+    // This entry point never passes through `_start` either, and the redirect
+    // slots it depends on live in `.bss`.
+    //
+    // SAFETY: at an entry point, nothing else is using this image's `.bss`.
+    unsafe { brainix_kernel::arch::aarch64::bss::zero() };
+
+    // SAFETY: the caller guarantees `out` has room for nine `u64`s.
+    let put = |index: usize, value: u64| unsafe { core::ptr::write_volatile(out.add(index), value) };
+    put(0, EL1_PROBE_MAGIC);
+
+    match stage {
+        1 => {
+            // `AT S1E1R` asks the MMU exactly what an instruction fetch at EL1
+            // would ask, and cannot fault -- an unreachable address is reported
+            // in `PAR_EL1.F` rather than raised. Free answer to the question the
+            // drop otherwise answers by hanging.
+            //
+            // SAFETY: writes EL1's registers and briefly clears TGE. Nothing
+            // executes at EL1 and no instruction in it can fault.
+            let reach = unsafe {
+                brainix_kernel::arch::aarch64::el::el1_reachability(
+                    el1_probe as *const () as u64,
+                    el1_stack_top(),
+                )
+            };
+            put(1, reach.hcr_while_asking);
+            put(2, reach.par_code);
+            put(3, reach.par_vectors);
+            put(4, reach.par_stack);
+        }
+        2 => {
+            // SAFETY: inside `with_vectors` so the HVC home has an EL2 handler,
+            // and `VBAR_EL12` points at the EL1-only table, which reads no EL2
+            // registers.
+            let excursion = unsafe {
+                brainix_kernel::arch::aarch64::with_vectors(|| {
+                    brainix_kernel::arch::aarch64::el::drop_to_el1_and_return(el1_stack_top())
+                })
+            };
+            put(1, excursion.observed_el);
+            put(2, excursion.hcr_before);
+            put(3, excursion.hcr_after);
+            put(4, excursion.return_vector);
+            put(5, excursion.el1_fault[0]);
+            put(6, excursion.el1_fault[1]);
+            put(7, excursion.el1_fault[2]);
+            put(8, excursion.el1_fault[3]);
+        }
+        _ => {}
+    }
+    EL1_PROBE_MAGIC
+}
+
+/// Keeps [`el1_probe`] in the image, for the same reason as
+/// [`KERNEL_PROBE_KEEPALIVE`].
+#[cfg(target_arch = "aarch64")]
+#[used]
+static EL1_PROBE_KEEPALIVE: unsafe extern "C" fn(u64, *mut u64) -> u64 = el1_probe;
 
 /// Arm the watchdog so the machine resets, and return.
 ///

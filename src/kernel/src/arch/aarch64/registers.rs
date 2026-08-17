@@ -234,6 +234,30 @@ pub fn hcr_el2() -> u64 {
     read_sysreg!("HCR_EL2")
 }
 
+/// `MAIR_EL1` — the memory attribute indirection register.
+///
+/// Under VHE this reads `MAIR_EL2`, which is the point: every leaf descriptor
+/// carries an `AttrIndx`, not an attribute, and the attribute it names comes
+/// from whichever `MAIR` the *current regime* uses. Copying EL2's tables to EL1
+/// without copying EL2's `MAIR` means the same descriptors resolve to different
+/// memory types, and an unprogrammed `MAIR_EL1` makes every index name
+/// Device-nGnRnE -- including the one the instruction stream is fetched through.
+pub fn mair_el1() -> u64 {
+    read_sysreg!("MAIR_EL1")
+}
+
+/// `TTBR1_EL2` — the high-half stage-1 table base for EL2.
+///
+/// Spelled as its raw encoding, `s3_4_c2_c0_1`. The register only exists when
+/// `FEAT_VHE` does, so this assembler rejects the name unless the target enables
+/// it, and this build does not assume the feature at compile time -- it measured
+/// `HCR_EL2.E2H` on the machine instead. Same reason `RNDR` is spelled
+/// `s3_3_c2_c4_0` above: the raw encoding assembles unconditionally and is the
+/// same instruction.
+pub fn ttbr1_el2() -> u64 {
+    read_sysreg!("s3_4_c2_c0_1")
+}
+
 /// Ask the MMU to translate `virtual_address` as an **EL1** read.
 ///
 /// The counterpart of [`translate_el2_read`], and the one that matters before
