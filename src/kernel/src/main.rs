@@ -263,6 +263,29 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
     );
     put(11, u64::from(registers::el1_mmu_enabled()));
 
+    // Exception vectors, proved by catching a fault rather than by installing
+    // a table. An installed table that is never reached looks identical to a
+    // working one until the first real fault, at which point the machine is
+    // gone and there is nothing to read.
+    //
+    // SAFETY: `trap` is executed strictly inside `with_vectors`, which installs
+    // a handler that advances past the `brk` and restores the previous
+    // `VBAR_EL2` afterwards. Without that pairing this wedges the machine.
+    let caught = unsafe {
+        brainix_kernel::arch::aarch64::with_vectors(|| {
+            brainix_kernel::arch::aarch64::vectors::trap();
+            brainix_kernel::arch::aarch64::last_exception()
+        })
+    };
+    put(12, caught.index);
+    put(13, caught.esr);
+    put(14, caught.count);
+    put(15, caught.elr);
+    put(16, caught.far);
+    // The address of the trap site, so ELR can be checked against it rather
+    // than merely reported.
+    put(17, brainix_kernel::arch::aarch64::vectors::table_address());
+
     KERNEL_PROBE_MAGIC
 }
 
