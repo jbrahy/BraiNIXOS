@@ -149,6 +149,9 @@ fn write_panic_details(
 pub unsafe extern "C" fn _start(boot_args: *const u8) -> ! {
     // SAFETY: the caller is firmware, which guarantees the `boot_args`
     // contract; a null pointer is handled inside.
+    // SAFETY: first thing at the entry point, before any `static` is read.
+    unsafe { brainix_kernel::arch::aarch64::bss::zero() };
+
     let mut console = unsafe { brainix_kernel::arch::aarch64::Console::from_boot_args(boot_args) };
 
     console.write_line("");
@@ -229,6 +232,14 @@ pub const KERNEL_PROBE_MAGIC: u64 = 0x4B72_6E6C_4E49_5802; // "Krnl NIX\x02"
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
 pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u64 {
+    // Before anything reads a `static`. This entry point never passes through
+    // `_start`, so without it every measurement here runs on whatever was in
+    // that memory -- which is what made the first exception readings
+    // unreproducible.
+    //
+    // SAFETY: at an entry point, nothing else is using this image's `.bss`.
+    unsafe { brainix_kernel::arch::aarch64::bss::zero() };
+
     // SAFETY: the caller guarantees `out` has room for four `u64`s.
     let put = |index: usize, value: u64| unsafe { core::ptr::write_volatile(out.add(index), value) };
 
@@ -290,6 +301,9 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
     // amount of reasoning about which one ought to be right.
     put(18, registers::esr_el2());
     put(20, registers::elr_el2());
+    let (bss_start, bss_end) = brainix_kernel::arch::aarch64::bss::region();
+    put(21, bss_start);
+    put(22, bss_end);
     // The address of the trap site, so ELR can be checked against it rather
     // than merely reported.
     put(17, brainix_kernel::arch::aarch64::vectors::table_address());

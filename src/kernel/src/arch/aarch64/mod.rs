@@ -57,6 +57,7 @@
 // AS-1c, step 2 -- the backend starts here.
 // ---------------------------------------------------------------------------
 
+pub mod bss;
 pub mod console;
 pub mod halt;
 pub mod registers;

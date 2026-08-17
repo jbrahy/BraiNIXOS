@@ -82,7 +82,11 @@ PROBE_OFF = 0x${PROBE_OFF}
 MAGIC = 0x427261694E495801
 
 image = open(BIN, "rb").read()
-code = u.malloc(len(image) + 0x1000)
+# Allocate for the image PLUS .bss. `objcopy -O binary` does not emit .bss, so
+# it lives past the end of the flat image; measured on the kernel as 56 bytes
+# starting 15 bytes past the last copied byte. Under-allocating puts every
+# zero-initialised static in memory this image does not own.
+code = u.malloc(len(image) + 0x4000)
 out = u.malloc(64)
 
 iface.writemem(code, image)
