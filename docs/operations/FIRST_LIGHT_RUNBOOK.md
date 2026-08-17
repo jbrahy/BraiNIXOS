@@ -385,6 +385,100 @@ returned 0x427261694e495801 -> OUR CODE RAN
 The first run of this loop returned `stage 0x1` and found a real bug in
 `adt_window` within minutes. See `src/adt/tests/fixtures/README.md`.
 
+## 9c. Probing the kernel, and what bit us doing it
+
+The kernel is probed the same way as the stub, through `kernel_probe`, but four
+things differ and each cost a cycle or a machine hang.
+
+**Build release, not debug.** `p.call` runs on m1n1's stack. A debug-profile
+kernel (116,305 bytes) crashed the target; the release build (77,761) does not.
+Debug aarch64 code at opt-level 0 uses far more stack than that call frame has.
+
+**Size the allocation from `__bss_end`, not from the image.** `objcopy -O binary`
+does not emit `.bss`, so it lives past the end of the flat image, and the
+16 KiB-aligned root table pushed it to `0x18000..0x20000` while the image was
+`0x14261` bytes. Allocating image-plus-slack puts that table outside the
+allocation, on top of m1n1.
+
+```sh
+llvm-nm <elf> | awk '/ B __bss_end$/ {print $1}'
+```
+
+**Zero `.bss` at every entry point.** Nothing else will. Statics start as
+whatever was in that memory, which produced exception readings that were
+unreproducible and unexplainable and cost an evening. `kernel_probe` never
+passes through `_start`, so zeroing hidden inside `_start` leaves every
+proxy-verified measurement running on uninitialised statics.
+
+**Do not use `fetch_add` in a payload.** Measured on the target: every `store`
+in the exception handler landed correctly while `fetch_add` on a counter read
+back as zero. A read-modify-write needs the exclusive monitor or LSE atomics to
+work on the memory it targets; a plain store does not, and the payload runs from
+memory whose attributes are not ours to choose.
+
+**Not all m1n1 USB interfaces answer the proxy.** With two cables attached there
+are four ports; two carry it and two time out with `Expected 1 bytes, got 0`,
+which looks exactly like a dead proxy. Try each.
+
+Recover a wedged target without touching it:
+
+```sh
+sudo macvdmtool reboot     # m1n1 is back in about 15 seconds
+```
+
+## 9d. Bringing up the MMU without losing the machine
+
+Enabling translation is the one operation here that fails with **no way to
+report why**: get the tables or `TCR` wrong and the next instruction fetch goes
+through a mapping that no longer describes the code doing the faulting. No
+console, and the vector table is itself at an address that may no longer
+resolve.
+
+The order that worked, on 2026-08-16:
+
+1. **Exception vectors first.** Bringing up translation *is* faulting. A fault
+   with nowhere to land is indistinguishable from a hang.
+2. **Walk before you write.** The hardware is already running with translation
+   on, which makes its tables a free, fully populated test case and its `AT`
+   instruction a free oracle. `AT s1e2r` cannot fault -- an untranslatable
+   address is reported in `PAR_EL1.F`. A walker checked against tables you also
+   built confirms only that you are self-consistent.
+3. **Change one thing.** Program `TTBR` with a **copy of the live root table**.
+   The register changes; the mapping does not. Every address that resolved
+   before resolves after, so a fault is attributable to the switch alone.
+   Debugging a new table builder and a `TTBR` switch at once gives you a hang
+   with two candidate causes and no console to tell them apart.
+4. **Only then build your own tables**, and check them with the walker the
+   hardware already validated.
+
+Every barrier in the switch is load-bearing:
+
+```
+dsb ishst      descriptor writes visible to the table walker before it uses them
+msr TTBR0_EL2  ...
+isb            new TTBR in effect before any later instruction fetch
+tlbi alle2is   stale entries describe the OLD table
+dsb ish
+isb            invalidation complete before execution continues
+```
+
+`tlbi` is the one people skip. It **appears to work**, because the TLB still
+holds correct translations, and then fails later at an unrelated address.
+
+Values measured on the target, for reference:
+
+| | |
+| --- | --- |
+| `TCR_EL2` | `0x37510b510`, `T0SZ` 16, `TG0` 2 |
+| granule | 16 KiB, 4 levels |
+| `TTBR0_EL2` | `0x1000369c000` |
+| mapping | identity — VA equals PA |
+| a live descriptor | `0x1000c000601`, a **block** at level 2 of 4 |
+
+`TG0` is **not in size order**: `0b00` is 4 KiB, `0b01` is 64 KiB, `0b10` is
+16 KiB. Reading it as ordered gives a walker that is wrong on exactly the
+granule Apple Silicon uses.
+
 ## 10. Driving the machine when you are not next to it
 
 Recovery work needs a keyboard on the target and eyes on its screen. Both can be
