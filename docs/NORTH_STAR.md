@@ -6,6 +6,43 @@ status live in ROADMAP.md. This document is the timeless target and the rules th
 **Authority.** This document outranks every other document in the tree. Where any other file disagrees
 with it, this file wins and the other file is drift to be fixed. See DOCUMENTATION_MAP.md.
 
+---
+
+## Owner decision, 2026-08-17: performance outranks the invariants
+
+**The ranking is inverted. Throughput is now the top-ranked concern, and the security invariants yield to
+it where a measured performance win requires them to.**
+
+This reverses the rule that stood from 2026-08-02 to 2026-08-17, under which throughput ranked *below* the
+invariants and above everything else. It is a deliberate change of what the project is, made by the owner,
+and it is recorded here rather than applied by quietly softening language elsewhere.
+
+**What it changes in practice.** A design is now chosen for speed first. An invariant that costs measured
+throughput is a candidate for degradation, and degrading it needs a named entry in the ledger below rather
+than a veto. The question at every decision point is *"what is the fastest correct implementation"*, and
+"this is slower because security" is now an argument that must show its work: name the invariant, name the
+attack it prevents, and state the measured cost of enforcing it. If the cost is real and the attack is not
+in the threat model's live set, the invariant loses.
+
+**What it does not change.** Correctness is not on the table. Fast wrong answers are not a tradeoff, they
+are a defect. Memory safety, bounds checking, and fail-closed parsing of hostile input stay, because a
+crash or a corruption is not a performance win. The distinction is between *security properties* — which
+are now negotiable against throughput — and *correctness*, which is not.
+
+**Remove rather than degrade.** Where a feature can only be had slowly, the feature is removed, not
+shipped slow. This applies to security features and functional features alike. A capability check that
+cannot be made cheap is deleted along with whatever needed it, rather than kept as a tax on the hot path.
+Owner instruction, 2026-08-17.
+
+**The honest consequence, stated once and not repeated apologetically throughout this document.** "Secure"
+was previously the word that separated BraiNIX from a commodity inference server. Under this ranking it no
+longer is. What separates it now is that it is a from-scratch, zero-dependency, single-architecture
+inference server whose author owns every byte — which is a craft claim, and the craft claim was always the
+real one. See *What this ranking costs* below for the itemised list of properties now at risk, which is
+maintained so the loss stays checkable rather than becoming invisible.
+
+---
+
 ## The destination
 
 **What this project is.** BraiNIX is a craft project. The work is the point, and the artifact is held to
@@ -13,22 +50,28 @@ product-grade rigor because that is the only honest way to measure the craft. It
 and nothing in this document should be read as one. Where this file demands proof, speed, or
 reproducibility, it is setting an engineering bar for the builder — not describing a business.
 
-BraiNIX is a minimal, capability-based, security-first microkernel whose purpose is to **serve LLM
-inference securely to remote network clients**. It is written end to end in Rust, and its dependency
+BraiNIX is a minimal, capability-based microkernel whose purpose is to **serve LLM inference to remote
+network clients as fast as the hardware allows**. It is written end to end in Rust, and its dependency
 closure is itself: zero external code, with every byte that runs — from boot stub through kernel,
 network stack, inference engine, device drivers, libraries, and crypto primitives — in-tree, audited,
 and reproducibly built from source the project owns. The external crates still vendored today are
 tracked debt against this rule, not exceptions to it — with one permanent exception, the Ed25519
 release-signature verification stack, named and justified below.
 
-The security invariants are the product, not an obstacle to it. "Secure" is the word that separates
-BraiNIX from a commodity inference server: the same capability model, W^X memory discipline, minimal
-named TCB, and measured boot that a hardened microkernel demands are turned outward to protect a
-network-facing inference service against hostile clients, hostile prompts, and model-weight compromise.
-On that base sit three subsystems: a **secure serving path** that authenticates remote clients and
-mediates every request through capabilities; an **in-tree inference engine** that runs the served model
-with all available compute devoted to it within fixed, reserved regions; and an **observe-only LLM
-security auditor** that continuously checks the running serving stack against its documented invariants.
+**The performance target is the product.** The reference machine has a measurable ceiling — (model bytes)
+÷ (memory bandwidth) for single-stream decode — and the project's claim is that a from-scratch stack owned
+end to end can reach it. Every subsystem is judged against that arithmetic first.
+
+The capability model, W^X discipline, minimal named TCB and measured boot remain the *base* the system is
+built on, because a microkernel that cannot isolate its own components cannot be reasoned about at all.
+They are no longer the product, and as of 2026-08-17 they do not outrank throughput. Where enforcing one
+costs measured performance, the ledger below records the trade rather than the invariant vetoing the work.
+
+On that base sit three subsystems: a **serving path** that authenticates remote clients and mediates
+requests through capabilities; an **in-tree inference engine** that runs the served model with all
+available compute devoted to it within fixed, reserved regions; and an **observe-only LLM security
+auditor** that checks the running serving stack against its documented invariants. The auditor's status is
+itself now a performance question — see the ledger.
 
 ## Target platform
 
@@ -37,10 +80,21 @@ a Mac mini M2 Pro (`Mac14,12`, SoC `T6020`, 32 GB unified memory). Unified-memor
 CPUs a credible CPU-inference platform, and 32 GB is real serving capacity. Owner decision, 2026-08-02;
 made the *only* platform by owner decision, 2026-08-03.
 
-**x86-64 was dropped as a platform on 2026-08-03.** The x86-64 code stays in tree and stays building as the
-**frozen reference implementation** the aarch64 port is written against — it is deleted when aarch64
-replaces it, not before — but it is not a target, not a deployment, and not a fallback. There is in
-particular no attested target to fall back to; see **INV-BOOT** below.
+**x86-64 was dropped as a platform on 2026-08-03, and dropped from planning entirely on 2026-08-17.**
+No roadmap row, design document, or plan may schedule x86-64 work, and no design may be shaped by what
+x86-64 would need. It is not a target, not a deployment, and not a fallback; there is in particular no
+attested target to fall back to (see **INV-BOOT**).
+
+**The x86-64 code remains in tree for exactly one reason and for a bounded time: it is the regression bar
+the aarch64 port is measured against.** Deleting it before aarch64 replaces a given subsystem would remove
+the only working implementation of that subsystem, which is a correctness risk rather than a performance
+one. The rule is therefore **subsystem-by-subsystem deletion**: when aarch64 replaces a subsystem and the
+replacement runs on the machine, the x86-64 sibling is deleted in the same change. Nothing waits for a
+grand removal, and nothing is kept "in case".
+
+Where x86-64 code is genuinely in the way — shaping a shared type, taxing a hot path, or costing an
+aarch64 design its best shape — it is **deleted immediately**, per *remove rather than degrade*. The
+regression bar is a convenience, not an obligation.
 
 Architecture-neutral subsystems — the serving protocol, the request parser, the tokenizer, the tensor
 kernels, the transformer — are written once and are not permitted to acquire platform assumptions. That
@@ -50,16 +104,33 @@ inference engine host-testable on `aarch64-apple-darwin` while the platform work
 **Vocabulary.** Documents in this tree that say *"the primary platform"* mean **the only platform**. The
 word is a residue of the two-platform period and carries no implication that a second one exists.
 
-## Performance is a goal, not a leftover
+## Performance is the goal
 
-**On the primary platform, BraiNIX serves as fast as the hardware allows.** Owner decision, 2026-08-02.
-The reference machine was bought and sized for inference, and building it slow would be building it
-wrong. Throughput is a craft standard, ranked below the invariants and above everything else.
+**BraiNIX serves as fast as the hardware allows.** Owner decision, 2026-08-02; **promoted above the
+invariants on 2026-08-17.** The reference machine was bought and sized for inference, and building it slow
+would be building it wrong.
 
-This is a deliberate strengthening of the tradeoff rule below, which previously named throughput as a
-thing principles beat. Principles still beat it — but "we did not optimize because security" is no longer
-a sufficient answer. Every layer is expected to be fast *within* the invariants, and slowness must be
-justified by a named invariant, not by vague caution.
+Throughput is now the top-ranked concern. Principles no longer beat it by default; where a principle costs
+measured throughput, the trade is recorded in the ledger and the faster design wins unless the attack it
+enables is live in the threat model.
+
+**"Slower because security" is now a claim with a burden of proof.** To hold, it must name the invariant,
+name the specific attack enforcement prevents, and state the measured cost in tokens per second or bytes
+moved. Unmeasured caution is not an argument. Neither is an attack that requires an adversary the threat
+model does not include.
+
+**Every design document carries a performance budget.** A design without a stated cost — in bytes moved
+per token, cache lines touched on the hot path, or cycles per request — is incomplete and is sent back.
+This applies to security mechanisms above all, because they are the ones historically exempted from
+having to justify their cost.
+
+**Inference on this machine is memory-bandwidth-bound, not compute-bound.** Single-stream decode reads
+essentially the whole weight set per token, so the ceiling is (model bytes) ÷ (memory bandwidth), and
+every design decision is judged against that arithmetic first. This has a sharp consequence: **the biggest
+wins are in bytes moved, not instructions executed.** Quantization, weight layout, cache blocking, and
+avoiding copies dominate; micro-optimizing arithmetic does not. It also bounds what this inversion can
+buy: a security mechanism that touches no memory on the hot path costs nearly nothing to keep, and
+removing it is not a performance win worth the loss. **Cut what moves bytes, not what merely offends.**
 
 **Inference on this machine is memory-bandwidth-bound, not compute-bound.** Single-stream decode reads
 essentially the whole weight set per token, so the ceiling is (model bytes) ÷ (memory bandwidth), and
@@ -82,15 +153,36 @@ blocking, and avoiding copies dominate; micro-optimizing arithmetic does not.
   KV-cache regions should be sized generously; that is exactly what fixed regions are for.
 - **Cache-aware kernel design.** Blocking, tiling, and layout chosen for the actual cache hierarchy.
 
-### Out of bounds without written sign-off
+### Candidate trades — formerly "out of bounds without written sign-off"
 
-Performance work that requires any of these crosses a hard line and needs an owner exception:
+Until 2026-08-17 the five items below were hard lines that performance work could not cross. They are now
+**candidate trades**: each may be taken when the win is measured, and each must be entered in *What this
+ranking costs* with its number attached. None is taken by default, and none is forbidden.
 
-- A dynamic kernel heap or a growable arena (INV-MEM).
-- Shared-memory IPC or async queues, however much faster the datapath would be (INV-IPC).
-- Any W^X exception, including JIT-compiled kernels for tensor operations (INV-MEM).
-- Weakening client isolation or session confinement to share caches or batch across tenants (INV-SERVE).
-- Ambient authority granted to the inference engine to avoid capability checks (INV-AUTH, INV-MODEL).
+They are listed in the order a bandwidth-bound serving system should consider them, which is by expected
+win, not by how uncomfortable they are:
+
+1. **Cross-tenant batching** (INV-SERVE). The single largest lever in LLM serving: continuous batching
+   amortises the weight read across concurrent requests, and the weight read *is* the bandwidth ceiling.
+   Expected win is several-fold on concurrent clients and **zero on single-stream decode**. Cost: clients
+   share a batch, so isolation between them becomes a software property of the batching code rather than
+   a structural one.
+2. **Any W^X exception, including JIT-compiled tensor kernels** (INV-MEM). Win depends entirely on whether
+   shape-specialised kernels beat the static ones; on a bandwidth-bound decode path, likely small. Measure
+   before taking this one — it is the most expensive to unwind.
+3. **Shared-memory IPC or async queues** (INV-IPC). Removes copies from the serving datapath. Win is real
+   and bounded by how many copies actually exist; the zero-copy-by-capability approach may get most of it
+   without the trade.
+4. **A dynamic kernel heap or growable arena** (INV-MEM). Convenience rather than throughput. Fixed
+   reserved regions are already the right shape for weights and KV-cache, and an allocator on the hot path
+   is usually slower than not having one. **Low priority — this one probably loses on its own merits.**
+5. **Ambient authority for the inference engine** (INV-AUTH, INV-MODEL). Removes capability checks from
+   the hot path. Measure them first: a check that is a predictable branch on cached data costs nothing at
+   bandwidth-bound speeds, and this may be a trade with no win behind it.
+
+**The ordering is the point.** Items 1 and 3 move bytes. Items 4 and 5 mostly move instructions, which
+this document has just finished saying do not matter. Taking a security loss for an instruction-count win
+on a bandwidth-bound workload is paying a real cost for a rounding error.
 
 ### The GPU is in scope
 
@@ -164,10 +256,13 @@ not after.
 
 ## First principles
 
-These decide every tradeoff. When they conflict with convenience, the principle wins unless the owner
-signs off otherwise in writing. Throughput is not convenience: see *Performance is a goal* above — it is
-a craft standard that ranks below the invariants and above everything else.
+These decide every tradeoff **below the performance ranking**. When they conflict with convenience, the
+principle wins. When they conflict with *measured throughput*, the throughput wins and the loss is entered
+in the ledger — that is the 2026-08-17 inversion, and it is the one thing these principles no longer beat.
 
+- **Fastest correct implementation.** *(Added 2026-08-17, ranked first.)* Of the designs that are correct,
+  the fastest wins. Correctness is not negotiable and is not what this principle trades against; security
+  properties are. Where a feature cannot be made fast, remove the feature.
 - Least authority. Nothing holds a capability it does not need, and no capability is ambient. Authority
   is named, granted, and revocable. A remote client is granted only its own session.
 - Fail closed. Absence of an explicit grant is denial. A malformed request, an oversized or corrupt
@@ -183,8 +278,14 @@ a craft standard that ranks below the invariants and above everything else.
 
 ## Invariants
 
-The contract. Each is named, documented, and individually checkable. Verification and
-consequences-of-compromise are in THREAT_MODEL.md.
+The contract, **re-ranked 2026-08-17**. Each is named, documented, and individually checkable.
+Verification and consequences-of-compromise are in THREAT_MODEL.md.
+
+These are no longer absolute. Each holds by default and yields to a measured throughput win, with the
+trade recorded in *What this ranking costs*. They stay written in full and stay individually checkable for
+a reason that survives the inversion: **you cannot trade a property you have not stated precisely, and you
+cannot notice you have lost one you never wrote down.** The invariants' value as a *checklist* is
+unaffected by their loss of veto power.
 
 - **INV-AUTH**: no ambient authority; every server's capability set is frozen at launch and capabilities
   are unforgeable.
@@ -332,7 +433,15 @@ assurance problem than curve25519. Clients speak the BSP protocol or they do not
   to us by iBoot get the same fail-closed, bounds-checked, fuzzed, zero-allocation parser discipline as
   network bytes.
 
-## Hard lines (do not cross without explicit sign-off)
+## Standing rules — formerly "hard lines"
+
+**Re-ranked 2026-08-17.** These were absolute; they are now the default, and measured throughput overrides
+any of them with a ledger entry. They remain written as rules rather than suggestions because the default
+still holds in the absence of a number: a design does not get to skip one because it *might* be faster.
+
+Three of them are **not** subject to the inversion, and are marked below. They are the ones where crossing
+buys no throughput at all, so trading them would be paying a cost for nothing.
+
 
 - No ambient authority anywhere. Capability sets are frozen at launch. A remote client's grant covers
   only its own session.
@@ -347,7 +456,7 @@ assurance problem than curve25519. Clients speak the BSP protocol or they do not
   is SHA-256, HKDF, ChaCha20, and Poly1305, which deletes `sha2` and `chacha20`. The Ed25519
   *verification* stack is the one family that stays, under the named crypto exception above. The
   inference engine, the device drivers, and every Apple Silicon platform component are in-tree.
-- **No secret ever enters a build artifact.** Client and admin keys are enrolled at runtime and persisted
+- **NOT SUBJECT TO THE INVERSION.** No secret ever enters a build artifact. Client and admin keys are enrolled at runtime and persisted
   by the kernel's credential store; none is ever compiled in. Session keys come from a symmetric HKDF
   ratchet — session key *n* is derived from chain key *n*, the chain then advances and the old key is
   deleted — which buys forward secrecy from symmetric primitives alone. Stated plainly: **until the
@@ -357,16 +466,48 @@ assurance problem than curve25519. Clients speak the BSP protocol or they do not
   reason is the reproducible-build clause of INV-BOOT: a compile-time secret means either the published
   payload contains the secret or the deployed payload differs from the published one, and
   reproducibility that describes an image nobody runs is not reproducibility.
-- No copied code from reverse-engineering projects, regardless of their license. Documentation in,
-  clean-room implementation out.
+- **NOT SUBJECT TO THE INVERSION.** No copied code from reverse-engineering projects, regardless of their
+  license. Documentation in, clean-room implementation out. Crossing this buys no throughput; it buys
+  schedule, and it trades a legal exposure that no benchmark offsets.
 - The auditor never holds spawn, kernel-mutation, or network capability. The served model never reads
   another client's session or another process, and never makes a network call except through the
   capability-mediated serving channel.
-- No path to security depends on attacker ignorance.
+- **NOT SUBJECT TO THE INVERSION.** No path to security depends on attacker ignorance. Obscurity is not
+  faster than structure; it is the same speed and less true.
 - **Degrading a named invariant requires a written, named exception with owner sign-off, recorded in this
   document.** Four are named here: **INV-BOOT/AS** — *superseded 2026-08-03, now the rule*, retained by
   name so the count stays checkable — plus TCB-AS, the conditionally signed TCB-AS/GPU, and the named
   Ed25519 verification exception. Those are the only such exceptions in force.
+
+## What this ranking costs
+
+**Maintained so the loss stays checkable.** The 2026-08-17 inversion makes security properties tradeable
+against measured throughput. This section is the register of what has actually been traded and what is
+exposed if it is. It is not a list of regrets; it is the falsifiability rule applied to the owner's own
+decision, and an empty column here means a trade has been *considered*, not *taken*.
+
+**Status key.** `DEFAULT` — the property still holds; no trade taken. `TRADED` — given up, with the
+measured win recorded. `AT RISK` — a design is pending that would trade it.
+
+| Property | Status | Win if traded | What an attacker gains |
+| --- | --- | --- | --- |
+| Cross-client isolation in the batcher (INV-SERVE) | DEFAULT | Several-fold on concurrent clients; **zero on single-stream** | Client A's tokens and B's share a batch; isolation becomes a property of batching code rather than of the capability model. A batching bug is a cross-tenant data leak. |
+| W^X (INV-MEM) | DEFAULT | Unmeasured; likely small on a bandwidth-bound path | Any memory-safety defect becomes code execution instead of a crash. |
+| Synchronous rendezvous IPC (INV-IPC) | DEFAULT | Removes datapath copies; bounded by how many exist | Shared mutable memory between components; TOCTOU on anything read twice. |
+| Fixed pools, no kernel heap (INV-MEM) | DEFAULT | Likely negative — an allocator on the hot path is usually slower | Exhaustion becomes a live DoS surface; allocation failure paths become reachable. |
+| Capability checks on the inference hot path (INV-AUTH, INV-MODEL) | DEFAULT | Probably a rounding error; measure first | The engine reaches whatever it can name; model-weight compromise stops being contained. |
+| Cluster-level domain isolation in the scheduler | AT RISK | Better core utilisation | Two domains share an L2. Cross-domain cache side channel — the thing SCHED-03 exists to prevent, re-aimed at clusters. **Design pending 2026-08-17.** |
+| The auditor (INV-AUDIT) | DEFAULT | Frees a core and its cache footprint | Loss of visibility only; it holds no privilege by construction, so removing it costs detection, not containment. **Cheapest honest cut available if a core is needed.** |
+
+**Two things this table is for.** First, so that "we chose speed" is a sentence with a subject and an
+object rather than a mood. Second, so that if the ranking is ever inverted back, the work to undo is a
+list rather than an archaeology exercise.
+
+**A note on what the arithmetic permits.** This system is memory-bandwidth-bound. A security mechanism
+that touches no memory on the hot path costs approximately nothing, and trading it buys approximately
+nothing. Rows 4 and 5 above are in that category and are expected to stay `DEFAULT` on their own merits —
+not out of caution, but because the benchmark will not move. **The inversion is a licence to cut what
+costs bandwidth, not a licence to cut indiscriminately.**
 
 ## Non-goals
 

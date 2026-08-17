@@ -1,4 +1,4 @@
-# BraiNIX roadmap — secure LLM inference serving on Apple Silicon
+# BraiNIX roadmap — fast LLM inference serving on Apple Silicon
 
 Execution plan and current status. Governed by [`NORTH_STAR.md`](NORTH_STAR.md) (the contract) and
 [`THREAT_MODEL.md`](THREAT_MODEL.md) (the attacker model). Where this document and those disagree, they
@@ -6,6 +6,45 @@ win. See [`DOCUMENTATION_MAP.md`](DOCUMENTATION_MAP.md) for authority order.
 
 **This file is the single in-tree source of truth for phasing and status.** It supersedes the external
 planning file it was derived from; do not maintain a roadmap outside the repository.
+
+---
+
+## 2026-08-17 re-prioritisation: performance outranks the invariants
+
+The north-star inverted its ranking (owner decision, 2026-08-17). This section states what that changes
+about **what gets built next**. It does not rewrite the history below: the record of what was measured and
+when is the project's evidence base and is worth more than tidiness. Rows are re-ranked, not deleted.
+
+**The new ordering of work.** Ranked by expected effect on tokens per second, which is now the ranking
+that decides:
+
+1. **Anything that reduces bytes moved per token.** Quantization first — it divides the bandwidth-bound
+   ceiling directly and nothing else does. Then weight layout, cache blocking, and copy elimination.
+2. **Anything that gets all ten cores serving.** The SMP scheduler and the inference engine sized to the
+   performance cores. A single-core serving path is now a defect, not a phase.
+3. **Cross-tenant batching**, the first-ranked candidate trade. Several-fold on concurrent clients, zero
+   on single-stream. Needs the isolation loss recorded in the north-star ledger before it is taken.
+4. **The remaining platform bring-up** — storage, network, GPU — because none of the above ships without
+   them.
+5. **Everything else**, including proof obligations, which are now scheduled behind measured performance
+   work rather than gating it.
+
+**What this demotes, explicitly.** Formal-proof work (decision #4, #15) no longer gates performance work.
+The tiered proof gate stays as a standard for code that ships, but a Kani obligation does not block a
+measured optimisation. Security work whose cost is unmeasured is demoted below security work whose cost is
+known to be zero on the hot path.
+
+**What this does not demote.** Correctness, memory safety, and fail-closed hostile-input parsing. A parser
+that accepts a malformed request quickly is not fast, it is broken. See the north-star's *What it does not
+change*.
+
+**x86-64 is out of planning entirely.** No row below may schedule x86-64 work. The code remains only as a
+per-subsystem regression bar and is deleted subsystem-by-subsystem as aarch64 replaces it — or immediately,
+where it is in the way. Struck-through x86 rows below are history, not schedule.
+
+**Every design document now carries a performance budget**, and that includes designs for security
+mechanisms. A design without a stated cost in bytes moved, cache lines touched, or cycles per request is
+incomplete.
 
 ---
 
@@ -40,6 +79,11 @@ planning file it was derived from; do not maintain a roadmap outside the reposit
 | 25 | **The credential store is plaintext at rest.** The Apple half of the 2026-08-02 ruling survives verbatim; its x86-64 sealing half dies with the platform. No TPM exists on any supported target, so there is no measured boot state to bind a secret to and no version of P2-T13 that closes the gap. | **2026-08-03** |
 | 26 | **The x86-64 code is frozen, not deleted.** `src/kernel/src/arch/**` (4065 LOC), `e1000.rs`, `virtio_blk.rs`, `pci.rs` and the x86 boot path stay in tree and **stay building** as the reference implementation the aarch64 port is written against. They are deleted when aarch64 replaces them, not before. **No task in this plan removes code.** Every row below marked *frozen reference* means exactly this: it still compiles, and nothing is scheduled against it. | **2026-08-03** |
 | 27 | **P2 (serving path) and P3 (inference engine) stay architecture-neutral and host-testable** on `aarch64-apple-darwin`, and are **not blocked by any Apple work**. Losing x86-64/QEMU costs the integration target, not the unit-test loop, so **the P3-T9 gate of #13 is replaced by host-test and per-component criteria** (see Phase 3). **Wave 2 is now this plan.** | **2026-08-03** |
+| 28 | **Performance outranks the invariants.** Reverses #9, which ranked throughput *below* the invariants. Throughput is now the top-ranked concern; each invariant holds by default and yields to a **measured** win, recorded in the north-star's *What this ranking costs* ledger. "Slower because security" must now name the invariant, name the attack, and state the measured cost. **Correctness is not in scope for this trade** — fast wrong answers are defects, and memory safety, bounds checking and fail-closed parsing stay. | **2026-08-17** |
+| 29 | **Remove rather than degrade.** Where a feature can only be had slowly, the feature is deleted rather than shipped slow. Applies to security features and functional features alike, and reverses #26's "no task in this plan removes code" as a standing rule — removal is now a normal outcome, not an exception. | **2026-08-17** |
+| 30 | **Cross-tenant batching moves from forbidden to candidate.** Reverses the second half of #14, which forbade it to preserve INV-SERVE intact. It is now the **first-ranked candidate trade**: the only lever that amortises the weight read, which is the bandwidth ceiling itself. Several-fold on concurrent clients, **zero on single-stream decode**. Not taken by default; taking it records the isolation loss in the ledger. The GPU tenant-mapping half of #14 (weights read-only and permanent, KV strictly per session) stands. | **2026-08-17** |
+| 31 | **x86-64 leaves planning.** No row schedules it and no design is shaped by it. #26's freeze becomes **subsystem-by-subsystem deletion**: the x86 sibling dies in the same change that lands its aarch64 replacement, or immediately where it is in the way. | **2026-08-17** |
+| 32 | **Proof obligations no longer gate performance work.** The tiered gate of #15 stays as a standard for shipped code, but a Kani obligation does not block a measured optimisation. Demoted, not cancelled. | **2026-08-17** |
 
 ### What decision #6 costs, stated plainly
 

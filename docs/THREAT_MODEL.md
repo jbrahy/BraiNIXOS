@@ -4,6 +4,25 @@ Companion to NORTH_STAR.md. The north-star states the invariants as a contract. 
 the contract defends against, what is trusted to uphold it, how each invariant is verified, and what a
 violation costs. Phasing and status live in ROADMAP.md.
 
+---
+
+> **RANKING CHANGE, 2026-08-17. The contract this document defends is now subordinate to throughput.**
+>
+> The north-star inverted its ranking: performance outranks the invariants, and each invariant yields to a
+> measured throughput win recorded in *What this ranking costs*. This document does **not** change what an
+> attacker can do — the attacker model below is unaffected by an owner decision — but it changes what the
+> system promises to stop.
+>
+> **How to read this document now.** Every "Consequence of compromise" below remains accurate. What is no
+> longer guaranteed is that the corresponding control will be present. Before relying on any control here,
+> check the north-star ledger for that property's status: `DEFAULT` means it holds, `TRADED` means it has
+> been given up for a recorded win, `AT RISK` means a design is pending that would give it up.
+>
+> **The one thing this inversion cannot do is make an attack go away.** A trade removes a control, not the
+> adversary. The threat model is therefore the *stable* half of the pair and the north-star is the
+> negotiable half — which is the opposite of how the two were related before 2026-08-17, and is worth
+> holding onto: it is what stops a performance decision from quietly rewriting the attacker.
+
 BraiNIX **serves LLM inference to remote network clients**, which makes the inbound serving path the
 largest attack surface in the system. As of the owner decision of 2026-08-02 the **primary platform is
 Apple Silicon** (Mac mini M2 Pro, `Mac14,12`, SoC `T6020`); as of **2026-08-03 it is the only platform** —
@@ -389,11 +408,18 @@ spent where the residual risk concentrates. The general model remains authoritat
 
 **Deployment, stated.** The reference deployment is a **Mac mini M2 Pro (`Mac14,12`, T6020, 32 GB unified
 memory)** running BraiNIX as the sole OS, delivered as an Image4 payload via `kmutil` under Permissive
-Security. **Performance is a craft standard, not a leftover** (owner decision): CPU and AGX GPU at
+Security. **Performance is the top-ranked concern** (owner decision, 2026-08-17): CPU and AGX GPU at
 maximum. The serving path is CPU-first by ordering, with the GPU landing at AS-5. Single-stream decode is
-bounded by unified-memory bandwidth on both engines; the GPU's payoff is prefill acceleration plus
-time-sliced multi-client serving, because cross-tenant batching is forbidden and clients take turns rather
-than share a batch. ~~x86-64 under QEMU remains the development, CI, and attested-deployment target.~~ —
+bounded by unified-memory bandwidth on both engines.
+
+**Cross-tenant batching moved from forbidden to candidate on 2026-08-17.** It was previously ruled out by
+INV-SERVE, and clients took turns rather than sharing a batch. It is now the first-ranked candidate trade
+in the north-star, because it is the only lever that amortises the weight read — the thing that *is* the
+bandwidth ceiling — across concurrent requests. **If it is taken, the isolation between concurrent clients
+stops being structural and becomes a property of the batching code**, and a batching defect becomes a
+cross-tenant data leak rather than a crash. Threat 4 below (hostile prompts) changes character
+correspondingly: a prompt that escapes its session boundary would reach a co-batched client rather than
+only its own state. Check the north-star ledger for its current status before assuming either posture. ~~x86-64 under QEMU remains the development, CI, and attested-deployment target.~~ —
 **x86-64 was dropped on 2026-08-03**; the code remains in tree as a frozen reference implementation and is
 not a deployment of any kind. **This is the only deployment there is.** The
 runtime profile is **network-facing with a single authenticated, capability-gated inbound serving
