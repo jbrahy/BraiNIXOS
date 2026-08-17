@@ -694,6 +694,47 @@ absent on hardware that has it, with `FEAT_FPAC` on top. And
 **this part has no hardware RNG**. The key comes from the boot seed instead;
 see below.
 
+### BTI: the register is the half that does nothing
+
+`SCTLR.BT` is what everyone sets, and on its own it has **no effect**. BTI
+constrains indirect branches only into pages whose descriptors carry `GP`
+(bit 50), so on firmware's tables the feature cannot fire and every test of it
+passes. Enforcement needs your own page tables; it is a page-table job wearing a
+register's clothes.
+
+**Guard only the page under test.** BTI is decided by the page the branch
+*target* is in. Guard all of DRAM and the exception handler is guarded too — and
+a Branch Target Exception raised inside the handler for a Branch Target
+Exception is an unrecoverable loop, with no console, that looks exactly like BTI
+not working.
+
+**`BTI c` and `BTI j` are not interchangeable.** `BLR` needs `BTI c` (or `jc`);
+`BR` needs `BTI j` (or `jc`). Landing a `BLR` on a `BTI j` faults, and the fault
+is indistinguishable from the feature being broken. As HINTs: `bti` is
+`hint #32`, `bti c` is `hint #34`, `bti j` is `hint #36`, `bti jc` is
+`hint #38` — the HINT space again, so a part without `FEAT_BTI` NOPs them.
+
+**Make the failing branch recoverable.** Point it at `nop; ret`. The exception
+is taken *on* the `nop`, so the handler's usual four-byte advance lands on the
+`ret` and returns to the caller. A test whose failure case wedges the machine
+measures nothing.
+
+**Check both directions, and read `GP` back.**
+
+```
+descriptor       0x000401000cebc603  GP=1
+SCTLR enabled    0x0000001030901185  BT=1
+blr -> plain instruction in a guarded page
+  faulted        1  ESR 0x0000000036000002  EC 0xd
+blr -> BTI c landing pad in the same page
+  faulted        0  (must be 0)
+```
+
+The second branch is the one that proves discrimination rather than blanket
+rejection. And without reading `GP` back out of the built descriptor, a builder
+that dropped the bit gives a run where nothing faults — identical to a part
+without the feature.
+
 ## 9h. Entropy on a part with no RNG
 
 **`/chosen/random-seed`.** iBoot leaves 64 bytes there. `/chosen/cl4-entropy`

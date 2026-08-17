@@ -58,6 +58,7 @@
 // ---------------------------------------------------------------------------
 
 pub mod bss;
+pub mod bti;
 pub mod console;
 pub mod el;
 pub mod entropy;
@@ -91,17 +92,27 @@ pub use vectors::{last_exception, with_vectors, LastException, NO_EXCEPTION};
 // enabled -- and `TGE` routes general exceptions to EL2, so EL1 is not a place
 // code can simply be dropped into.
 //
-// Getting to a genuine EL1 therefore means clearing `TGE`, deciding what to do
-// about `E2H`, and establishing a real EL1 translation regime. That is a
-// wholesale change to the machine's configuration, and m1n1 -- which is
-// resident, hosting the measurement, and the only reason we can see anything at
-// all -- depends on the configuration being changed.
+// Getting to a genuine EL1 therefore means clearing `TGE`, programming a real
+// EL1 translation regime through the `_EL12` aliases, and putting `HCR_EL2` back
+// afterwards -- m1n1 is resident, hosting the measurement, and depends on the
+// configuration this changes.
 //
-// So this belongs in the boot path, entered from iBoot with the machine ours,
-// not in a probe. Attempting it here would trade the debugging loop for the
-// thing being debugged.
+// CORRECTION, 2026-08-16/17. This block used to conclude "so it belongs in the
+// boot path, not in a probe", and to say the read-only pre-check "refused, and
+// refusing was correct". **That verdict was wrong, and the reasoning behind it
+// was not.** The configuration really is as described; the conclusion drawn from
+// it was not. A bounded excursion clears `TGE`, drops, and restores `HCR_EL2`
+// byte for byte, and it works -- see `el::drop_to_el1_and_return`, and
+// `el::drop_to_el0_and_return`, which goes a level further and runs unprivileged.
 //
-// The pre-check that establishes all of this is in `kernel_probe` and is
-// read-only: `HCR_EL2` for RW/TGE, and `AT s1e1r` for whether a landing pad
-// would even translate. It refused, and refusing was correct.
+// What actually blocked it was two defects of our own, neither visible in the
+// symptom: the vector tail installed `ELR_EL2` without `SPSR_EL2`, so a return
+// that changed level resumed at the right address at the wrong one; and the
+// payload was being loaded at an address that was not 2 KiB aligned, which
+// `VBAR` silently truncates. Both are recorded in `vectors` and in
+// `FIRST_LIGHT_RUNBOOK.md` 9e-9f.
+//
+// The note is corrected here rather than deleted, because the wrong answer was
+// reached by a plausible argument from correct measurements, and that is worth
+// keeping visible.
 // ---------------------------------------------------------------------------

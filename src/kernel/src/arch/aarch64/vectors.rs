@@ -497,6 +497,71 @@ pub fn el0_entry_address() -> u64 {
     unsafe { core::ptr::addr_of!(brainix_el0_entry) as u64 }
 }
 
+// ---------------------------------------------------------------------------
+// Branch targets for the BTI test.
+//
+// In a page of their own, for a different reason than the EL0 code: BTI
+// constrains branches by the page **the target is in**, not the page the branch
+// is in. Marking only this page Guarded means an indirect branch into it must
+// land on a `BTI` instruction, while everything else -- including the exception
+// handler that has to catch the resulting fault -- keeps branching normally.
+//
+// Guarding all of DRAM instead would have been simpler and would have applied
+// BTI to the handler as well. A Branch Target Exception raised inside the
+// handler for a Branch Target Exception is a hang, on a machine with no
+// console, and it would have looked like BTI simply not working.
+// ---------------------------------------------------------------------------
+
+core::arch::global_asm!(
+    r#"
+.section .text.bti, "ax"
+.balign 16384
+.globl brainix_bti_no_landing
+brainix_bti_no_landing:
+    // Deliberately NOT a landing pad. A `blr` here from a Guarded page must
+    // raise a Branch Target Exception, EC 0x0D.
+    //
+    // The exception is taken ON this instruction, so ELR points here; the
+    // handler advances past it and the `ret` below returns to the caller. That
+    // is what makes a *failed* branch recoverable and therefore measurable.
+    nop
+    ret
+.balign 64
+.globl brainix_bti_landing
+brainix_bti_landing:
+    // `hint #34` is `BTI c`, the landing pad a `BLR` requires. `BTI j`
+    // (`hint #36`) accepts `BR` and would NOT accept this call -- the
+    // distinction is the point of the instruction, and getting it wrong gives a
+    // fault that looks like BTI being broken.
+    //
+    // Written as a HINT because the architecture puts it there so a part
+    // without FEAT_BTI executes it as a NOP, and the raw form assembles without
+    // the target enabling the feature.
+    hint #34
+    ret
+.balign 16384
+"#
+);
+
+extern "C" {
+    /// A branch target that is not a landing pad.
+    static brainix_bti_no_landing: u8;
+    /// A branch target that is a valid `BLR` landing pad.
+    static brainix_bti_landing: u8;
+}
+
+/// Address of the branch target that is **not** a landing pad.
+pub fn bti_no_landing_address() -> u64 {
+    // SAFETY: address of an `extern` symbol defined in this crate's assembly.
+    unsafe { core::ptr::addr_of!(brainix_bti_no_landing) as u64 }
+}
+
+/// Address of the valid `BLR` landing pad.
+pub fn bti_landing_address() -> u64 {
+    // SAFETY: as above.
+    unsafe { core::ptr::addr_of!(brainix_bti_landing) as u64 }
+}
+
 /// Vector index of the last exception taken, or [`NO_EXCEPTION`].
 static LAST_INDEX: AtomicU64 = AtomicU64::new(NO_EXCEPTION);
 /// `ESR_EL2` of the last exception taken.

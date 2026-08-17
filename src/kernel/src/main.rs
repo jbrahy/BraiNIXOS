@@ -786,6 +786,34 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
             put(12, user.error);
             put(13, user.hcr_after);
         }
+        8 => {
+            // BTI enforcement. `SCTLR.BT` was already set in stage 3 and did
+            // nothing, because BTI constrains branches only into pages carrying
+            // `GP` and until this kernel owned its own tables there was no way
+            // to set that on anything.
+            //
+            // SAFETY: inside `with_vectors`, which is required -- one of the two
+            // branches exists to raise a Branch Target Exception, and its target
+            // ends in `ret` so the handler's advance returns from it.
+            let bti = unsafe {
+                brainix_kernel::arch::aarch64::with_vectors(|| {
+                    brainix_kernel::arch::aarch64::bti::enable_and_verify()
+                })
+            };
+            put(1, u64::from(bti.supported));
+            put(2, bti.guarded_root);
+            put(3, bti.tables_used as u64);
+            put(4, bti.guarded_page);
+            put(5, bti.descriptor);
+            put(6, bti.sctlr_while_enabled);
+            put(7, bti.sctlr_after);
+            put(8, bti.bad_branch_esr);
+            put(9, u64::from(bti.bad_branch_faulted));
+            put(10, u64::from(bti.good_branch_faulted));
+            put(11, bti.restored_root);
+            put(12, bti.error);
+            put(13, u64::from(bti.enforcement_works()));
+        }
         _ => {}
     }
     EL1_PROBE_MAGIC

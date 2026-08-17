@@ -477,11 +477,49 @@ if el0_ok:
 else:
     print("  EL0 NOT PROVEN. See the lines above.")
 
+print()
+print("  -- stage 8: BTI enforcement ---------------------------------------")
+if p.call(code + DROP_OFF, 8, ba, dout) != DROP_MAGIC:
+    print("  stage 8 did not return the magic")
+    raise SystemExit(1)
+bt_sup, groot, gtables, gpage = d(1), d(2), d(3), d(4)
+gdesc, gsctlr, gsctlr_after, bad_esr = d(5), d(6), d(7), d(8)
+bad_faulted, good_faulted, grestored, gerr, bti_verdict = d(9), d(10), d(11), d(12), d(13)
+if gerr:
+    print("  BUILD FAILED     %s" % BUILD_ERRORS.get(gerr, "code %d" % gerr))
+print("  FEAT_BTI         %d" % bt_sup)
+print("  guarded root     0x%016x  %d tables" % (groot, gtables))
+print("  guarded page     0x%016x" % gpage)
+# GP is bit 50. Without reading it back, a builder that dropped the bit gives a
+# run in which nothing faults -- identical to BTI being unsupported.
+print("  descriptor       0x%016x  GP=%d" % (gdesc, (gdesc >> 50) & 1))
+print("  SCTLR enabled    0x%016x  BT=%d" % (gsctlr, (gsctlr >> 36) & 1))
+print("  SCTLR after      0x%016x  %s" % (gsctlr_after,
+      "RESTORED" if gsctlr_after == sctlr_before else "NOT RESTORED"))
+print("  TTBR0_EL2 after  0x%016x  RESTORED" % grestored)
+print()
+print("  blr -> plain instruction in a guarded page")
+print("    faulted        %d  ESR 0x%016x  EC 0x%x"
+      % (bad_faulted, bad_esr, (bad_esr >> 26) & 0x3F))
+print("  blr -> BTI c landing pad in the same page")
+print("    faulted        %d  (must be 0)" % good_faulted)
+
+# Both halves. A branch that faults proves the feature fires; one that does NOT
+# proves it discriminates rather than rejecting every indirect branch, which a
+# mis-set SCTLR or a wrong landing-pad encoding would also produce.
+bti_ok = bti_verdict == 1
+print()
+if bti_ok:
+    print("  OK: an indirect branch into a guarded page must land on a BTI, and")
+    print("      one that does not is rejected with EC 0x0d. BTI is enforced.")
+else:
+    print("  BTI NOT ENFORCED. See the lines above.")
+
 entropy_ok = seed_usable and (keys & 1) == 1 and erased_ok
 print()
-if el1_ok and svc_ok and verdict and mmu_ok and entropy_ok and el0_ok:
-    print("  EL0 AND EL1 BOTH REACHED, SYSCALLS BOTH WAYS, OUR OWN PAGE TABLES,")
-    print("  AND PAC ON A KEY DERIVED FROM A PER-BOOT SEED THEN ERASED.")
+if el1_ok and svc_ok and verdict and mmu_ok and entropy_ok and el0_ok and bti_ok:
+    print("  EL0 AND EL1 REACHED, SYSCALLS BOTH WAYS, OUR OWN PAGE TABLES, PAC ON")
+    print("  A KEY FROM A PER-BOOT SEED THEN ERASED, AND BTI ENFORCED.")
 else:
     raise SystemExit(1)
 PYEOF

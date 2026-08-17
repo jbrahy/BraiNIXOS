@@ -208,19 +208,25 @@ pub const PXN: u64 = 1 << 53;
 /// `UXN`, bit 54: unprivileged execute never.
 pub const UXN: u64 = 1 << 54;
 
-/// Build an EL1 regime in which exactly one page is reachable from EL0.
+/// `GP`, bit 50: the page is Guarded, so `FEAT_BTI` applies to branches into it.
+pub const GP: u64 = 1 << 50;
+
+/// Map all of DRAM, giving exactly one page different attributes.
 ///
 /// # The shape, and why it is not simpler
 ///
-/// All of DRAM as kernel-only blocks, except the 32 MiB containing `user_page`,
-/// which is laid out as individual granule-sized pages so that one of them --
-/// and only one -- carries `AP[1]`. Marking the *block* accessible instead would
-/// be one line shorter and would hand userspace 32 MiB of whatever else lives
-/// nearby, which here is the kernel's own code.
+/// DRAM as blocks, except the 32 MiB containing `special_page`, which is laid
+/// out as individual granule-sized pages so that one of them -- and only one --
+/// gets `special_attributes`. Attaching the attribute to the *block* instead
+/// would be shorter and would apply it to 32 MiB of whatever else lives nearby,
+/// which here is the kernel's own code.
 ///
-/// The user page also gets `PXN`: EL1 must not execute memory EL0 can write.
-/// Everything else gets `UXN`, so EL0 cannot execute the kernel even if a
-/// permission bug ever made it readable.
+/// Both callers want that shape for different reasons and neither wants the
+/// coarse version: the EL0 excursion needs one page reachable from userspace,
+/// and the BTI test needs one page Guarded. Sharing the routine keeps the
+/// "fine-grained region first" ordering in one place -- `map_blocks` refuses to
+/// overwrite a table descriptor and `map_pages` refuses to split a live block,
+/// so the order is forced, and it is easy to get wrong once per copy.
 ///
 /// Returns the root and how many tables it cost.
 ///
@@ -228,11 +234,12 @@ pub const UXN: u64 = 1 << 54;
 ///
 /// Writes `USER_TABLES`. Single-threaded, and the caller must not have this
 /// root installed while calling.
-pub unsafe fn build_user_root(
-    user_page: u64,
+pub unsafe fn build_split_root(
+    special_page: u64,
+    special_attributes: u64,
+    other_attributes: u64,
     granule_bits: u32,
     input_bits: u32,
-    kernel_attributes: u64,
 ) -> Result<(u64, usize), BuildError> {
     // SAFETY: `USER_TABLES` is ours, 16 KiB aligned, single-threaded here.
     let arena: &mut [u64] = unsafe { &mut (*core::ptr::addr_of_mut!(USER_TABLES)).0 };
@@ -241,24 +248,20 @@ pub unsafe fn build_user_root(
 
     let granule = 1u64 << granule_bits;
     let block = builder.block_size();
-    let split_start = user_page & !(block.saturating_sub(1));
+    let split_start = special_page & !(block.saturating_sub(1));
     if split_start < DRAM_BASE || split_start >= DRAM_BASE.saturating_add(DRAM_SIZE) {
         return Err(BuildError::AddressOutOfRange);
     }
 
-    // The fine-grained region FIRST. `map_blocks` refuses to overwrite a table
-    // descriptor, and `map_pages` refuses to split a live block, so the order is
-    // forced -- which is the intended shape of both refusals rather than an
-    // inconvenience. See `aarch64_tables::map_pages`.
+    // The fine-grained region FIRST. See the note above on why the order is not
+    // a preference.
     let mut offset = 0u64;
     while offset < block {
         let page = split_start.saturating_add(offset);
-        let attributes = if page == user_page {
-            // Reachable from EL0, executable by EL0, and NOT executable by EL1.
-            (kernel_attributes | AP_EL0 | PXN) & !UXN
+        let attributes = if page == special_page {
+            special_attributes
         } else {
-            // Kernel-only, and not executable from EL0 even if that changes.
-            kernel_attributes | UXN
+            other_attributes
         };
         builder.map_pages(page, page, granule, attributes)?;
         offset = offset.saturating_add(granule);
@@ -267,7 +270,7 @@ pub unsafe fn build_user_root(
     // Then DRAM either side of it, in blocks.
     let before = split_start.saturating_sub(DRAM_BASE);
     if before > 0 {
-        builder.map_blocks(DRAM_BASE, DRAM_BASE, before, kernel_attributes | UXN)?;
+        builder.map_blocks(DRAM_BASE, DRAM_BASE, before, other_attributes)?;
     }
     let after_start = split_start.saturating_add(block);
     let dram_end = DRAM_BASE.saturating_add(DRAM_SIZE);
@@ -276,11 +279,66 @@ pub unsafe fn build_user_root(
             after_start,
             after_start,
             dram_end.saturating_sub(after_start),
-            kernel_attributes | UXN,
+            other_attributes,
         )?;
     }
 
     Ok((builder.root(), builder.tables_used()))
+}
+
+/// Build an EL1 regime in which exactly one page is reachable from EL0.
+///
+/// The user page gets `AP[1]` and `PXN`: EL1 must not execute memory EL0 can
+/// write. Everything else gets `UXN`, so EL0 cannot execute the kernel even if
+/// a permission bug ever made it readable.
+///
+/// # Safety
+///
+/// As [`build_split_root`].
+pub unsafe fn build_user_root(
+    user_page: u64,
+    granule_bits: u32,
+    input_bits: u32,
+    kernel_attributes: u64,
+) -> Result<(u64, usize), BuildError> {
+    // SAFETY: delegated; the caller's contract is the same.
+    unsafe {
+        build_split_root(
+            user_page,
+            (kernel_attributes | AP_EL0 | PXN) & !UXN,
+            kernel_attributes | UXN,
+            granule_bits,
+            input_bits,
+        )
+    }
+}
+
+/// Build a regime in which exactly one page is **Guarded** for `FEAT_BTI`.
+///
+/// No `UXN` anywhere and no `AP[1]`: this regime is installed in `TTBR0_EL2` and
+/// EL2 executes through it, including the page under test. The only difference
+/// from an ordinary identity map is `GP` on one page.
+///
+/// # Safety
+///
+/// As [`build_split_root`], and the result is installed in `TTBR0_EL2` while
+/// the calling code executes through it, so it must map that code.
+pub unsafe fn build_guarded_root(
+    guarded_page: u64,
+    granule_bits: u32,
+    input_bits: u32,
+    kernel_attributes: u64,
+) -> Result<(u64, usize), BuildError> {
+    // SAFETY: delegated.
+    unsafe {
+        build_split_root(
+            guarded_page,
+            kernel_attributes | GP,
+            kernel_attributes,
+            granule_bits,
+            input_bits,
+        )
+    }
 }
 
 /// What building and installing our own tables produced.
