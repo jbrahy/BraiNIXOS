@@ -517,3 +517,98 @@ pub fn matmul_q8_0_q8a(
     }
     Ok(())
 }
+
+/// `y = W xᵀ` over a **contiguous range of output rows**, for one worker of a
+/// parallel decomposition.
+///
+/// # Why the split is over output rows
+///
+/// Each output row is an independent dot product against the same activations.
+/// Splitting there needs no reduction, no synchronization and no shared mutable
+/// state: worker `k` reads all of `x`, its own slice of the weights, and writes
+/// its own slice of `y`. The activations are re-read by every worker, which is
+/// exactly the trade the weights-outer loop order already makes for tokens --
+/// they are small and cache-resident, and the weights are the DRAM stream.
+///
+/// # Measured, and why the caller should not spawn one worker per core
+///
+/// On `aarch64-apple-darwin`, six threads streaming a 151 MB matrix reach
+/// 108 GB/s against 26.6 for one -- **4.1x from six cores, not 6x** -- and
+/// eight threads are *slower* than six. The bus saturates. A caller that sizes
+/// its worker pool from the core count rather than from a measurement will pay
+/// for contention it cannot use.
+///
+/// # `n_tokens` and the output layout
+///
+/// `y` holds this worker's rows only, as `[n_tokens, row_count]` row-major. For
+/// single-stream decode (`n_tokens == 1`) that makes the full output splittable
+/// with `chunks_mut`, so the disjointness is checked by the borrow checker
+/// rather than argued for in a comment.
+///
+/// # Errors
+///
+/// As [`matmul_q8_0_q8a`], plus [`TensorError::ShapeMismatch`] if the row range
+/// runs past the weight matrix or `y` is not sized for it.
+pub fn matmul_q8_0_q8a_rows(
+    shape: MatMulShape,
+    weights: &Q8Weights<'_>,
+    activations: &Q8Weights<'_>,
+    row_start: usize,
+    row_count: usize,
+    y: &mut [f32],
+) -> Result<(), TensorError> {
+    if shape.n_tokens == 0 || shape.n_in == 0 || row_count == 0 {
+        return Err(TensorError::ZeroDimension);
+    }
+    let row_end = row_start
+        .checked_add(row_count)
+        .ok_or(TensorError::DimensionOverflow)?;
+    if row_end > weights.n_out() || shape.n_out != weights.n_out() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    if shape.n_in != weights.n_in() || shape.n_in != activations.n_in() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    if shape.n_tokens != activations.n_out() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    let required_y = shape
+        .n_tokens
+        .checked_mul(row_count)
+        .ok_or(TensorError::DimensionOverflow)?;
+    if y.len() != required_y {
+        return Err(TensorError::ShapeMismatch);
+    }
+
+    for (local_index, (weight_scales, weight_quants)) in weights
+        .rows()
+        .skip(row_start)
+        .take(row_count)
+        .enumerate()
+    {
+        for (token_index, (x_scales, x_quants)) in activations.rows().enumerate() {
+            let mut acc = 0.0_f32;
+            for (((weight_scale, weight_block), x_scale), x_block) in weight_scales
+                .chunks_exact(SCALE_BYTES)
+                .zip(weight_quants.chunks_exact(Q8_0_BLOCK))
+                .zip(x_scales.chunks_exact(SCALE_BYTES))
+                .zip(x_quants.chunks_exact(Q8_0_BLOCK))
+            {
+                let ws = read_f32_le(weight_scale).ok_or(TensorError::MalformedPayload)?;
+                let xs = read_f32_le(x_scale).ok_or(TensorError::MalformedPayload)?;
+                acc += ws * xs * block_dot_i8(weight_block, x_block) as f32;
+            }
+            let slot = y
+                .get_mut(
+                    token_index
+                        .checked_mul(row_count)
+                        .ok_or(TensorError::DimensionOverflow)?
+                        .checked_add(local_index)
+                        .ok_or(TensorError::DimensionOverflow)?,
+                )
+                .ok_or(TensorError::ShapeMismatch)?;
+            *slot = acc;
+        }
+    }
+    Ok(())
+}

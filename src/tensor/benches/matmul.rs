@@ -47,7 +47,8 @@
 //! does not, and must be re-measured on the target.
 
 use brainix_tensor::{
-    matmul_q8_0, matmul_q8_0_q8a, quantize_activations, MatMulShape, Q8Weights, Q8_0_BLOCK,
+    matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations, MatMulShape,
+    Q8Weights, Q8_0_BLOCK,
 };
 use std::time::Instant;
 use std::thread;
@@ -235,6 +236,67 @@ fn measure_scaling(n_tokens: usize, n_in: usize, n_out: usize) {
     }
 }
 
+/// Workers splitting the output rows of **one** matmul.
+///
+/// # Why this differs from `measure_scaling`, and which one decode cares about
+///
+/// `measure_scaling` runs N independent matmuls at once and reports aggregate
+/// bandwidth -- a throughput figure, right for many concurrent clients. Decode
+/// is the opposite shape: **one** token at a time, and the question is whether a
+/// single matmul finishes N times sooner when N cores share it. That is latency
+/// parallelism, and it pays for a barrier at the end of every projection that
+/// the throughput measurement never pays.
+///
+/// A real forward pass has hundreds of these barriers per token -- seven
+/// projections per layer, twenty-four layers -- so the per-call overhead here is
+/// the thing that decides whether a multi-core decode is worth building.
+fn measure_row_split(label: &str, n_in: usize, n_out: usize) {
+    let payload = synthetic_payload(n_out, n_in);
+    let weights = Q8Weights::new(&payload, n_out, n_in).expect("payload is well formed");
+    let shape = MatMulShape { n_tokens: 1, n_in, n_out };
+    let x = vec![0.5_f32; n_in];
+    let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, n_in).expect("len")];
+    quantize_activations(1, n_in, &x, &mut scratch).expect("quantize");
+    let quantized = Q8Weights::new(&scratch, 1, n_in).expect("view");
+
+    let weight_bytes = n_out as f64 * n_in as f64 * BYTES_PER_WEIGHT_ELEMENT;
+    let iterations = (500_000_000.0 / weight_bytes).max(20.0) as usize;
+    println!("  {label}");
+
+    let mut single = 0.0f64;
+    for workers in [1usize, 2, 4, 6] {
+        let per = n_out / workers;
+        let mut y = vec![0.0_f32; n_out];
+        let start = Instant::now();
+        for _ in 0..iterations {
+            thread::scope(|scope| {
+                for (index, chunk) in y.chunks_mut(per).enumerate() {
+                    let weights = &weights;
+                    let quantized = &quantized;
+                    scope.spawn(move || {
+                        matmul_q8_0_q8a_rows(
+                            shape, weights, quantized, index * per, chunk.len(), chunk,
+                        )
+                        .expect("range matmul");
+                    });
+                }
+            });
+        }
+        let seconds = start.elapsed().as_secs_f64();
+        std::hint::black_box(&y);
+        let gb = weight_bytes * iterations as f64 / seconds / 1e9;
+        if workers == 1 {
+            single = gb;
+        }
+        println!(
+            "    {workers} worker{}  {gb:7.2} GB/s   {:.2}x   ({:.1} us/call)",
+            if workers == 1 { " " } else { "s" },
+            gb / single,
+            seconds / iterations as f64 * 1e6
+        );
+    }
+}
+
 fn main() {
     println!();
     println!("  matmul_q8_0 — weight-byte throughput, single core");
@@ -284,6 +346,13 @@ fn main() {
     println!();
     println!("  [151 MB matrix -- exceeds any cache, streams from DRAM]");
     measure_scaling(1, 4096, 32768);
+
+    println!();
+    println!("  Row-split within ONE matmul — the decode shape");
+    println!();
+    measure_row_split("4096x4096 (attention proj, 18.9 MB)", 4096, 4096);
+    println!();
+    measure_row_split("4096x11008 (ffn up, 50.7 MB)", 4096, 11008);
 
     println!();
     println!("  Interpretation:");

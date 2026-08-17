@@ -6,7 +6,8 @@
 //! checked rather than hoped for.
 
 use brainix_tensor::{
-    matmul_q8_0, matmul_q8_0_q8a, quantize_activations, MatMulShape, Q8Weights,
+    matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations, MatMulShape,
+    Q8Weights,
 };
 
 /// Deterministic pseudo-random floats in a range typical of activations.
@@ -135,4 +136,60 @@ fn a_shape_disagreement_denies() {
     let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, 32).expect("len")];
     assert!(quantize_activations(1, 32, &vec![0.0; 31], &mut scratch).is_err());
     assert!(quantize_activations(1, 32, &vec![0.0; 32], &mut scratch[..4]).is_err());
+}
+
+#[test]
+fn splitting_the_output_rows_reproduces_the_whole() {
+    // The property a parallel decomposition rests on: N workers each computing
+    // a slice of the output rows produce exactly what one call produces. Not
+    // "within a tolerance" -- bit-for-bit, because each output element is
+    // computed by the identical sequence of operations either way. Splitting
+    // changes who does the work, not the arithmetic.
+    const N_OUT: usize = 96;
+    const N_IN: usize = 128;
+    let payload = q8_payload(N_OUT, N_IN, 11);
+    let weights = Q8Weights::new(&payload, N_OUT, N_IN).expect("weights");
+    let x = values(N_IN, 5);
+    let shape = MatMulShape {
+        n_tokens: 1,
+        n_in: N_IN,
+        n_out: N_OUT,
+    };
+
+    let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, N_IN).expect("len")];
+    quantize_activations(1, N_IN, &x, &mut scratch).expect("quantize");
+    let quantized = Q8Weights::new(&scratch, 1, N_IN).expect("view");
+
+    let mut whole = vec![0.0f32; N_OUT];
+    matmul_q8_0_q8a(shape, &weights, &quantized, &mut whole).expect("whole");
+
+    for workers in [1usize, 2, 3, 4, 6] {
+        let per = N_OUT / workers;
+        let mut split = vec![0.0f32; N_OUT];
+        for (index, chunk) in split.chunks_mut(per).enumerate() {
+            matmul_q8_0_q8a_rows(
+                shape,
+                &weights,
+                &quantized,
+                index * per,
+                chunk.len(),
+                chunk,
+            )
+            .expect("range");
+        }
+        assert_eq!(split, whole, "{workers} workers disagreed with one call");
+    }
+}
+
+#[test]
+fn a_row_range_past_the_end_denies() {
+    let payload = q8_payload(64, 64, 2);
+    let weights = Q8Weights::new(&payload, 64, 64).expect("weights");
+    let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, 64).expect("len")];
+    quantize_activations(1, 64, &values(64, 1), &mut scratch).expect("quantize");
+    let quantized = Q8Weights::new(&scratch, 1, 64).expect("view");
+    let shape = MatMulShape { n_tokens: 1, n_in: 64, n_out: 64 };
+    let mut y = vec![0.0f32; 8];
+    // Starts inside, ends outside.
+    assert!(matmul_q8_0_q8a_rows(shape, &weights, &quantized, 60, 8, &mut y).is_err());
 }
