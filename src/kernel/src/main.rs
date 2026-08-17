@@ -325,6 +325,18 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
     put(25, probe_va);
     put(26, par);
 
+    // Program TTBR0_EL2 with a table this image owns, and read through it.
+    //
+    // SAFETY: at EL2 with translation already on, and the installed root is a
+    // copy of the live one, so every address that resolved before resolves
+    // after -- including the instruction stream doing the switching. That
+    // invariant is what makes this survivable; see `mmu::switch_to_copied_root`.
+    let switch = unsafe { brainix_kernel::arch::aarch64::mmu::switch_to_copied_root(probe_va) };
+    put(32, switch.original_root);
+    put(33, switch.installed_root);
+    put(34, switch.probe_value);
+    put(35, switch.restored_root);
+
     if let Some(config) = brainix_kernel::aarch64_walk::WalkConfig::from_tcr(tcr) {
         put(27, u64::from(config.granule_bits));
         put(28, u64::from(config.levels()));

@@ -60,6 +60,7 @@
 pub mod bss;
 pub mod console;
 pub mod halt;
+pub mod mmu;
 pub mod registers;
 pub mod timer;
 pub mod vectors;
