@@ -304,6 +304,46 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
     let (bss_start, bss_end) = brainix_kernel::arch::aarch64::bss::region();
     put(21, bss_start);
     put(22, bss_end);
+
+    // MMU: walk the LIVE tables and check the answer against the MMU's own.
+    //
+    // Nothing here writes a control register. Enabling translation is the one
+    // operation on this machine that can fail with no way to report it, and
+    // there is no reason to risk it before the walker is known correct. The
+    // hardware is already running with translation on, which makes its tables a
+    // free, fully populated test case and its `AT` instruction a free oracle.
+    let tcr = registers::tcr_el2();
+    let ttbr0 = registers::ttbr0_el2();
+    put(23, tcr);
+    put(24, ttbr0);
+
+    // Translate this function's own address: guaranteed mapped, and if the
+    // walker disagrees about the page it is executing from, it is wrong in the
+    // least ambiguous way possible.
+    let probe_va = kernel_probe as usize as u64;
+    let par = registers::translate_el2_read(probe_va);
+    put(25, probe_va);
+    put(26, par);
+
+    if let Some(config) = brainix_kernel::aarch64_walk::WalkConfig::from_tcr(tcr) {
+        put(27, u64::from(config.granule_bits));
+        put(28, u64::from(config.levels()));
+        // SAFETY: reading a descriptor from a physical address that the live
+        // tables themselves point at. Translation is on with an identity
+        // mapping over this memory (measured), so the physical address is
+        // directly readable.
+        let walked = brainix_kernel::aarch64_walk::walk(ttbr0, probe_va, config, |pa| unsafe {
+            core::ptr::read_volatile(pa as usize as *const u64)
+        });
+        match walked {
+            Ok(translation) => {
+                put(29, translation.physical_address);
+                put(30, translation.descriptor);
+                put(31, u64::from(translation.level));
+            }
+            Err(_) => put(29, u64::MAX),
+        }
+    }
     // The address of the trap site, so ELR can be checked against it rather
     // than merely reported.
     put(17, brainix_kernel::arch::aarch64::vectors::table_address());

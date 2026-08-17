@@ -117,3 +117,47 @@ pub fn el1_mmu_enabled() -> bool {
 pub fn memory_model() -> crate::aarch64_ident::MemoryModel {
     crate::aarch64_ident::MemoryModel::from_id_register(id_aa64mmfr0_el1())
 }
+
+/// `TCR_EL2` — translation control for EL2.
+pub fn tcr_el2() -> u64 {
+    read_sysreg!("TCR_EL2")
+}
+
+/// `TTBR0_EL2` — the stage-1 table base for EL2.
+pub fn ttbr0_el2() -> u64 {
+    read_sysreg!("TTBR0_EL2")
+}
+
+/// Ask the MMU itself to translate `virtual_address` for an EL2 read.
+///
+/// Returns `PAR_EL1`. Bit 0 set means the translation **failed**, which is
+/// information rather than an error: it says the address is genuinely not
+/// mapped, and a software walker that produces an address for it is wrong.
+///
+/// # Why this exists
+///
+/// It is the only independent oracle available for a page-table walker. A
+/// walker checked against tables this repository also built confirms nothing
+/// except self-consistency; checked against the MMU's own answer for the same
+/// address on the same live tables, it is checked against the thing it is
+/// modelling.
+///
+/// `isb` after the `at` because `PAR_EL1` is not architecturally guaranteed to
+/// be readable until the address translation completes.
+pub fn translate_el2_read(virtual_address: u64) -> u64 {
+    let par: u64;
+    // SAFETY: `at s1e2r` performs a translation-table lookup and writes
+    // `PAR_EL1`. It has no memory side effects and cannot fault; an
+    // untranslatable address is reported in `PAR_EL1.F` rather than raised.
+    unsafe {
+        core::arch::asm!(
+            "at s1e2r, {va}",
+            "isb",
+            "mrs {par}, PAR_EL1",
+            va = in(reg) virtual_address,
+            par = out(reg) par,
+            options(nostack)
+        )
+    }
+    par
+}

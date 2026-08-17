@@ -13,6 +13,9 @@ pub mod arch;
 /// aarch64 identification decoding: pure, host-tested, no instructions.
 pub mod aarch64_ident;
 
+/// Stage-1 page-table walking: pure, host-tested, no instructions.
+pub mod aarch64_walk;
+
 #[cfg(bare_metal_x86)]
 pub mod boot;
 
