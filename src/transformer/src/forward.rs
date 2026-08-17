@@ -312,6 +312,7 @@ impl<'a> Model<'a> {
         layer.query_projection.project(
             shape,
             normed,
+            workspace.quant_scratch,
             prefix_mut(workspace.query, checked_product(token_count, query_width)?)?,
             // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
@@ -319,10 +320,12 @@ impl<'a> Model<'a> {
         let key_span = checked_product(token_count, key_value_width)?;
         layer
             .key_projection
-            .project(shape, normed, prefix_mut(workspace.key, key_span)?)?;
+            .project(
+            shape, normed, workspace.quant_scratch, prefix_mut(workspace.key, key_span)?)?;
         layer
             .value_projection
-            .project(shape, normed, prefix_mut(workspace.value, key_span)?)
+            .project(
+            shape, normed, workspace.quant_scratch, prefix_mut(workspace.value, key_span)?)
     }
 
     /// RoPE over the query and the key of every token in the batch.
@@ -416,6 +419,7 @@ impl<'a> Model<'a> {
         layer.attention_output_projection.project(
             shape,
             attention,
+            workspace.quant_scratch,
             prefix_mut(workspace.projected, span)?,
         )
     }
@@ -460,12 +464,14 @@ impl<'a> Model<'a> {
         layer.gate_projection.project(
             shape,
             prefix(workspace.normed, span)?,
+            workspace.quant_scratch,
             prefix_mut(workspace.gate, inner)?,
             // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
         layer.up_projection.project(
             shape,
             prefix(workspace.normed, span)?,
+            workspace.quant_scratch,
             prefix_mut(workspace.up, inner)?,
             // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
@@ -494,6 +500,7 @@ impl<'a> Model<'a> {
         layer.down_projection.project(
             shape,
             prefix(workspace.activated, inner)?,
+            workspace.quant_scratch,
             prefix_mut(workspace.feed_forward, span)?,
         )
     }
@@ -520,7 +527,8 @@ impl<'a> Model<'a> {
         let shape = self.projection_shape(1, width, self.config.vocabulary_size);
         self.weights
             .logit_matrix()
-            .project(shape, prefix(workspace.normed, width)?, logits)
+            .project(
+            shape, prefix(workspace.normed, width)?, workspace.quant_scratch, logits)
     }
 
     const fn projection_shape(

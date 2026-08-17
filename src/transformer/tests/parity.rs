@@ -58,7 +58,7 @@ fn run_batches(fixture: &Fixture, batches: &[&[u32]]) -> Vec<f32> {
     let model = Model::new(config, weights).unwrap();
 
     let mut workspace_storage = vec![0.0_f32; workspace_floats(&config, MAXIMUM_BATCH).unwrap()];
-    let mut workspace = Workspace::new(&mut workspace_storage, &config, MAXIMUM_BATCH).unwrap();
+    let mut workspace = Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
     let mut cache_storage = vec![0.0_f32; session_cache_floats(&config, 1).unwrap()];
     let mut arena = KeyValueArena::new(
         &mut cache_storage,
@@ -245,7 +245,7 @@ fn interleaved_sessions_are_indistinguishable_from_isolated_ones() {
     let model = Model::new(config, weights).unwrap();
 
     let mut workspace_storage = vec![0.0_f32; workspace_floats(&config, MAXIMUM_BATCH).unwrap()];
-    let mut workspace = Workspace::new(&mut workspace_storage, &config, MAXIMUM_BATCH).unwrap();
+    let mut workspace = Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
     let mut cache_storage = vec![0.0_f32; session_cache_floats(&config, 2).unwrap()];
     let mut arena = KeyValueArena::new(
         &mut cache_storage,
@@ -302,7 +302,7 @@ fn a_reset_session_decodes_as_a_fresh_one() {
     let weights = fixture.weights(&layers);
     let model = Model::new(config, weights).unwrap();
     let mut workspace_storage = vec![0.0_f32; workspace_floats(&config, MAXIMUM_BATCH).unwrap()];
-    let mut workspace = Workspace::new(&mut workspace_storage, &config, MAXIMUM_BATCH).unwrap();
+    let mut workspace = Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
     let mut cache_storage = vec![0.0_f32; session_cache_floats(&config, 1).unwrap()];
     let mut arena = KeyValueArena::new(
         &mut cache_storage,

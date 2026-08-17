@@ -321,3 +321,199 @@ pub fn matmul_q8_0(
     }
     Ok(())
 }
+
+/// Dot product of two `Q8_0` blocks, in `i32`.
+///
+/// # Why this is the fast path
+///
+/// [`block_dot`] converts each `i8` weight to `f32` before multiplying, which
+/// costs a widen, a widen and a convert **per element** and is what
+/// `benches/matmul.rs` measured as the remaining constraint after the
+/// accumulator was split into lanes. When *both* sides are `i8` no conversion is
+/// needed at all: aarch64's `SDOT` performs sixteen `i8` multiply-accumulates
+/// into four `i32` lanes in one instruction.
+///
+/// Written in exactly the lane shape `SDOT` wants, and **verified to produce it**
+/// -- compiling this to aarch64 emits `ldp q0, q1 / ldp q2, q3 / sdot / sdot /
+/// addv`, six instructions for a thirty-two element block against roughly a
+/// hundred and ninety for the `f32` form. No intrinsics, no `unsafe`, and no
+/// target feature flag: `dotprod` is already in the default CPU for the targets
+/// this project builds.
+///
+/// Accumulating in `i32` is exact. Thirty-two products of two `i8` values reach
+/// at most `32 x 127 x 127 = 516,128`, so nothing rounds and nothing overflows.
+fn block_dot_i8(quant_block: &[u8], x_block: &[u8]) -> i32 {
+    let mut lanes = [0i32; DOT_LANES];
+    for (quant_lane, x_lane) in quant_block
+        .chunks_exact(DOT_LANES)
+        .zip(x_block.chunks_exact(DOT_LANES))
+    {
+        for lane in 0..DOT_LANES {
+            let weight = quant_lane.get(lane).copied().unwrap_or(0) as i8;
+            let activation = x_lane.get(lane).copied().unwrap_or(0) as i8;
+            let slot = match lanes.get_mut(lane) {
+                Some(slot) => slot,
+                None => continue,
+            };
+            *slot = slot.saturating_add(i32::from(weight).saturating_mul(i32::from(activation)));
+        }
+    }
+    (lanes[0].saturating_add(lanes[1])).saturating_add(lanes[2].saturating_add(lanes[3]))
+}
+
+/// Quantizes `f32` activations into the `Q8_0` layout, in place in `scratch`.
+///
+/// The output is byte-for-byte a `Q8_0` payload of shape `[n_tokens, n_in]`, so
+/// [`Q8Weights`] views it without a second format. Sizing comes from
+/// [`Q8Weights::derived_payload_len`], and the caller owns the buffer because
+/// this crate allocates nothing.
+///
+/// # The scale
+///
+/// Per 32-element block, `absmax / 127`, matching how the weights themselves
+/// were quantized. A block whose values are all zero, or whose scale would be
+/// subnormal, emits a zero scale and zero quants -- the same rule BXW1 §4.2
+/// applies to weights, and for the same reason: a subnormal scale multiplies
+/// into noise.
+///
+/// # Errors
+///
+/// [`TensorError::ShapeMismatch`] if `x` or `scratch` disagrees with the shape.
+pub fn quantize_activations(
+    n_tokens: usize,
+    n_in: usize,
+    x: &[f32],
+    scratch: &mut [u8],
+) -> Result<(), TensorError> {
+    let required_x = n_tokens
+        .checked_mul(n_in)
+        .ok_or(TensorError::DimensionOverflow)?;
+    if x.len() != required_x {
+        return Err(TensorError::ShapeMismatch);
+    }
+    let required_scratch = Q8Weights::derived_payload_len(n_tokens, n_in)?;
+    if scratch.len() != required_scratch {
+        return Err(TensorError::ShapeMismatch);
+    }
+
+    let blocks_total = n_tokens
+        .checked_mul(n_in / Q8_0_BLOCK)
+        .ok_or(TensorError::DimensionOverflow)?;
+    let scale_bytes = blocks_total
+        .checked_mul(SCALE_BYTES)
+        .ok_or(TensorError::DimensionOverflow)?;
+    // The quant plane begins where the padded scale plane ends; the payload
+    // length derivation above already accounts for that padding.
+    let quant_start = required_scratch
+        .checked_sub(
+            blocks_total
+                .checked_mul(Q8_0_BLOCK)
+                .ok_or(TensorError::DimensionOverflow)?,
+        )
+        .ok_or(TensorError::ShapeMismatch)?;
+    let (scale_plane, quant_plane) = scratch.split_at_mut(quant_start);
+
+    for (index, block) in x.chunks_exact(Q8_0_BLOCK).enumerate() {
+        let mut peak = 0.0_f32;
+        for value in block {
+            let magnitude = if *value < 0.0 { -*value } else { *value };
+            if magnitude > peak {
+                peak = magnitude;
+            }
+        }
+        let scale = peak / 127.0;
+        let usable = peak > 0.0 && scale >= f32::MIN_POSITIVE;
+        let scale_at = index
+            .checked_mul(SCALE_BYTES)
+            .ok_or(TensorError::DimensionOverflow)?;
+        let quant_at = index
+            .checked_mul(Q8_0_BLOCK)
+            .ok_or(TensorError::DimensionOverflow)?;
+
+        let emitted = if usable { scale } else { 0.0 };
+        let Some(scale_slot) = scale_plane.get_mut(scale_at..scale_at + SCALE_BYTES) else {
+            return Err(TensorError::ShapeMismatch);
+        };
+        scale_slot.copy_from_slice(&emitted.to_le_bytes());
+
+        let Some(quant_slot) = quant_plane.get_mut(quant_at..quant_at + Q8_0_BLOCK) else {
+            return Err(TensorError::ShapeMismatch);
+        };
+        for (slot, value) in quant_slot.iter_mut().zip(block.iter()) {
+            *slot = if usable {
+                // Round to nearest; the reciprocal is not used because
+                // `peak / 127` then `value / scale` keeps the endpoints exact.
+                let scaled = *value / scale;
+                let rounded = if scaled >= 0.0 {
+                    scaled + 0.5
+                } else {
+                    scaled - 0.5
+                } as i32;
+                rounded.clamp(-127, 127) as i8 as u8
+            } else {
+                0
+            };
+        }
+    }
+    let _ = scale_bytes;
+    Ok(())
+}
+
+/// `y = W xᵀ` with `Q8_0` weights **and** `Q8_0` activations.
+///
+/// The activation payload comes from [`quantize_activations`]. Both operands
+/// being `i8` is what lets the inner loop reach `SDOT`; see [`block_dot_i8`].
+///
+/// # Errors
+///
+/// As [`matmul_q8_0`], plus [`TensorError::ShapeMismatch`] if the activation
+/// view disagrees with `shape`.
+pub fn matmul_q8_0_q8a(
+    shape: MatMulShape,
+    weights: &Q8Weights<'_>,
+    activations: &Q8Weights<'_>,
+    y: &mut [f32],
+) -> Result<(), TensorError> {
+    if shape.n_tokens == 0 || shape.n_in == 0 || shape.n_out == 0 {
+        return Err(TensorError::ZeroDimension);
+    }
+    let required_y = shape
+        .n_tokens
+        .checked_mul(shape.n_out)
+        .ok_or(TensorError::DimensionOverflow)?;
+    if y.len() != required_y {
+        return Err(TensorError::ShapeMismatch);
+    }
+    if shape.n_in != weights.n_in() || shape.n_out != weights.n_out() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    if shape.n_in != activations.n_in() || shape.n_tokens != activations.n_out() {
+        return Err(TensorError::ShapeMismatch);
+    }
+
+    for (out_index, (weight_scales, weight_quants)) in weights.rows().enumerate() {
+        for (token_index, (x_scales, x_quants)) in activations.rows().enumerate() {
+            let mut acc = 0.0_f32;
+            for (((weight_scale, weight_block), x_scale), x_block) in weight_scales
+                .chunks_exact(SCALE_BYTES)
+                .zip(weight_quants.chunks_exact(Q8_0_BLOCK))
+                .zip(x_scales.chunks_exact(SCALE_BYTES))
+                .zip(x_quants.chunks_exact(Q8_0_BLOCK))
+            {
+                let ws = read_f32_le(weight_scale).ok_or(TensorError::MalformedPayload)?;
+                let xs = read_f32_le(x_scale).ok_or(TensorError::MalformedPayload)?;
+                // One f32 multiply per 32 elements instead of per element: the
+                // integer sum is exact, so both scales apply once at the end.
+                acc += ws * xs * block_dot_i8(weight_block, x_block) as f32;
+            }
+            let row_start = token_index
+                .checked_mul(shape.n_out)
+                .ok_or(TensorError::DimensionOverflow)?;
+            let slot = y
+                .get_mut(row_start + out_index)
+                .ok_or(TensorError::ShapeMismatch)?;
+            *slot = acc;
+        }
+    }
+    Ok(())
+}

@@ -296,45 +296,60 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
             .key_value_head_count
             .saturating_mul(config.head_width),
     };
-    let mut workspace = brainix_transformer::Workspace::new(&mut workspace_storage, &config, 1)
-        .map_err(|error| format!("workspace: {error:?}"))?;
-    // `SessionCache::new` is private: sessions are issued by the arena, which
-    // is what makes one session's partition unreachable from another. The
-    // harness takes the same path a server would.
-    let mut arena = brainix_transformer::KeyValueArena::new(&mut cache_storage, geometry)
-        .map_err(|error| format!("arena: {error:?}"))?;
-    let mut cache = arena
-        .issue_session()
-        .map_err(|error| format!("session: {error:?}"))?;
+    // Two runs: the f32-activation kernel (empty scratch) and the SDOT path
+    // (scratch supplied). Same weights, same tokens, same everything else, so
+    // the gap between the two perplexities is the cost of quantizing
+    // activations and nothing else.
+    let scratch_len = brainix_transformer::quantized_activation_bytes(&config, 1)
+        .map_err(|error| format!("scratch: {error:?}"))?;
+    let mut quant_scratch = vec![0u8; scratch_len];
+    println!("activation scratch {scratch_len} bytes");
+
     let mut logits = vec![0.0f32; config.vocabulary_size];
+    let mut results = Vec::new();
+    for (label, use_sdot) in [("f32 activations", false), ("Q8_0 activations (SDOT)", true)] {
+        let scratch: &mut [u8] = if use_sdot { &mut quant_scratch } else { &mut [] };
+        let mut workspace =
+            brainix_transformer::Workspace::new(&mut workspace_storage, scratch, &config, 1)
+                .map_err(|error| format!("workspace: {error:?}"))?;
+        let mut arena = brainix_transformer::KeyValueArena::new(&mut cache_storage, geometry)
+            .map_err(|error| format!("arena: {error:?}"))?;
+        let mut cache = arena
+            .issue_session()
+            .map_err(|error| format!("session: {error:?}"))?;
 
-    println!();
-    println!("evaluating {} tokens, one at a time...", count);
-    let start = std::time::Instant::now();
-    let mut total_nats = 0.0f64;
-    let mut predictions = 0usize;
-    for position in 0..count.saturating_sub(1) {
-        let token = *tokens.get(position).ok_or("token index")?;
-        let target = *tokens.get(position + 1).ok_or("target index")?;
-        model
-            .forward(&mut workspace, &mut cache, &[token], &mut logits)
-            .map_err(|error| format!("forward at {position}: {error:?}"))?;
-        let nats = cross_entropy(&logits, target)
-            .ok_or_else(|| format!("non-finite logits at position {position}"))?;
-        total_nats += f64::from(nats);
-        predictions = predictions.saturating_add(1);
+        println!();
+        println!("evaluating {count} tokens -- {label}");
+        let start = std::time::Instant::now();
+        let mut total_nats = 0.0f64;
+        let mut predictions = 0usize;
+        for position in 0..count.saturating_sub(1) {
+            let token = *tokens.get(position).ok_or("token index")?;
+            let target = *tokens.get(position + 1).ok_or("target index")?;
+            model
+                .forward(&mut workspace, &mut cache, &[token], &mut logits)
+                .map_err(|error| format!("forward at {position}: {error:?}"))?;
+            let nats = cross_entropy(&logits, target)
+                .ok_or_else(|| format!("non-finite logits at position {position}"))?;
+            total_nats += f64::from(nats);
+            predictions = predictions.saturating_add(1);
+        }
+        let elapsed = start.elapsed().as_secs_f64();
+        let mean = total_nats / predictions as f64;
+        println!("  mean CE     {mean:.4} nats");
+        println!("  PERPLEXITY  {:.3}", mean.exp());
+        println!("  throughput  {:.2} tok/s  ({elapsed:.1}s)", predictions as f64 / elapsed);
+        results.push((label, mean.exp(), predictions as f64 / elapsed));
     }
-    let elapsed = start.elapsed().as_secs_f64();
 
-    let mean = total_nats / predictions as f64;
-    println!();
-    println!("  predictions      {predictions}");
-    println!("  mean CE          {mean:.4} nats");
-    println!("  PERPLEXITY       {:.3}", mean.exp());
-    println!(
-        "  throughput       {:.2} tok/s  ({elapsed:.1}s total)",
-        predictions as f64 / elapsed
-    );
+    if let (Some(base), Some(fast)) = (results.first(), results.get(1)) {
+        println!();
+        println!("  QUALITY  {:.3} -> {:.3}  ({:+.2}% perplexity)",
+                 base.1, fast.1, (fast.1 / base.1 - 1.0) * 100.0);
+        println!("  SPEED    {:.2} -> {:.2} tok/s  ({:.2}x)",
+                 base.2, fast.2, fast.2 / base.2);
+    }
+
     Ok(())
 }
 fn main() -> ExitCode {

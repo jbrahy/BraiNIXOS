@@ -143,4 +143,4 @@ pub use crate::sampling::{
     sample, sampler_scratch_floats, Sampler, SamplingRequest, MAXIMUM_TOP_K,
 };
 pub use crate::weights::{LayerWeights, LogitProjection, ModelWeights, WeightMatrix};
-pub use crate::workspace::{workspace_floats, Workspace};
+pub use crate::workspace::{quantized_activation_bytes, workspace_floats, Workspace};

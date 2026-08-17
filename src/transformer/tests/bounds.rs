@@ -189,7 +189,7 @@ fn forward_once(
     let weights = fixture.weights(&layers);
     let model = Model::new(config, weights).unwrap();
     let mut workspace =
-        Workspace::new(&mut harness.workspace_storage, &config, MAXIMUM_BATCH).unwrap();
+        Workspace::new(&mut harness.workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
     let mut arena = KeyValueArena::new(
         &mut harness.cache_storage,
         CacheGeometry::for_config(&config).unwrap(),
@@ -256,7 +256,7 @@ fn running_past_the_context_is_refused_and_leaves_the_session_intact() {
     let model = Model::new(config, weights).unwrap();
 
     let mut workspace_storage = vec![0.0_f32; workspace_floats(&config, MAXIMUM_BATCH).unwrap()];
-    let mut workspace = Workspace::new(&mut workspace_storage, &config, MAXIMUM_BATCH).unwrap();
+    let mut workspace = Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
     let mut cache_storage = vec![0.0_f32; session_cache_floats(&config, 1).unwrap()];
     let mut arena = KeyValueArena::new(
         &mut cache_storage,
@@ -294,7 +294,7 @@ fn a_cache_cut_for_another_geometry_is_refused() {
     let model = Model::new(config, weights).unwrap();
 
     let mut workspace_storage = vec![0.0_f32; workspace_floats(&config, MAXIMUM_BATCH).unwrap()];
-    let mut workspace = Workspace::new(&mut workspace_storage, &config, MAXIMUM_BATCH).unwrap();
+    let mut workspace = Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
     let mut cache_storage = vec![0.0_f32; session_cache_floats(&other, 1).unwrap()];
     let mut arena = KeyValueArena::new(
         &mut cache_storage,
@@ -364,7 +364,7 @@ fn a_short_workspace_is_refused() {
     let required = workspace_floats(&config, MAXIMUM_BATCH).unwrap();
     let mut storage = vec![0.0_f32; required - 1];
     assert_eq!(
-        Workspace::new(&mut storage, &config, MAXIMUM_BATCH).unwrap_err(),
+        Workspace::new(&mut storage, &mut [], &config, MAXIMUM_BATCH).unwrap_err(),
         TransformerError::WorkspaceTooSmall
     );
 }
@@ -374,7 +374,7 @@ fn a_workspace_exactly_the_required_size_is_accepted() {
     let config = fixture_config(RopePairing::Interleaved);
     let required = workspace_floats(&config, MAXIMUM_BATCH).unwrap();
     let mut storage = vec![0.0_f32; required];
-    assert!(Workspace::new(&mut storage, &config, MAXIMUM_BATCH).is_ok());
+    assert!(Workspace::new(&mut storage, &mut [], &config, MAXIMUM_BATCH).is_ok());
 }
 
 #[test]
@@ -382,7 +382,7 @@ fn a_zero_batch_ceiling_is_refused() {
     let config = fixture_config(RopePairing::Interleaved);
     let mut storage = vec![0.0_f32; 4096];
     assert_eq!(
-        Workspace::new(&mut storage, &config, 0).unwrap_err(),
+        Workspace::new(&mut storage, &mut [], &config, 0).unwrap_err(),
         TransformerError::ZeroDimension
     );
 }
@@ -406,7 +406,7 @@ fn a_workspace_built_for_another_model_is_refused() {
     let model = Model::new(config, weights).unwrap();
 
     let mut workspace_storage = vec![0.0_f32; workspace_floats(&other, MAXIMUM_BATCH).unwrap()];
-    let mut workspace = Workspace::new(&mut workspace_storage, &other, MAXIMUM_BATCH).unwrap();
+    let mut workspace = Workspace::new(&mut workspace_storage, &mut [], &other, MAXIMUM_BATCH).unwrap();
     let mut cache_storage = vec![0.0_f32; session_cache_floats(&config, 1).unwrap()];
     let mut arena = KeyValueArena::new(
         &mut cache_storage,

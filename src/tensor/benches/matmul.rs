@@ -46,7 +46,9 @@
 //! so the instruction-throughput conclusion transfers; the bandwidth conclusion
 //! does not, and must be re-measured on the target.
 
-use brainix_tensor::{matmul_q8_0, MatMulShape, Q8Weights, Q8_0_BLOCK};
+use brainix_tensor::{
+    matmul_q8_0, matmul_q8_0_q8a, quantize_activations, MatMulShape, Q8Weights, Q8_0_BLOCK,
+};
 use std::time::Instant;
 
 /// Bytes a `Q8_0` weight element costs: one quant byte plus 4/32 of a scale.
@@ -130,6 +132,48 @@ fn measure(label: &str, n_tokens: usize, n_in: usize, n_out: usize) {
     );
 }
 
+/// Times `matmul_q8_0_q8a`, activation quantization included.
+///
+/// The quantization is inside the timed region on purpose: it is work the
+/// f32-activation path does not do, and excluding it would flatter the
+/// comparison. It is amortized -- `n_in` elements quantized once against
+/// `n_out x n_in` multiply-accumulates -- so it should barely register, and if
+/// it does register that is a finding rather than a nuisance.
+fn measure_sdot(label: &str, n_tokens: usize, n_in: usize, n_out: usize) {
+    let payload = synthetic_payload(n_out, n_in);
+    let weights = Q8Weights::new(&payload, n_out, n_in).expect("payload is well formed");
+    let shape = MatMulShape { n_tokens, n_in, n_out };
+    let x = vec![0.5_f32; n_tokens * n_in];
+    let mut y = vec![0.0_f32; n_tokens * n_out];
+    let mut scratch =
+        vec![0u8; Q8Weights::derived_payload_len(n_tokens, n_in).expect("activation len")];
+
+    let weight_bytes = n_out as f64 * n_in as f64 * BYTES_PER_WEIGHT_ELEMENT;
+
+    quantize_activations(n_tokens, n_in, &x, &mut scratch).expect("quantize");
+    {
+        let view = Q8Weights::new(&scratch, n_tokens, n_in).expect("view");
+        matmul_q8_0_q8a(shape, &weights, &view, &mut y).expect("warm up");
+    }
+
+    let iterations = (2_000_000_000.0 / weight_bytes).max(3.0) as usize;
+    let start = Instant::now();
+    for _ in 0..iterations {
+        quantize_activations(n_tokens, n_in, &x, &mut scratch).expect("quantize");
+        let view = Q8Weights::new(&scratch, n_tokens, n_in).expect("view");
+        matmul_q8_0_q8a(shape, &weights, &view, &mut y).expect("matmul");
+    }
+    let elapsed = start.elapsed();
+    std::hint::black_box(&y);
+
+    let seconds = elapsed.as_secs_f64();
+    let gb_per_second = weight_bytes * iterations as f64 / seconds / 1e9;
+    println!(
+        "  {label:<28} {gb_per_second:7.2} GB/s   {:5.1}% of bus   ({iterations} iters, {seconds:.2} s)",
+        gb_per_second / REFERENCE_BANDWIDTH_GB_S * 100.0
+    );
+}
+
 fn main() {
     println!();
     println!("  matmul_q8_0 — weight-byte throughput, single core");
@@ -157,6 +201,13 @@ fn main() {
     measure("4096x4096, 8 tokens", 8, 4096, 4096);
     measure("4096x11008 (ffn), 1 token", 1, 4096, 11008);
     measure("2048x2048, 1 token", 1, 2048, 2048);
+
+    println!();
+    println!("  Q8_0 activations (SDOT path) — same weights, both operands i8");
+    println!();
+    measure_sdot("4096x4096, 1 token", 1, 4096, 4096);
+    measure_sdot("4096x11008 (ffn), 1 token", 1, 4096, 11008);
+    measure_sdot("2048x2048, 1 token", 1, 2048, 2048);
 
     println!();
     println!("  Interpretation:");

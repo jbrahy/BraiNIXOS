@@ -40,7 +40,9 @@
 //! Every *projection*, including a tied logit projection through the embedding
 //! table, already takes either dtype: a projection is a matmul, not a lookup.
 
-use brainix_tensor::{matmul_f32, matmul_q8_0, MatMulShape, Q8Weights};
+use brainix_tensor::{
+    matmul_f32, matmul_q8_0, matmul_q8_0_q8a, quantize_activations, MatMulShape, Q8Weights,
+};
 
 use crate::config::{checked_product, ModelConfig};
 use crate::error::TransformerError;
@@ -101,11 +103,31 @@ impl WeightMatrix<'_> {
         &self,
         shape: MatMulShape,
         activations: &[f32],
+        quant_scratch: &mut [u8],
         destination: &mut [f32],
     ) -> Result<(), TransformerError> {
         match self {
             Self::Float32(values) => matmul_f32(shape, values, activations, destination)?,
-            Self::Quantized8(weights) => matmul_q8_0(shape, weights, activations, destination)?,
+            Self::Quantized8(weights) => {
+                // Quantize the activations and take the `SDOT` path when the
+                // caller supplied room for it; fall back to the `f32`-activation
+                // kernel otherwise.
+                //
+                // The fallback is not a nicety. The two kernels do not compute
+                // the same thing -- quantizing activations is lossy -- so a
+                // caller that has not opted in by supplying the buffer keeps the
+                // higher-precision result, and the choice is visible at the call
+                // site rather than buried here.
+                let needed = Q8Weights::derived_payload_len(shape.n_tokens, shape.n_in)?;
+                match quant_scratch.get_mut(..needed) {
+                    Some(scratch) => {
+                        quantize_activations(shape.n_tokens, shape.n_in, activations, scratch)?;
+                        let view = Q8Weights::new(scratch, shape.n_tokens, shape.n_in)?;
+                        matmul_q8_0_q8a(shape, weights, &view, destination)?;
+                    }
+                    None => matmul_q8_0(shape, weights, activations, destination)?,
+                }
+            }
         }
         Ok(())
     }

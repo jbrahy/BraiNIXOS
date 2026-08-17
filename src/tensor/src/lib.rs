@@ -150,7 +150,9 @@ mod softmax;
 pub use crate::activation::{silu, swiglu};
 pub use crate::error::TensorError;
 pub use crate::math::rsqrt;
-pub use crate::matmul::{matmul_f32, matmul_q8_0, MatMulShape};
+pub use crate::matmul::{
+    matmul_f32, matmul_q8_0, matmul_q8_0_q8a, quantize_activations, MatMulShape,
+};
 pub use crate::norm::{is_positive_normal, rmsnorm};
 pub use crate::q8::{Q8Weights, BXW1_ALIGN, Q8_0_BLOCK};
 pub use crate::rope::{rope, RopePairing, RopeParams, MAX_ROPE_POSITION};

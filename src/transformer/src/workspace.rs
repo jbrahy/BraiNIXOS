@@ -47,6 +47,37 @@ const fn floats_per_token(config: &ModelConfig) -> Result<usize, TransformerErro
 const fn floats_per_call(config: &ModelConfig) -> Result<usize, TransformerError> {
     checked_product(config.maximum_sequence_length, 2)
 }
+/// Bytes of `Q8_0` activation scratch the `SDOT` path needs.
+///
+/// The widest reduction any projection performs is `max(d_model, d_ffn)`, so
+/// one buffer of that width serves every call site. Supplying fewer bytes than
+/// this is not an error -- it selects the `f32`-activation kernel -- which is
+/// what makes enabling the faster, lossier path an explicit act.
+pub const fn quantized_activation_bytes(
+    config: &ModelConfig,
+    maximum_batch_tokens: usize,
+) -> Result<usize, TransformerError> {
+    let widest = if config.feed_forward_width > config.model_width {
+        config.feed_forward_width
+    } else {
+        config.model_width
+    };
+    // Mirrors BXW1 §4.3: a 128-aligned scale plane followed by the quant plane.
+    let blocks = match widest.checked_div(32) {
+        Some(value) => value,
+        None => return Err(TransformerError::ZeroDimension),
+    };
+    let scales = match blocks.checked_mul(4) {
+        Some(value) => value,
+        None => return Err(TransformerError::DimensionOverflow),
+    };
+    let padded = scales.next_multiple_of(128);
+    match padded.checked_add(widest) {
+        Some(per_token) => scale(Ok(per_token), maximum_batch_tokens),
+        None => Err(TransformerError::DimensionOverflow),
+    }
+}
+
 
 /// Floats a caller must reserve for a workspace admitting up to
 /// `maximum_batch_tokens` tokens per call.
@@ -91,6 +122,14 @@ pub const fn workspace_floats(
 /// `&mut self` accessors could express.
 #[derive(Debug)]
 pub struct Workspace<'a> {
+    /// Scratch for `Q8_0`-quantized activations, in bytes.
+    ///
+    /// Separate storage from the `f32` cut below, because it is bytes and this
+    /// crate will not reinterpret one as the other. Sized by
+    /// [`quantized_activation_bytes`]; **empty is legal and selects the
+    /// `f32`-activation kernel**, so a caller that has not opted into lossy
+    /// activations keeps the higher-precision result.
+    pub(crate) quant_scratch: &'a mut [u8],
     /// The residual stream, `[batch, d_model]`.
     pub(crate) hidden: &'a mut [f32],
     /// RMSNorm output, `[batch, d_model]`. Reused by both norms of a layer and
@@ -145,6 +184,7 @@ impl<'a> Workspace<'a> {
     /// or [`TransformerError::DimensionOverflow`].
     pub fn new(
         storage: &'a mut [f32],
+        quant_scratch: &'a mut [u8],
         config: &ModelConfig,
         maximum_batch_tokens: usize,
     ) -> Result<Self, TransformerError> {
@@ -160,7 +200,9 @@ impl<'a> Workspace<'a> {
             feed_forward: checked_product(config.feed_forward_width, maximum_batch_tokens)?,
             context: config.maximum_sequence_length,
         };
-        cut.apply(&mut remaining, *config, maximum_batch_tokens)
+        let mut workspace = cut.apply(&mut remaining, *config, maximum_batch_tokens)?;
+        workspace.quant_scratch = quant_scratch;
+        Ok(workspace)
     }
 }
 
@@ -182,6 +224,7 @@ impl Cut {
         maximum_batch_tokens: usize,
     ) -> Result<Workspace<'a>, TransformerError> {
         Ok(Workspace {
+            quant_scratch: &mut [],
             hidden: take(remaining, self.residual)?,
             normed: take(remaining, self.residual)?,
             query: take(remaining, self.query)?,
