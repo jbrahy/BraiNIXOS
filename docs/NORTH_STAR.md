@@ -510,8 +510,8 @@ measured win recorded. `AT RISK` — a design is pending that would trade it.
 | Synchronous rendezvous IPC (INV-IPC) | DEFAULT | Removes datapath copies; bounded by how many exist | Shared mutable memory between components; TOCTOU on anything read twice. |
 | Fixed pools, no kernel heap (INV-MEM) | DEFAULT | Likely negative — an allocator on the hot path is usually slower | Exhaustion becomes a live DoS surface; allocation failure paths become reachable. |
 | Capability checks on the inference hot path (INV-AUTH, INV-MODEL) | DEFAULT | Probably a rounding error; measure first | The engine reaches whatever it can name; model-weight compromise stops being contained. |
-| Cluster-level domain isolation in the scheduler | AT RISK | Better core utilisation | Two domains share an L2. Cross-domain cache side channel — the thing SCHED-03 exists to prevent, re-aimed at clusters. **Design pending 2026-08-17.** |
-| The auditor (INV-AUDIT) | DEFAULT | Frees a core and its cache footprint | Loss of visibility only; it holds no privilege by construction, so removing it costs detection, not containment. **Cheapest honest cut available if a core is needed.** |
+| Cluster-level domain isolation in the scheduler | AT RISK | Better core utilisation. **Measured 2026-08-17: inference wants ~6 cores and saturates there; eight threads are *slower* than six.** On a 6-P-core part there are no spare cores, so isolation that costs a core is not free | Two domains share an L2. Cross-domain cache side channel — the thing SCHED-03 exists to prevent, re-aimed at clusters. **Design pending 2026-08-17.** |
+| The auditor (INV-AUDIT) | DEFAULT | Frees a core and its cache footprint. **Measured: a marginal core is worth ~26 GB/s of streaming bandwidth, and inference has none spare** | Loss of visibility only; it holds no privilege by construction, so removing it costs detection, not containment. **Cheapest honest cut available, and now known to buy something real.** |
 
 **Two things this table is for.** First, so that "we chose speed" is a sentence with a subject and an
 object rather than a mood. Second, so that if the ranking is ever inverted back, the work to undo is a
