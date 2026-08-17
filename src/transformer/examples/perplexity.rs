@@ -36,15 +36,18 @@ use brainix_transformer::{
 };
 use brainix_transformer::{Dispatch, Serial};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Barrier, Mutex};
 use std::thread;
 
-/// A `Dispatch` backed by scoped OS threads.
+/// A `Dispatch` that spawns threads per call.
 ///
-/// The kernel will supply its own; this exists so the speedup can be measured
-/// on the workstation before the scheduler is built to chase it.
-struct Threads(usize);
+/// Kept as the control. It measured **0.99x** end to end: four spawns cost about
+/// 37 us and five of a layer's seven projections take less than that, so the
+/// creation cost consumes the entire gain.
+struct SpawnPerCall(usize);
 
-impl Dispatch for Threads {
+impl Dispatch for SpawnPerCall {
     fn chunks(&self) -> usize {
         self.0
     }
@@ -59,6 +62,100 @@ impl Dispatch for Threads {
                 scope.spawn(move || body(index, chunk));
             }
         });
+    }
+}
+
+/// One unit of work, with its types erased so parked threads can hold it.
+///
+/// The closure is reached through a monomorphic trampoline rather than a fat
+/// pointer, which keeps the erasure to a single `*const ()` and puts the only
+/// transmute-shaped step in one generic function.
+#[derive(Clone, Copy)]
+struct Job {
+    closure: *const (),
+    trampoline: fn(*const (), usize, &mut [f32]),
+    base: *mut f32,
+    total: usize,
+    chunk_len: usize,
+}
+
+// SAFETY: a `Job` is only ever read by a worker between the two barriers of one
+// `for_each_chunk` call, and that call cannot return until every worker has
+// passed the second barrier. The pointers therefore never outlive what they
+// point at, and the chunks each worker derives are disjoint by construction.
+unsafe impl Send for Job {}
+unsafe impl Sync for Job {}
+
+/// Workers spawned once and parked on a barrier.
+///
+/// This is the shape a kernel must use. Threads cannot be created per
+/// projection -- a decode performs 168 of them per token against a ~12 ms
+/// budget, and creation alone would cost half of it -- so a real implementation
+/// parks cores and wakes them with an IPI. This is that structure, with an OS
+/// barrier standing in for the doorbell.
+struct Pool<'scope> {
+    workers: usize,
+    start: &'scope Barrier,
+    finish: &'scope Barrier,
+    job: &'scope Mutex<Option<Job>>,
+}
+
+impl Dispatch for Pool<'_> {
+    fn chunks(&self) -> usize {
+        self.workers
+    }
+
+    fn for_each_chunk<F>(&self, out: &mut [f32], chunk_len: usize, body: F)
+    where
+        F: Fn(usize, &mut [f32]) + Sync,
+    {
+        fn call<F: Fn(usize, &mut [f32])>(closure: *const (), index: usize, chunk: &mut [f32]) {
+            // SAFETY: `closure` was produced from a `&F` in the same call and
+            // the barriers keep that borrow alive for the whole of this use.
+            let body = unsafe { &*(closure as *const F) };
+            body(index, chunk);
+        }
+        let total = out.len();
+        let posted = Job {
+            closure: core::ptr::from_ref(&body) as *const (),
+            trampoline: call::<F>,
+            base: out.as_mut_ptr(),
+            total,
+            chunk_len: chunk_len.max(1),
+        };
+        match self.job.lock() {
+            Ok(mut slot) => *slot = Some(posted),
+            Err(_) => return,
+        }
+        self.start.wait();
+        self.finish.wait();
+    }
+}
+
+/// The body every parked worker runs.
+fn worker_loop(index: usize, start: &Barrier, finish: &Barrier, job: &Mutex<Option<Job>>,
+               shutting_down: &AtomicBool) {
+    loop {
+        start.wait();
+        if shutting_down.load(Ordering::Acquire) {
+            return;
+        }
+        let posted = job.lock().ok().and_then(|slot| *slot);
+        if let Some(posted) = posted {
+            let begin = index.saturating_mul(posted.chunk_len);
+            if begin < posted.total {
+                let len = posted.chunk_len.min(posted.total.saturating_sub(begin));
+                // SAFETY: `begin` is a multiple of `chunk_len` and `len` is
+                // clamped to the remainder, so this worker's range is disjoint
+                // from every other worker's, and the barriers bound its validity
+                // to the posting call. This is the same argument
+                // `slice::chunks_mut` makes, reconstructed across threads
+                // because the borrow cannot cross the park.
+                let chunk = unsafe { core::slice::from_raw_parts_mut(posted.base.add(begin), len) };
+                (posted.trampoline)(posted.closure, index, chunk);
+            }
+        }
+        finish.wait();
     }
 }
 
@@ -159,6 +256,51 @@ fn cross_entropy(logits: &[f32], target: u32) -> Option<f32> {
     let sum: f32 = logits.iter().map(|value| (value - peak).exp()).sum();
     let target_logit = *logits.get(target as usize)?;
     Some((peak + sum.ln()) - target_logit)
+}
+
+/// Runs the whole passage under one dispatcher and reports perplexity and rate.
+#[allow(clippy::too_many_arguments)]
+fn evaluate<D: Dispatch>(
+    label: &str,
+    model: &Model<'_>,
+    config: &ModelConfig,
+    workspace_storage: &mut [f32],
+    quant_scratch: &mut [u8],
+    cache_storage: &mut [f32],
+    geometry: brainix_transformer::CacheGeometry,
+    tokens: &[u32],
+    count: usize,
+    logits: &mut [f32],
+    dispatch: &D,
+    workers: usize,
+) -> Result<(f64, f64), String> {
+    let mut workspace =
+        brainix_transformer::Workspace::new(workspace_storage, quant_scratch, config, 1)
+            .map_err(|error| format!("workspace: {error:?}"))?;
+    let mut arena = brainix_transformer::KeyValueArena::new(cache_storage, geometry)
+        .map_err(|error| format!("arena: {error:?}"))?;
+    let mut cache = arena.issue_session().map_err(|e| format!("session: {e:?}"))?;
+    println!();
+    println!("evaluating {count} tokens -- {label} ({workers} workers)");
+    let start = std::time::Instant::now();
+    let mut total_nats = 0.0f64;
+    let mut predictions = 0usize;
+    for position in 0..count.saturating_sub(1) {
+        let token = *tokens.get(position).ok_or("token index")?;
+        let target = *tokens.get(position + 1).ok_or("target index")?;
+        model
+            .forward(dispatch, &mut workspace, &mut cache, &[token], logits)
+            .map_err(|error| format!("forward at {position}: {error:?}"))?;
+        let nats = cross_entropy(logits, target)
+            .ok_or_else(|| format!("non-finite logits at {position}"))?;
+        total_nats += f64::from(nats);
+        predictions = predictions.saturating_add(1);
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    let mean = total_nats / predictions as f64;
+    println!("  PERPLEXITY  {:.3}", mean.exp());
+    println!("  throughput  {:.2} tok/s  ({elapsed:.1}s)", predictions as f64 / elapsed);
+    Ok((mean.exp(), predictions as f64 / elapsed))
 }
 
 fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
@@ -372,37 +514,40 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
         results.push((label, mean.exp(), predictions as f64 / elapsed));
     }
 
+    // Spawn-per-call as the control, then the persistent pool.
     {
-        let label = "Q8_0 + threads";
-        let mut workspace = brainix_transformer::Workspace::new(
-            &mut workspace_storage, &mut quant_scratch, &config, 1)
-            .map_err(|error| format!("workspace: {error:?}"))?;
-        let mut arena = brainix_transformer::KeyValueArena::new(&mut cache_storage, geometry)
-            .map_err(|error| format!("arena: {error:?}"))?;
-        let mut cache = arena.issue_session().map_err(|e| format!("session: {e:?}"))?;
-        let dispatch = Threads(workers);
-        println!();
-        println!("evaluating {count} tokens -- {label} ({workers} workers)");
-        let start = std::time::Instant::now();
-        let mut total_nats = 0.0f64;
-        let mut predictions = 0usize;
-        for position in 0..count.saturating_sub(1) {
-            let token = *tokens.get(position).ok_or("token index")?;
-            let target = *tokens.get(position + 1).ok_or("target index")?;
-            model
-                .forward(&dispatch, &mut workspace, &mut cache, &[token], &mut logits)
-                .map_err(|error| format!("forward at {position}: {error:?}"))?;
-            let nats = cross_entropy(&logits, target)
-                .ok_or_else(|| format!("non-finite logits at position {position}"))?;
-            total_nats += f64::from(nats);
-            predictions = predictions.saturating_add(1);
+        let dispatch = SpawnPerCall(workers);
+        let (ppl, rate) = evaluate(
+            "Q8_0 + spawn per call", &model, &config, &mut workspace_storage,
+            &mut quant_scratch, &mut cache_storage, geometry, &tokens, count,
+            &mut logits, &dispatch, workers,
+        )?;
+        results.push(("spawn", ppl, rate));
+    }
+    {
+        let start = Barrier::new(workers + 1);
+        let finish = Barrier::new(workers + 1);
+        let job: Mutex<Option<Job>> = Mutex::new(None);
+        let shutting_down = AtomicBool::new(false);
+        let mut outcome = None;
+        thread::scope(|scope| {
+            for index in 0..workers {
+                let (start, finish, job, shutting_down) =
+                    (&start, &finish, &job, &shutting_down);
+                scope.spawn(move || worker_loop(index, start, finish, job, shutting_down));
+            }
+            let pool = Pool { workers, start: &start, finish: &finish, job: &job };
+            outcome = Some(evaluate(
+                "Q8_0 + persistent pool", &model, &config, &mut workspace_storage,
+                &mut quant_scratch, &mut cache_storage, geometry, &tokens, count,
+                &mut logits, &pool, workers,
+            ));
+            shutting_down.store(true, Ordering::Release);
+            start.wait();
+        });
+        if let Some(Ok((ppl, rate))) = outcome {
+            results.push(("pool", ppl, rate));
         }
-        let elapsed = start.elapsed().as_secs_f64();
-        let mean = total_nats / predictions as f64;
-        println!("  mean CE     {mean:.4} nats");
-        println!("  PERPLEXITY  {:.3}", mean.exp());
-        println!("  throughput  {:.2} tok/s  ({elapsed:.1}s)", predictions as f64 / elapsed);
-        results.push((label, mean.exp(), predictions as f64 / elapsed));
     }
 
     if let (Some(base), Some(fast)) = (results.first(), results.get(1)) {
@@ -411,10 +556,9 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
                  base.1, fast.1, (fast.1 / base.1 - 1.0) * 100.0);
         println!("  SPEED    {:.2} -> {:.2} tok/s  ({:.2}x)",
                  base.2, fast.2, fast.2 / base.2);
-        if let Some(par) = results.get(2) {
-            println!("  THREADS  {:.2} -> {:.2} tok/s  ({:.2}x over 1 core, {:.2}x over f32)",
-                     fast.2, par.2, par.2 / fast.2, par.2 / base.2);
-            println!("  QUALITY  {:.3} (threaded) -- must equal {:.3}", par.1, fast.1);
+        for entry in results.iter().skip(2) {
+            println!("  {:<8} {:.2} -> {:.2} tok/s  ({:.2}x over 1 core)   PPL {:.3}",
+                     entry.0, fast.2, entry.2, entry.2 / fast.2, entry.1);
         }
     }
 
