@@ -107,7 +107,12 @@ brainix_vector_table:
 // Each entry has exactly 128 bytes. `.balign 0x80` after the body is what
 // enforces that; writing the offsets by hand is how a table ends up with entry
 // n+1 inside entry n's slot, which presents as the wrong handler running.
+// Reserve the frame and save the interrupted x0/x1 BEFORE x0 is overwritten
+// with the vector index. Doing the `mov` first would destroy the value we are
+// obliged to give back.
 .macro VECTOR_ENTRY index
+    sub sp, sp, #(16 * 11)
+    stp x0, x1, [sp, #(16 * 0)]
     mov x0, #\index
     b   brainix_exception_common
     .balign 0x80
@@ -136,9 +141,29 @@ brainix_vector_table:
 // the link register, and the interrupted context is entitled to keep its own.
 // Everything else this touches is caller-saved, and the only site that
 // deliberately faults declares `clobber_abi("C")` so the compiler knows.
+// Save every caller-saved register, not just the link register.
+//
+// This handler previously saved x29/x30 alone and clobbered x0-x7 freely. For a
+// synchronous trap that is survivable, because the trap site declares
+// `clobber_abi("C")` and the compiler plans around it. For an **asynchronous**
+// exception it is a bug: the interrupted code is arbitrary, it never agreed to
+// anything, and it resumes with registers silently altered.
+//
+// That is not theoretical. Enabling FIQ delivery produced a run whose report
+// buffer came back holding values nothing in the payload ever wrote -- the
+// interrupted poll loop had had its registers changed underneath it. An
+// interrupt handler owes the interrupted context every register it touches.
 brainix_exception_common:
-    sub  sp, sp, #16
-    stp  x29, x30, [sp]
+    stp  x2, x3,   [sp, #(16 * 1)]
+    stp  x4, x5,   [sp, #(16 * 2)]
+    stp  x6, x7,   [sp, #(16 * 3)]
+    stp  x8, x9,   [sp, #(16 * 4)]
+    stp  x10, x11, [sp, #(16 * 5)]
+    stp  x12, x13, [sp, #(16 * 6)]
+    stp  x14, x15, [sp, #(16 * 7)]
+    stp  x16, x17, [sp, #(16 * 8)]
+    stp  x18, x29, [sp, #(16 * 9)]
+    str  x30,      [sp, #(16 * 10)]
 
     mrs  x1, ESR_EL2
     mrs  x2, ELR_EL2
@@ -175,8 +200,18 @@ brainix_exception_common:
     // happened when only ELR_EL2 was written.
     msr  ELR_EL2, x0
 
-    ldp  x29, x30, [sp]
-    add  sp, sp, #16
+    ldp  x0, x1,   [sp, #(16 * 0)]
+    ldp  x2, x3,   [sp, #(16 * 1)]
+    ldp  x4, x5,   [sp, #(16 * 2)]
+    ldp  x6, x7,   [sp, #(16 * 3)]
+    ldp  x8, x9,   [sp, #(16 * 4)]
+    ldp  x10, x11, [sp, #(16 * 5)]
+    ldp  x12, x13, [sp, #(16 * 6)]
+    ldp  x14, x15, [sp, #(16 * 7)]
+    ldp  x16, x17, [sp, #(16 * 8)]
+    ldp  x18, x29, [sp, #(16 * 9)]
+    ldr  x30,      [sp, #(16 * 10)]
+    add  sp, sp, #(16 * 11)
     eret
 "#
 );

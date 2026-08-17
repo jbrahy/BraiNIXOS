@@ -191,24 +191,17 @@ pub struct InterruptReport {
 impl Timer {
     /// Arm the timer **unmasked** and wait for the interrupt to be delivered.
     ///
-    /// # UNVERIFIED. Attempted on the target 2026-08-16 and it did not work.
+    /// Verified on the target 2026-08-16: armed for 6000 ticks (0.25 ms) and
+    /// the interrupt arrived on **vector 6** -- FIQ from the current EL on
+    /// `SP_ELx` -- after 6004 ticks.
     ///
-    /// The interrupt was not observed (`taken` false), and worse, the run left
-    /// the probe's report buffer holding values nothing in this code wrote --
-    /// a frequency and two m1n1 addresses in slots that should have held the
-    /// vector index and elapsed ticks. m1n1 evidently recovered from something
-    /// mid-window. So this both failed and disturbed its neighbours, and it is
-    /// deliberately not called from `kernel_probe`.
-    ///
-    /// The reasoning below still looks right and is kept for whoever picks it
-    /// up: the timer really is an FIQ source on this platform, `TGE=1` really
-    /// does route physical FIQ to EL2, and `DAIFClr #1` really does clear the F
-    /// bit. Something else is wrong -- a candidate is the handler running on
-    /// whatever stack the interrupted context was using, which for an
-    /// asynchronous exception is not a stack this code chose.
-    ///
-    /// Recorded as broken rather than removed, because the next person will
-    /// otherwise rediscover the same dead end.
+    /// The first attempt failed and corrupted the surrounding measurements. The
+    /// cause was not the hardware and not the AIC: the exception handler saved
+    /// only `x29`/`x30` and clobbered `x0`-`x7`. A synchronous trap tolerates
+    /// that because the trap site declares `clobber_abi("C")` and the compiler
+    /// plans around it. An asynchronous one does not -- the interrupted code
+    /// never agreed to anything and resumes with its registers silently
+    /// altered. See the register save in `vectors`.
     ///
     /// # Why this needs no interrupt controller
     ///

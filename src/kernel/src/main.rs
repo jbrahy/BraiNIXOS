@@ -417,11 +417,30 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
         put(39, timer.ticks_to_micros(countdown.elapsed_ticks));
     }
 
-    // Timer interrupt DELIVERY is NOT exercised here. See
-    // `arch::aarch64::timer::wait_for_interrupt`: it was attempted on the
-    // target and did not work, and running it corrupted the surrounding
-    // measurements, so it stays out of the read-only probe until it is
-    // understood.
+    // Timer interrupt DELIVERY. Needs no AIC: on Apple Silicon the generic
+    // timer is wired straight to FIQ.
+    //
+    // The first attempt corrupted its neighbours because the handler saved only
+    // x29/x30 and clobbered x0-x7. A synchronous trap tolerates that, since the
+    // trap site declares clobber_abi("C"); an asynchronous one does not, because
+    // the interrupted code never agreed to anything. The handler now saves every
+    // caller-saved register.
+    //
+    // SAFETY: unmasks FIQ strictly inside `with_vectors`, so it lands on a table
+    // that handles and returns from it, and DAIF plus the timer control are
+    // restored before the window closes.
+    if let Some(timer) = brainix_kernel::arch::aarch64::Timer::current() {
+        let quarter_ms = timer.frequency_hz() / 4000;
+        let report = unsafe {
+            brainix_kernel::arch::aarch64::with_vectors(|| {
+                timer.wait_for_interrupt(quarter_ms, 20_000_000)
+            })
+        };
+        put(55, u64::from(report.taken));
+        put(56, report.vector_index);
+        put(57, report.elapsed_ticks);
+        put(58, report.saved_daif);
+    }
 
     // Program TTBR0_EL2 with a table this image owns, and read through it.
     //
