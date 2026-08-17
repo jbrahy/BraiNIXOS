@@ -893,6 +893,25 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
             put(12, released.mpidr);
             put(13, released.exception_level);
             put(14, released.sctlr);
+
+            // The doorbell. Last night the released core parked with
+            // no way to recall it; FastIPI is that way, and it is three system
+            // registers rather than an interrupt controller.
+            if released.started {
+                // SAFETY: the target is the core just released, running the
+                // `wfe` loop in `brainix_secondary_entry` -- exactly the code
+                // that expects a doorbell.
+                let (doorbells, ticks) = unsafe {
+                    brainix_kernel::arch::aarch64::smp::ring_and_confirm(
+                        released.mpidr,
+                        4,
+                        brainix_kernel::arch::aarch64::registers::counter_frequency_hz(),
+                    )
+                };
+                put(15, doorbells);
+                put(16, ticks);
+                put(17, brainix_kernel::arch::aarch64::smp::report()[5]);
+            }
         }
         _ => {}
     }

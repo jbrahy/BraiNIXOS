@@ -35,12 +35,17 @@
 //! the magic word is written **last**, after a `dsb sy`, and why the buffer is
 //! poisoned before the attempt.
 //!
-//! # It is one shot per boot
+//! # The doorbell
 //!
-//! The stub parks in `wfe` forever. Nothing here can stop a core once started:
-//! m1n1 does not know about it, and this kernel has no IPI. A second attempt in
-//! the same session will time out, which is the honest outcome -- the core is
-//! already running, just not listening.
+//! The stub parks in `WFI` and is recalled with Apple's fast IPI: a system
+//! register write, no interrupt controller, no MMIO, no lock. **Measured on the
+//! target: four rings, four wakes, 91 ticks -- about 0.95 us per round trip.**
+//!
+//! That number is the reason `Dispatch::minimum_split_bytes` is a method rather
+//! than a constant. The host measurement that chose 4 MB was taken against a
+//! `std::sync::Barrier` costing roughly 30 us; a doorbell thirty times cheaper
+//! makes far smaller work worth splitting, and a threshold measured against the
+//! wrong synchronization primitive would be wrong by that factor.
 
 #![allow(unsafe_code)]
 
@@ -94,11 +99,39 @@ brainix_secondary_entry:
     str  x1, [x0, #0]
     dsb  sy
 
-    // Park. There is no way to recall this core -- no IPI, and m1n1 does not
-    // know it exists -- so it spins here until the machine reboots. `wfe`
-    // rather than a tight branch so it is not burning the cluster's power
-    // budget for the rest of the session.
-1:  wfe
+    // Park, and wake on the doorbell.
+    //
+    // **`WFI`, not `WFE`, and the difference is the whole thing.** An earlier
+    // version of this loop used `WFE` on the belief that it wakes on a pending
+    // interrupt whether or not `PSTATE` masks it. That is true of `WFI` and
+    // false of `WFE`: `WFE`'s wake-up events include an interrupt only when it
+    // would actually be taken, so with `DAIF` masked -- which is how a core
+    // arrives out of reset -- the IPI asserted and the core slept through it.
+    // The symptom was a doorbell that timed out with every report slot still
+    // poisoned. m1n1's secondary loop uses `deep_wfi` and that was the clue.
+    //
+    // With `WFI` no vector table is needed on this core: the interrupt wakes it
+    // without ever being delivered as an exception, which is why this loop can
+    // be eleven instructions with no handler, no stack and no `VBAR`.
+1:  wfi
+    // SYS_IMP_APL_IPI_SR_EL1 -- s3_5_c15_c1_1, bit 0 is pending.
+    mrs  x2, s3_5_c15_c1_1
+    tst  x2, #1
+    // A spurious wake is normal: `WFE` may return for reasons that are not
+    // ours. Going back to sleep rather than counting it is what keeps the
+    // count a count of doorbells.
+    b.eq 1b
+    str  x2, [x0, #40]
+    // Acknowledge by writing the pending bit back. Until this happens the
+    // condition stays asserted and the next `wfe` returns immediately, which
+    // presents as a core spinning at 100% rather than as a missed wake.
+    mov  x3, #1
+    msr  s3_5_c15_c1_1, x3
+    // Load, add, store -- see the note on the exclusive monitor in `vectors`.
+    ldr  x3, [x0, #32]
+    add  x3, x3, #1
+    str  x3, [x0, #32]
+    dsb  sy
     b 1b
 .balign 16384
 "#,
@@ -116,10 +149,15 @@ extern "C" {
 /// image. A `.bss` buffer would start as whatever was in that memory, and the
 /// difference between "the core wrote this" and "this was already here" is the
 /// entire measurement.
-static SECONDARY_REPORT: [AtomicU64; 4] = [
+static SECONDARY_REPORT: [AtomicU64; 6] = [
     AtomicU64::new(REPORT_POISON),
     AtomicU64::new(REPORT_POISON),
     AtomicU64::new(REPORT_POISON),
+    AtomicU64::new(REPORT_POISON),
+    // Doorbell count, zeroed rather than poisoned: it is incremented from
+    // zero, so a poison would have to be subtracted out and a reader could not
+    // tell "never woken" from "woken a poison-sized number of times".
+    AtomicU64::new(0),
     AtomicU64::new(REPORT_POISON),
 ];
 
@@ -197,13 +235,87 @@ unsafe fn refresh_from_memory(start: u64, len: u64) {
 }
 
 /// Read what the secondary recorded.
-pub fn report() -> [u64; 4] {
+pub fn report() -> [u64; 6] {
     [
         SECONDARY_REPORT[0].load(Ordering::Relaxed),
         SECONDARY_REPORT[1].load(Ordering::Relaxed),
         SECONDARY_REPORT[2].load(Ordering::Relaxed),
         SECONDARY_REPORT[3].load(Ordering::Relaxed),
+        SECONDARY_REPORT[4].load(Ordering::Relaxed),
+        SECONDARY_REPORT[5].load(Ordering::Relaxed),
     ]
+}
+
+/// Rings another core's doorbell.
+///
+/// Apple's fast IPI is a system-register write, not an interrupt-controller
+/// transaction: no AIC, no MMIO, no lock. `IPI_RR_GLOBAL_EL1` takes the target's
+/// affinity as `aff0 | (aff1 << 16)`, which is why the `MPIDR` is taken apart
+/// rather than passed whole.
+///
+/// # Safety
+///
+/// Wakes another CPU. The target must be running code that expects it -- here,
+/// the `wfe` loop in `brainix_secondary_entry`.
+pub unsafe fn ring(target_mpidr: u64) {
+    let affinity = (target_mpidr & 0xFF) | ((target_mpidr & 0xFF00) << 8);
+    // SAFETY: a single system-register write with no memory operands. `dsb`
+    // first so anything the target is expected to observe is visible before it
+    // is woken to look.
+    unsafe {
+        core::arch::asm!(
+            "dsb sy",
+            // SYS_IMP_APL_IPI_RR_GLOBAL_EL1 -- s3_5_c15_c0_1.
+            "msr s3_5_c15_c0_1, {affinity}",
+            "isb",
+            affinity = in(reg) affinity,
+            options(nostack)
+        );
+    }
+}
+
+/// Rings `target_mpidr` `count` times, waiting for each to be observed.
+///
+/// Returns `(doorbells observed, ticks waited)`. Each ring waits for the count
+/// to advance before sending the next, so a coalesced pair cannot be reported as
+/// two -- the doorbell is level-triggered and two rings before an acknowledge
+/// are one wake.
+///
+/// # Safety
+///
+/// As [`ring`].
+pub unsafe fn ring_and_confirm(target_mpidr: u64, count: u64, timeout_ticks: u64) -> (u64, u64) {
+    let report_address = SECONDARY_REPORT.as_ptr() as u64;
+    // The count slot is poisoned along with the rest of the report before the
+    // core is released, so what matters is how far it advances, not its value.
+    let baseline = SECONDARY_REPORT[4].load(Ordering::Relaxed);
+    let start = super::registers::physical_counter();
+    for _ in 0..count {
+        let before = SECONDARY_REPORT[4].load(Ordering::Relaxed);
+        // SAFETY: delegated to `ring`'s contract.
+        unsafe { ring(target_mpidr) };
+        loop {
+            // SAFETY: the report lives in this image, which is mapped.
+            unsafe { refresh_from_memory(report_address, 48) };
+            if SECONDARY_REPORT[4].load(Ordering::Relaxed) != before {
+                break;
+            }
+            if super::registers::physical_counter().wrapping_sub(start) > timeout_ticks {
+                return (
+                    SECONDARY_REPORT[4]
+                        .load(Ordering::Relaxed)
+                        .wrapping_sub(baseline),
+                    super::registers::physical_counter().wrapping_sub(start),
+                );
+            }
+        }
+    }
+    (
+        SECONDARY_REPORT[4]
+            .load(Ordering::Relaxed)
+            .wrapping_sub(baseline),
+        super::registers::physical_counter().wrapping_sub(start),
+    )
 }
 
 /// Release `cpu` into [`secondary_entry_address`] and wait for it to report.
@@ -226,7 +338,7 @@ pub unsafe fn release(cpu: &Cpu, start_base: u64, timeout_ticks: u64) -> Seconda
     let report_address = SECONDARY_REPORT.as_ptr() as u64;
     // SAFETY: both ranges are inside this image, which is mapped.
     unsafe {
-        clean_to_coherency(report_address, 32);
+        clean_to_coherency(report_address, 48);
         // The stub itself. The secondary fetches it with the MMU off, so it has
         // to be visible at the point of coherency, not merely at the point of
         // unification where the loader left it.
@@ -290,7 +402,7 @@ pub unsafe fn release(cpu: &Cpu, start_base: u64, timeout_ticks: u64) -> Seconda
     let start = super::registers::physical_counter();
     loop {
         // SAFETY: the report is inside this image.
-        unsafe { refresh_from_memory(report_address, 32) };
+        unsafe { refresh_from_memory(report_address, 48) };
         if SECONDARY_REPORT[0].load(Ordering::Relaxed) == SECONDARY_MAGIC {
             result.started = true;
             break;

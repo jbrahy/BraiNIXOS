@@ -517,8 +517,8 @@ else:
 
 print()
 print("  -- stage 9: releasing a second CPU ---------------------------------")
-print("     One shot per boot. The stub parks in wfe and nothing here can")
-print("     recall it -- m1n1 does not know it exists and we have no IPI.")
+print("     The stub parks in wfi and is recalled with Apple FastIPI --")
+print("     three system registers, no AIC, no MMIO.")
 if p.call(code + DROP_OFF, 9, ba, dout) != DROP_MAGIC:
     print("  stage 9 did not return the magic")
     raise SystemExit(1)
@@ -546,15 +546,23 @@ else:
         print("  CurrentEL        EL%d" % s_el)
         print("  SCTLR_EL1        0x%016x  M=%d (MMU off, as a core out of reset)"
               % (s_sctlr, s_sctlr & 1))
+    bells, bell_ticks, ipi_sr = d(15), d(16), d(17)
+    print("  -- FastIPI doorbell --")
+    print("  rang 4, observed %d   after %d ticks (%.1f us at 24 MHz)"
+          % (bells, bell_ticks, bell_ticks / 24.0))
+    print("  IPI_SR_EL1 seen  0x%016x  pending bit %d" % (ipi_sr, ipi_sr & 1))
 
 # The MPIDR is the check that matters. A magic word only proves something wrote
 # the buffer; a DIFFERENT affinity proves it was a different core.
+# Four rings must produce four observed wakes. Each ring waits for the count to
+# advance before the next, so a coalesced pair cannot be counted twice.
 smp_ok = (rv_ok == 1 and started == 1 and s_mpidr != 0
-          and (s_mpidr & 0xFFFFFF) != (r(5) & 0xFFFFFF))
+          and (s_mpidr & 0xFFFFFF) != (r(5) & 0xFFFFFF)
+          and d(15) == 4 and (d(17) & 1) == 1)
 print()
 if smp_ok:
-    print("  OK: a second core came out of reset into our code and reported an")
-    print("      MPIDR that is not the boot core's. Two CPUs are running.")
+    print("  OK: a second core came out of reset into our code, reported an MPIDR")
+    print("      that is not the boot core's, and answered four doorbells.")
 else:
     print("  SECONDARY NOT PROVEN. See the lines above.")
 
