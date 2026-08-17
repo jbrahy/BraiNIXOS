@@ -48,8 +48,39 @@
 //!    whole number of 32-element blocks, which the layout already guarantees.
 //!
 //! Neither is implemented, because a tile size chosen without a measurement is
-//! a guess, and NORTH_STAR's performance section is explicit that the wins are
-//! in bytes moved rather than instructions issued.
+//! a guess.
+//!
+//! # Measured, 2026-08-17: this kernel is compute-bound, not bandwidth-bound
+//!
+//! The paragraph above used to end by citing NORTH_STAR's claim that the wins
+//! are in bytes moved rather than instructions issued. **On this kernel that is
+//! not yet true, and the benchmark says so.** `benches/matmul.rs` reports
+//! weight-byte throughput against the machine's memory bandwidth:
+//!
+//! | | before | after lane split |
+//! | --- | --- | --- |
+//! | `4096x4096`, 1 token | 2.64 GB/s | **6.03 GB/s** |
+//! | fraction of a 200 GB/s bus | 1.3% | 3.0% |
+//!
+//! The discriminating measurement is the 8-token row, which needs no vendor
+//! bandwidth figure to interpret: weight bytes per call are identical at 1 and 8
+//! tokens because the loop order above reads each row once, while the arithmetic
+//! is 8x. Time came out **103% linear in tokens**. Time tracks arithmetic, not
+//! bytes.
+//!
+//! So the loop order documented above is doing its job — weights really are read
+//! once — and it is the inner arithmetic underneath it that is the constraint.
+//! Tiling, which addresses byte traffic, is therefore **still not the next
+//! thing**; it becomes worth measuring once the arithmetic stops dominating.
+//!
+//! What remains between here and the bus, in order of expected effect:
+//!
+//! 1. **`SDOT`**, which does 16 `i8` multiply-accumulates in one instruction and
+//!    needs no conversion at all — but requires the *activations* to be `i8`
+//!    too, which is an algorithm and format change rather than a kernel tweak.
+//! 2. **NEON intrinsics** for the current `i8`x`f32` shape, which would need
+//!    `unsafe` and so a change to this crate's `#![forbid(unsafe_code)]`.
+//! 3. **Multiple cores**, which multiplies whatever a single core achieves.
 
 use crate::error::TensorError;
 use crate::q8::{read_f32_le, Q8Weights, Q8_0_BLOCK};
@@ -147,6 +178,97 @@ pub fn matmul_f32(
     Ok(())
 }
 
+/// Lanes the block dot product accumulates in parallel.
+///
+/// Four is one 128-bit NEON register of `f32`, which is what the target's
+/// vector unit is. It is a source-level constant rather than a target feature
+/// because nothing here is architecture-specific: on a machine without SIMD the
+/// four accumulators are four registers and the code is still correct.
+///
+/// **Measured, not assumed.** 4, 8 and 16 lanes were benchmarked on
+/// `aarch64-apple-darwin`: 5.96, 5.17 and 5.76 GB/s respectively. The width
+/// barely matters, which is itself the finding — the remaining cost is not lane
+/// occupancy but the per-element `i8`→`f32` conversion chain (`sxtl`, `sxtl`,
+/// `scvtf`) that stands between a quantized weight and an `f32` multiply. Going
+/// wider cannot remove work that is per-element by construction. See the module
+/// note on what *would*.
+const DOT_LANES: usize = 4;
+
+/// Dot product of one `Q8_0` block against `Q8_0_BLOCK` activations.
+///
+/// # Why the accumulator is split into lanes
+///
+/// This function exists because of a measurement. Written as the obvious
+/// single-accumulator loop —
+///
+/// ```text
+/// let mut dot = 0.0;
+/// for (q, x) in quant.iter().zip(activations) { dot += f32::from(*q as i8) * x; }
+/// ```
+///
+/// — it compiled to **six scalar instructions per weight byte** on aarch64:
+/// a one-byte load, two widenings, a convert, a multiply and an add, using
+/// vector *registers* but only their lowest lane. Measured 2.64 GB/s, which is
+/// 1.3% of the reference machine's memory bandwidth.
+///
+/// The cause is the last of those instructions. `dot += ...` is a **serial
+/// dependency chain**: every add waits for the previous one, and since floating
+/// point addition is not associative the compiler is *forbidden* from splitting
+/// the sum into independent partial sums. It was not failing to vectorize; it
+/// was not permitted to.
+///
+/// Writing the lanes out gives that permission explicitly. The reassociation is
+/// then a choice made in the source, where it is visible and documented, rather
+/// than something a compiler flag does silently to every float expression in the
+/// crate — which is why this is preferable to `-ffast-math` even where that is
+/// available.
+///
+/// # Numerics
+///
+/// The result is **not** bit-identical to the single-accumulator form, and
+/// cannot be: summing in a different order rounds differently. It is not worse.
+/// Four partial sums of eight terms each, combined pairwise, has a shorter
+/// dependency chain than one sum of thirty-two, so the worst-case accumulated
+/// rounding error is *smaller* than the serial form's. The `Q8_0` inputs are
+/// exact small integers scaled by one binary32, so the products are exact and
+/// only the additions round at all.
+fn block_dot(quant_block: &[u8], x_block: &[f32]) -> f32 {
+    let mut lanes = [0.0_f32; DOT_LANES];
+    for (quant_lane, x_lane) in quant_block
+        .chunks_exact(DOT_LANES)
+        .zip(x_block.chunks_exact(DOT_LANES))
+    {
+        // Indexed rather than zipped: the fixed-width chunk lets the compiler
+        // see four independent accumulator updates with no loop-carried
+        // dependency between them, which is the whole point of the function.
+        for lane in 0..DOT_LANES {
+            let quant = quant_lane.get(lane).copied().unwrap_or(0);
+            let activation = x_lane.get(lane).copied().unwrap_or(0.0);
+            let slot = match lanes.get_mut(lane) {
+                Some(slot) => slot,
+                None => continue,
+            };
+            *slot += f32::from(quant as i8) * activation;
+        }
+    }
+    // Tree reduction over the lanes: log2(DOT_LANES) steps rather than
+    // DOT_LANES, and it mirrors how they were accumulated.
+    let mut width = DOT_LANES / 2;
+    while width > 0 {
+        for index in 0..width {
+            let upper = match lanes.get(index + width).copied() {
+                Some(value) => value,
+                None => continue,
+            };
+            if let Some(slot) = lanes.get_mut(index) {
+                *slot += upper;
+            }
+        }
+        width /= 2;
+    }
+    lanes.first().copied().unwrap_or(0.0)
+}
+
 /// `y = W xᵀ` with `Q8_0` weights and `f32` activations — the hot path.
 ///
 /// The weights are **never materialized**. Each 32-element block is
@@ -201,11 +323,7 @@ pub fn matmul_q8_0(
                 .zip(x_row.chunks_exact(Q8_0_BLOCK))
             {
                 let scale = read_f32_le(scale_bytes).ok_or(TensorError::MalformedPayload)?;
-                let mut block_dot = 0.0_f32;
-                for (quant, xv) in quant_block.iter().zip(x_block.iter()) {
-                    block_dot += f32::from(*quant as i8) * xv;
-                }
-                acc += scale * block_dot;
+                acc += scale * block_dot(quant_block, x_block);
             }
             let slot = y_row.get_mut(out_index).ok_or(TensorError::ShapeMismatch)?;
             *slot = acc;
