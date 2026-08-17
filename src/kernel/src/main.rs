@@ -190,3 +190,63 @@ fn handle_kernel_panic_aarch64(_info: &core::panic::PanicInfo) -> ! {
     console.write_line("[PANIC] BraiNIX kernel panic -- system halted");
     brainix_kernel::arch::aarch64::park()
 }
+
+/// Magic returned by [`kernel_probe`].
+#[cfg(target_arch = "aarch64")]
+pub const KERNEL_PROBE_MAGIC: u64 = 0x4B72_6E6C_4E49_5802; // "Krnl NIX\x02"
+
+/// Run the kernel's early decisions against real firmware and report them in
+/// memory, touching no MMIO, then **return**.
+///
+/// # Why the kernel needs its own probe
+///
+/// `_start` above parks forever, which is right for a kernel and useless for
+/// verification: chainloading it destroys m1n1, and on this rig the SBU serial
+/// path delivers nothing, so a chainloaded kernel produces exactly the one bit
+/// -- "it went quiet" -- that this project has repeatedly mistaken for a fault
+/// in its own code.
+///
+/// `src/boot-stub-apple`'s `boot_stub_probe` proved this works and found a real
+/// bug on its first run. This is the same technique applied one layer up, so
+/// AS-1c closes on evidence rather than on a successful link.
+///
+/// # Report layout
+///
+/// | index | meaning |
+/// | --- | --- |
+/// | 0 | [`KERNEL_PROBE_MAGIC`] |
+/// | 1 | current exception level |
+/// | 2 | resolved console base |
+/// | 3 | 1 if the base came from the ADT, 0 if it is the fallback constant |
+///
+/// # Safety
+///
+/// `boot_args` must be the firmware pointer, or null. `out` must have room for
+/// four `u64`s.
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u64 {
+    // SAFETY: the caller guarantees `out` has room for four `u64`s.
+    let put = |index: usize, value: u64| unsafe { core::ptr::write_volatile(out.add(index), value) };
+
+    put(0, KERNEL_PROBE_MAGIC);
+    put(
+        1,
+        u64::from(brainix_kernel::arch::aarch64::current_exception_level()),
+    );
+
+    // SAFETY: the caller guarantees the `boot_args` contract; null is handled
+    // inside, and `probe` resolves without constructing a driver or touching
+    // MMIO, which matters because m1n1 is resident and hosting this call.
+    let (base, from_adt) = unsafe { brainix_kernel::arch::aarch64::Console::probe(boot_args) };
+    put(2, base);
+    put(3, u64::from(from_adt));
+
+    KERNEL_PROBE_MAGIC
+}
+
+/// Keeps [`kernel_probe`] in the image; `#[no_mangle]` alone does not survive
+/// LTO when nothing in the binary calls it.
+#[cfg(target_arch = "aarch64")]
+#[used]
+static KERNEL_PROBE_KEEPALIVE: unsafe extern "C" fn(*const u8, *mut u64) -> u64 = kernel_probe;

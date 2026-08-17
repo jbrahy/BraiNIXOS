@@ -61,6 +61,8 @@ impl Mmio for PhysicalMmio {
 /// The kernel's early console.
 pub struct Console {
     inner: DockChannel<PhysicalMmio>,
+    /// The MMIO base being driven.
+    base: u64,
     /// Where the base came from. Reported, never assumed.
     resolved_from_adt: bool,
 }
@@ -85,6 +87,7 @@ impl Console {
             inner: DockChannel::new(PhysicalMmio {
                 base: base.0 as usize as *mut u32,
             }),
+            base: base.0,
             resolved_from_adt: base.1,
         }
     }
@@ -125,6 +128,25 @@ impl Console {
     /// Whether the base came from the ADT rather than the fallback constant.
     pub fn resolved_from_adt(&self) -> bool {
         self.resolved_from_adt
+    }
+
+    /// The MMIO base actually being driven.
+    ///
+    /// Exposed so verification can read the decision **without transmitting**.
+    /// The probe path runs with m1n1 resident, and driving a UART there
+    /// disturbs the machine hosting the measurement.
+    pub fn base(&self) -> u64 {
+        self.base
+    }
+
+    /// Resolve the console base without constructing a driver, and without
+    /// touching MMIO.
+    ///
+    /// # Safety
+    ///
+    /// As [`Self::from_boot_args`].
+    pub unsafe fn probe(boot_args: *const u8) -> (u64, bool) {
+        unsafe { Self::resolve_base(boot_args) }
     }
 
     /// Write a line, translating `\n` to `\r\n`.
