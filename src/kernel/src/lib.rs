@@ -19,6 +19,9 @@ pub mod aarch64_walk;
 /// Stage-1 table construction: pure, host-tested, no instructions.
 pub mod aarch64_tables;
 
+/// CPU feature detection: pure, host-tested, no instructions.
+pub mod aarch64_features;
+
 #[cfg(bare_metal_x86)]
 pub mod boot;
 

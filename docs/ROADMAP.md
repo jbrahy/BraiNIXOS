@@ -429,7 +429,8 @@ discharges one of AS-5-T0's five signed preconditions on a laptop.
     | Generic timer | **counting and comparison done** — armed for 24,000 ticks (1 ms) at the measured 24 MHz and fired after **24,002**, two ticks over. Armed with `IMASK` set, so the comparator fires without signalling: that separates *does the timer count and compare* from *does an interrupt get delivered*, and the first needs no AIC. Delivery is the remaining half |
     | Own table construction | **done** — `aarch64_tables` builds, `aarch64_walk` resolves, and the walker is the one the MMU validated. Blocks at the one level per granule the architecture permits (2 MiB / 32 MiB / 512 MiB) |
     | EL2→EL1, SVC entry | not started |
-    | RNDR/PAC-BTI, watchdog reset, secondary-CPU release | not started |
+    | RNDR / PAC-BTI **detection** | **done, and it changed two design assumptions.** `ID_AA64ISAR0_EL1 = 0x0221100110212120`: the RNDR field is **zero**, so this part has **no hardware RNG** and the kernel needs another entropy source. `ID_AA64ISAR1_EL1 = 0x0010111110211402`: `APA` (QARMA) is 0 while `API` (implementation defined) is 4 — Apple implements PAC with its own algorithm, so checking only the QARMA field concludes PAC is absent on hardware that has it. `ID_AA64PFR1_EL1 = 0x21`: BTI present. **Enabling** PAC/BTI is not done |
+    | Watchdog reset, secondary-CPU release | not started |
     | Timer *interrupt delivery* | not started — needs the AIC |
 
     Every "done" above means *observed on the target*, not *written*. Reproduce with

@@ -161,3 +161,60 @@ pub fn translate_el2_read(virtual_address: u64) -> u64 {
     }
     par
 }
+
+/// `ID_AA64ISAR0_EL1` — instruction set attributes, including `FEAT_RNG`.
+pub fn id_aa64isar0_el1() -> u64 {
+    read_sysreg!("ID_AA64ISAR0_EL1")
+}
+
+/// `ID_AA64ISAR1_EL1` — includes the pointer-authentication fields.
+pub fn id_aa64isar1_el1() -> u64 {
+    read_sysreg!("ID_AA64ISAR1_EL1")
+}
+
+/// `ID_AA64PFR1_EL1` — includes branch-target identification.
+pub fn id_aa64pfr1_el1() -> u64 {
+    read_sysreg!("ID_AA64PFR1_EL1")
+}
+
+/// Read the hardware random number generator.
+///
+/// Returns `None` when the hardware reports the value is not valid, which it
+/// signals by setting `NZCV.Z`. That is a real condition, not a formality: the
+/// entropy source can be temporarily unable to supply a number, and a caller
+/// that ignores it gets whatever was in the register.
+///
+/// # Safety
+///
+/// Requires `FEAT_RNG`, which [`crate::aarch64_features::RandomSupport`]
+/// reports. Executing `mrs RNDR` without it raises an undefined-instruction
+/// exception -- during early boot, before a console, which on this platform is
+/// indistinguishable from a hang.
+pub unsafe fn random() -> Option<u64> {
+    let value: u64;
+    let failed: u64;
+    // SAFETY: `RNDR` reads the entropy source and sets the condition flags.
+    // `cset` captures Z before anything else can clobber NZCV.
+    unsafe {
+        core::arch::asm!(
+            // `s3_3_c2_c4_0` rather than the name `RNDR`.
+            //
+            // This assembler rejects the mnemonic outright ("expected readable
+            // system register") unless the target enables FEAT_RNG, and the
+            // whole point of this function is to be callable on a build that
+            // does not assume the feature is present -- the caller decides at
+            // run time, from ID_AA64ISAR0_EL1. The raw encoding assembles
+            // unconditionally and is the same instruction.
+            "mrs {value}, s3_3_c2_c4_0",
+            "cset {failed}, eq",
+            value = out(reg) value,
+            failed = out(reg) failed,
+            options(nostack)
+        )
+    }
+    if failed != 0 {
+        None
+    } else {
+        Some(value)
+    }
+}

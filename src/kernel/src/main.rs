@@ -325,6 +325,41 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
     put(25, probe_va);
     put(26, par);
 
+    // CPU features. Reads only, and each gates something the kernel would
+    // otherwise assume: using RNDR without FEAT_RNG raises an
+    // undefined-instruction exception at the first call for entropy, during
+    // early boot, before a console.
+    let isar0 = registers::id_aa64isar0_el1();
+    let isar1 = registers::id_aa64isar1_el1();
+    let pfr1 = registers::id_aa64pfr1_el1();
+    put(40, isar0);
+    put(41, isar1);
+    put(42, pfr1);
+
+    let rng = brainix_kernel::aarch64_features::RandomSupport::from_isar0(isar0);
+    let cf = brainix_kernel::aarch64_features::ControlFlowSupport::from_id_registers(isar1, pfr1);
+    put(43, u64::from(rng.present));
+    put(
+        44,
+        u64::from(cf.address_auth_qarma)
+            | (u64::from(cf.address_auth_impdef) << 1)
+            | (u64::from(cf.generic_auth_qarma) << 2)
+            | (u64::from(cf.generic_auth_impdef) << 3)
+            | (u64::from(cf.branch_target_identification) << 4),
+    );
+
+    if rng.present {
+        // Two draws, so the report can show the source varies. One value
+        // proves the instruction executed; two different ones begin to
+        // suggest it is a generator rather than a constant.
+        // SAFETY: guarded by the FEAT_RNG check immediately above.
+        let first = unsafe { registers::random() };
+        let second = unsafe { registers::random() };
+        put(45, first.unwrap_or(0));
+        put(46, second.unwrap_or(0));
+        put(47, u64::from(first.is_some() && second.is_some()));
+    }
+
     // Generic timer: arm a 1 ms countdown, masked, and see it fire.
     if let Some(timer) = brainix_kernel::arch::aarch64::Timer::current() {
         let one_millisecond = timer.frequency_hz() / 1000;
