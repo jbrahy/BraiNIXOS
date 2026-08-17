@@ -16,6 +16,7 @@ in the commit history and in comments at the point of failure.
 
 | Script | Runs on | Changes anything? |
 | --- | --- | --- |
+| `as-probe.sh` | workstation | runs our code on the target, no MMIO |
 | `as-channels.sh` | workstation | no (except `--serial`) |
 | `as-hid-selftest.sh` | workstation | writes one file in `/tmp` on the mini |
 | `as-preflight.sh` | mini (macOS or recoveryOS) | no |
@@ -29,6 +30,7 @@ in the commit history and in comments at the point of failure.
 ## The order to use them in
 
 ```sh
+./bin/as-probe.sh                    # THE LOOP: build, run on hardware, read the verdict
 ./bin/as-channels.sh                 # what can I observe right now?
                                      # also runs as-preflight.sh on the mini over ssh
 ./bin/as-hid-selftest.sh             # does the Flipper type what I send? (needs macOS up)
@@ -83,3 +85,25 @@ which was resident, and each dark screen got blamed on the most recent change.
 - **An absent Thunderbolt link is not a fault** while the mini runs a bare-metal
   payload — nothing on that end brings the link up. The USB-PD VDM layer answers
   regardless, which makes it the only honest "is a cable attached" signal here.
+
+## `as-probe.sh` is the loop
+
+Build the payload, run its decisions on the real machine, print what it decided.
+Seconds, and nobody in the room.
+
+It calls `boot_stub_probe` through m1n1's proxy with **m1n1 still resident**,
+rather than chainloading. A chainload replaces m1n1 with a payload that ends in
+a hang, so nothing is left able to report, and on this rig the serial path
+delivers nothing either. A chainload therefore yields exactly the one bit that
+cost this project two days: "it went quiet."
+
+Its first run returned `stage 1` and found a real bug: `adt_window` refused the
+machine's own firmware, because `devtree - virt_base` underflows under the
+kernel-VA form m1n1 passes. Both forms occur on this hardware, so the parser
+worked under iBoot and denied under m1n1, presenting as "the payload is broken."
+
+Recover the rig over the wire when the payload has taken the machine:
+
+```sh
+sudo macvdmtool reboot     # m1n1 is back in about 15 seconds
+```

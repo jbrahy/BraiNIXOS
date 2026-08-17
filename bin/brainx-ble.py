@@ -143,7 +143,11 @@ async def send_lines(lines: list[str], address: str | None) -> int:
             )
             return 1
         print(f"found {found.name} [{found.address}]", file=sys.stderr)
-        device = found.address
+        # Pass the BLEDevice itself, not its address string. Handing bleak an
+        # address makes CoreBluetooth re-resolve the peripheral, which fails
+        # with BleakDeviceNotFoundError even though we just saw it advertise
+        # seconds earlier -- the scan result already holds the handle we need.
+        device = found
 
     async with BleakClient(device) as client:
         service, char = await writable_characteristic(client)
