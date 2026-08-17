@@ -40,6 +40,21 @@ chacha20 = { version = "0.9", default-features = false }
 ed25519-dalek = { version = "2", default-features = false }
 curve25519-dalek = { version = "4", default-features = false }
 
+# Bare-metal aarch64 ONLY -- AS-1c.
+#
+# `target_os = "none"` matters here for the same reason it does below: on a
+# hosted aarch64 target (this workstation) the arch predicate is also true, and
+# a host verification build has no business pulling in a boot stub.
+#
+# This is our own crate, not an external dependency, so it does not touch
+# NORTH_STAR's hard line on adding crates. It carries the DockChannel driver and
+# the ADT console discovery that were verified on the target machine on
+# 2026-08-16 -- reusing them is the difference between an aarch64 backend that
+# has been run and one that has been written.
+[target.'cfg(all(target_arch = "aarch64", target_os = "none"))'.dependencies]
+brainix-boot-stub-apple = { path = "../boot-stub-apple" }
+brainix-adt = { path = "../adt" }
+
 # Bare-metal x86-64 ONLY -- note `target_os = "none"`, which is load-bearing.
 #
 # Gating on `target_arch = "x86_64"` alone was wrong in a way that only showed up

@@ -52,3 +52,13 @@
 // No implementations yet. Items land here as AS-1b completes them, each one
 // removing a specific error from the aarch64 build rather than adding a stub
 // that reports success it has not earned.
+
+// ---------------------------------------------------------------------------
+// AS-1c, step 2 -- the backend starts here.
+// ---------------------------------------------------------------------------
+
+pub mod console;
+pub mod halt;
+
+pub use console::Console;
+pub use halt::{current_exception_level, park};

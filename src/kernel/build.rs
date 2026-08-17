@@ -11,8 +11,22 @@
 
 fn main() {
     emit_bare_metal_x86_cfg();
+    emit_bare_metal_aarch64_cfg();
 
     let target_triple = std::env::var("TARGET").unwrap_or_default();
+
+    // AS-1c: the aarch64 binary needs its own script. The x86-64 one places the
+    // kernel at a higher-half virtual address that only exists once the
+    // bootloader's page tables are live; on Apple Silicon a boot object is
+    // entered with the MMU **off**, so that address is not mapped and linking
+    // against it produces an image that cannot be entered.
+    if target_triple == "aarch64-unknown-none-softfloat" {
+        let manifest_directory = env!("CARGO_MANIFEST_DIR");
+        println!("cargo:rerun-if-changed=linker-aarch64.ld");
+        println!("cargo:rustc-link-arg-bin=brainix=-T{manifest_directory}/linker-aarch64.ld");
+        return;
+    }
+
     if target_triple != "x86_64-unknown-none" {
         return;
     }
@@ -51,5 +65,22 @@ fn emit_bare_metal_x86_cfg() {
     let operating_system = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if architecture == "x86_64" && operating_system == "none" {
         println!("cargo:rustc-cfg=bare_metal_x86");
+    }
+}
+
+/// Emits `bare_metal_aarch64` for the Apple Silicon target only.
+///
+/// Symmetric with [`emit_bare_metal_x86_cfg`], and for the same reason:
+/// `cfg(target_arch = "aarch64")` is true on this workstation, where a host
+/// verification build has no business compiling a boot stub or an `mrs`
+/// instruction. One named cfg emitted in one place, rather than a predicate
+/// repeated at every site where a single omission reintroduces the bug.
+fn emit_bare_metal_aarch64_cfg() {
+    println!("cargo:rustc-check-cfg=cfg(bare_metal_aarch64)");
+
+    let architecture = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let operating_system = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if architecture == "aarch64" && operating_system == "none" {
+        println!("cargo:rustc-cfg=bare_metal_aarch64");
     }
 }

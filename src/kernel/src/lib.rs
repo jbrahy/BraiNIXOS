@@ -7,7 +7,7 @@
 #![deny(unsafe_code)]
 #![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
 
-#[cfg(bare_metal_x86)]
+#[cfg(any(bare_metal_x86, bare_metal_aarch64))]
 pub mod arch;
 
 #[cfg(bare_metal_x86)]
