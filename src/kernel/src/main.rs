@@ -1082,6 +1082,15 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
                 let mut released_count = 0u64;
                 let mut at_full_rate = 0u64;
                 let mut index = 0usize;
+                // The cores that came all the way up, in release order, for the
+                // concurrent sweep below. The first core is worker 0 there, so
+                // it goes in first.
+                let mut workers = [0u64; 16];
+                let mut worker_count = 0usize;
+                if released.started && released.slot_matches && enabled.is_some() {
+                    workers[0] = released.mpidr;
+                    worker_count = 1;
+                }
                 while index < found && released_count < MAX_EXTRA_CORES {
                     let cpu = list[index];
                     index += 1;
@@ -1135,6 +1144,11 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
                             hz.saturating_mul(8),
                         )
                     };
+                    if worker_count < workers.len() {
+                        workers[worker_count] = extra.mpidr;
+                        worker_count += 1;
+                    }
+
                     if let Some((result, ticks)) = read {
                         put(out_base + 5, 1);
                         put(out_base + 6, u64::from(result == expected));
@@ -1151,6 +1165,199 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
                 // Past the per-core blocks, which run 48..112.
                 put(112, released_count);
                 put(113, at_full_rate);
+
+                // ---------------------------------------------------------
+                // What the machine does when every core pulls at once.
+                //
+                // Every number before this line was taken with one core
+                // reading and the rest idle, which is not a workload. A decode
+                // splits one matmul across all of them and they contend for
+                // the same bus, so the question that decides how many workers
+                // to use is not "how fast is a core" but "where does adding a
+                // core stop adding throughput".
+                //
+                // The buffer is partitioned, not shared: worker i reads its own
+                // disjoint slice, which is what a row-split matmul does. The
+                // slices sum to the whole buffer, so the checksums summed must
+                // equal the same closed-form total the single-core runs
+                // produced -- a partition bug shows up as a wrong number rather
+                // than as a suspiciously good time.
+                //
+                // Worker 0 is the boot core. It posts to the others, reads its
+                // own slice while they read theirs, and only then collects.
+                // Posting and collecting one at a time would serialise the
+                // whole thing and measure nothing.
+                let total_workers = worker_count + 1;
+                let mut n = 1usize;
+                while n <= total_workers && n <= 12 {
+                    let chunk = smp::BENCH_WORDS / n;
+                    let mut requests = [0u64; 16];
+
+                    let sweep_start =
+                        brainix_kernel::arch::aarch64::registers::physical_counter();
+
+                    let mut worker = 1usize;
+                    while worker < n {
+                        let offset = worker * chunk;
+                        // The last slice absorbs the remainder, so the
+                        // partition covers the buffer exactly.
+                        let length = if worker == n - 1 {
+                            smp::BENCH_WORDS - offset
+                        } else {
+                            chunk
+                        };
+                        // SAFETY: the core is parked in the dispatch loop with
+                        // its MMU on, and the slice is inside the buffer.
+                        requests[worker] = unsafe {
+                            smp::post(
+                                workers[worker - 1],
+                                smp::secondary_checksum_address(),
+                                base + (offset as u64) * 8,
+                                length as u64,
+                            )
+                        };
+                        worker += 1;
+                    }
+
+                    // The boot core's own slice, read while the others are
+                    // reading theirs.
+                    // SAFETY: slice 0 is inside the buffer.
+                    let mut total = unsafe { smp::brainix_secondary_checksum(base, chunk as u64) };
+
+                    let mut complete = true;
+                    worker = 1;
+                    while worker < n {
+                        // SAFETY: the request was posted to this core above.
+                        match unsafe {
+                            smp::collect(workers[worker - 1], requests[worker], hz.saturating_mul(8))
+                        } {
+                            Some(value) => total = total.wrapping_add(value),
+                            None => complete = false,
+                        }
+                        worker += 1;
+                    }
+
+                    let sweep_ticks = brainix_kernel::arch::aarch64::registers::physical_counter()
+                        .wrapping_sub(sweep_start);
+                    let out_base = 114 + (n - 1) * 2;
+                    put(out_base, sweep_ticks);
+                    put(out_base + 1, u64::from(complete && total == expected));
+                    n += 1;
+                }
+                put(138, total_workers as u64);
+
+                // ---------------------------------------------------------
+                // Equal slices are the wrong slices, and this proves it.
+                //
+                // The sweep above gets slower when the fifth worker joins:
+                // aggregate falls from 39 GB/s to 21. Equal partitioning makes
+                // wall time the SLOWEST worker's time, so one core running at
+                // 4.3 GB/s while three run at 11.4 sets the pace for all of
+                // them, and the fast three sit idle for two thirds of it.
+                //
+                // If that is the explanation, weighting each slice by the
+                // worker's own measured rate should recover the loss. If it is
+                // not -- if the cores are contending for something -- weighting
+                // will change nothing and the number will say so.
+                //
+                // Rates are measured first, one worker at a time, each on a
+                // DIFFERENT 4 MiB slice so no worker warms a cache for the next.
+                const PROBE_WORDS: u64 = 1 << 19;
+                let mut solo = [0u64; 16];
+                let mut w = 0usize;
+                while w < total_workers && w < 16 {
+                    let offset = (w as u64) * PROBE_WORDS * 8;
+                    let ticks = if w == 0 {
+                        let t0 = brainix_kernel::arch::aarch64::registers::physical_counter();
+                        // SAFETY: the slice is inside the buffer.
+                        let _ = unsafe { smp::brainix_secondary_checksum(base + offset, PROBE_WORDS) };
+                        brainix_kernel::arch::aarch64::registers::physical_counter().wrapping_sub(t0)
+                    } else {
+                        // SAFETY: the core is parked with its MMU on and the
+                        // slice is inside the buffer.
+                        match unsafe {
+                            smp::dispatch(
+                                workers[w - 1],
+                                smp::secondary_checksum_address(),
+                                base + offset,
+                                PROBE_WORDS,
+                                hz.saturating_mul(8),
+                            )
+                        } {
+                            Some((_, t)) => t,
+                            None => 0,
+                        }
+                    };
+                    solo[w] = ticks;
+                    put(140 + w, ticks);
+                    w += 1;
+                }
+
+                // Weight by 1/time. Fixed point, because there is no float here
+                // and a rate expressed as ticks-per-slice is an integer that
+                // divides the wrong way round.
+                const SCALE: u64 = 1 << 20;
+                let mut inverse = [0u64; 16];
+                let mut total_inverse = 0u64;
+                w = 0;
+                while w < total_workers && w < 16 {
+                    inverse[w] = if solo[w] == 0 { 0 } else { SCALE / solo[w] };
+                    total_inverse = total_inverse.saturating_add(inverse[w]);
+                    w += 1;
+                }
+
+                if total_inverse > 0 {
+                    let mut requests = [0u64; 16];
+                    let mut offsets = [0u64; 16];
+                    let mut lengths = [0u64; 16];
+                    let mut assigned = 0u64;
+                    w = 0;
+                    while w < total_workers && w < 16 {
+                        offsets[w] = assigned;
+                        lengths[w] = if w + 1 == total_workers {
+                            (smp::BENCH_WORDS as u64).saturating_sub(assigned)
+                        } else {
+                            (smp::BENCH_WORDS as u64)
+                                .saturating_mul(inverse[w])
+                                .saturating_div(total_inverse)
+                        };
+                        assigned = assigned.saturating_add(lengths[w]);
+                        w += 1;
+                    }
+
+                    let start = brainix_kernel::arch::aarch64::registers::physical_counter();
+                    w = 1;
+                    while w < total_workers && w < 16 {
+                        // SAFETY: parked core, slice inside the buffer.
+                        requests[w] = unsafe {
+                            smp::post(
+                                workers[w - 1],
+                                smp::secondary_checksum_address(),
+                                base + offsets[w] * 8,
+                                lengths[w],
+                            )
+                        };
+                        w += 1;
+                    }
+                    // SAFETY: slice 0 is inside the buffer.
+                    let mut total = unsafe { smp::brainix_secondary_checksum(base, lengths[0]) };
+                    let mut complete = true;
+                    w = 1;
+                    while w < total_workers && w < 16 {
+                        // SAFETY: posted to this core above.
+                        match unsafe {
+                            smp::collect(workers[w - 1], requests[w], hz.saturating_mul(8))
+                        } {
+                            Some(value) => total = total.wrapping_add(value),
+                            None => complete = false,
+                        }
+                        w += 1;
+                    }
+                    let ticks = brainix_kernel::arch::aarch64::registers::physical_counter()
+                        .wrapping_sub(start);
+                    put(156, ticks);
+                    put(157, u64::from(complete && total == expected));
+                }
             }
         }
         _ => {}

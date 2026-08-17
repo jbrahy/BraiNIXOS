@@ -223,7 +223,7 @@ print("  eret-to-self     %d  (1 = exception return works at this level)" % r(64
 # 48 slots, not 16. Stage 9 writes through index 27, and a probe that scribbles
 # past its own buffer would corrupt whatever m1n1 put after it -- a failure that
 # presents as an unrelated stage misbehaving later.
-dout = u.malloc(8 * 128)
+dout = u.malloc(8 * 192)
 
 def d(i):
     return p.read64(dout + 8 * i)
@@ -677,8 +677,73 @@ else:
             (words * 8) / (local_t / 24e6) / 1e9 if local_t else 0.0))
         print("  number, not a memory number, and the slower group is not slower")
         print("  silicon -- it is the same read paying for the boot core's cache.")
-        print("  Each core also read alone. Nothing here says what happens when")
-        print("  they all pull at once, which is the question decode actually asks.")
+        print("  Each core also read alone. The sweep below is the one that says")
+        print("  what happens when they all pull at once.")
+
+    # The measurement the core count actually depends on.
+    total_w = d(138)
+    if total_w:
+        mib = words * 8 / 1048576.0
+        print()
+        print("  -- every core pulling at once, %.0f MiB partitioned between them --" % mib)
+        print("  Worker 0 is the boot core. Each worker reads its own disjoint")
+        print("  slice, the way a row-split matmul does, and the slices sum to")
+        print("  the whole buffer -- so a wrong total means a bad partition, not")
+        print("  a lucky time. Cores are added in release order, which fills the")
+        print("  boot cluster first.")
+        print()
+        print("   workers      time     aggregate    speedup   per-core")
+        base_t = None
+        for n in range(1, total_w + 1):
+            t, ok = d(114 + (n - 1) * 2), d(115 + (n - 1) * 2)
+            if not t:
+                continue
+            if base_t is None:
+                base_t = float(t)
+            gbs = (words * 8) / (t / 24e6) / 1e9
+            print("   %2d      %8.2f ms   %6.1f GB/s   %5.2fx   %5.1f GB/s%s"
+                  % (n, t / 24000.0, gbs, base_t / t, gbs / n,
+                     "" if ok else "   CHECKSUM WRONG"))
+
+        # Each worker alone, on its own slice, so no worker warms a cache for
+        # the next. This is what the weighted partition below is built from.
+        print()
+        print("  -- each worker alone, on its own 4 MiB slice --")
+        probe_bytes = (1 << 19) * 8
+        # NOT `r` -- that is the register-reader defined at the top of this
+        # script, and shadowing it makes the final verdict block die with
+        # "'float' object is not callable" after every measurement has already
+        # printed correctly.
+        rates = []
+        for i in range(total_w):
+            t = d(140 + i)
+            rate = probe_bytes / (t / 24e6) / 1e9 if t else 0.0
+            rates.append(rate)
+            print("   worker %-2d  %6.2f GB/s%s"
+                  % (i, rate, "   (boot core)" if i == 0 else ""))
+
+        wt, wok = d(156), d(157)
+        if wt:
+            equal_t = d(114 + (total_w - 1) * 2)
+            best_equal = min(
+                (d(114 + (n - 1) * 2) for n in range(1, total_w + 1) if d(114 + (n - 1) * 2)),
+                default=0)
+            wgbs = (words * 8) / (wt / 24e6) / 1e9
+            print()
+            print("  -- the same %d workers, slices weighted by those rates --" % total_w)
+            print("   equal slices     %8.2f ms   %6.1f GB/s"
+                  % (equal_t / 24000.0, (words * 8) / (equal_t / 24e6) / 1e9))
+            print("   weighted slices  %8.2f ms   %6.1f GB/s   %s"
+                  % (wt / 24000.0, wgbs, "CORRECT" if wok else "CHECKSUM WRONG"))
+            if equal_t:
+                print("   %.2fx faster than equal slices on the same cores, and"
+                      % (equal_t / float(wt)))
+                print("   %.2fx the best the equal-slice sweep reached at any width."
+                      % (best_equal / float(wt)))
+            print()
+            print("  A chunk size is not a fair thing to hold constant across")
+            print("  cores that differ by %.1fx. Dispatch has to weight, not divide."
+                  % (max(rates) / min(x for x in rates if x) if any(rates) else 0.0))
 
 # The MPIDR is the check that matters. A magic word only proves something wrote
 # the buffer; a DIFFERENT affinity proves it was a different core.

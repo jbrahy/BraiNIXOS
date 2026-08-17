@@ -67,6 +67,59 @@
 //! rather than building new ones is deliberate: the stub already depends on the
 //! identity map to resolve its own `adrp`, and a private root would have to
 //! reproduce that map exactly to keep it true.
+//!
+//! # Equal slices are the wrong slices
+//!
+//! Ten cores reading a partitioned 64 MiB buffer at the same time, each on its
+//! own disjoint slice -- the shape a row-split matmul has. Adding workers in
+//! release order, which fills the boot cluster first:
+//!
+//! | workers | aggregate |
+//! | --- | --- |
+//! | 1 | 11.3 GB/s |
+//! | 3 | 34.2 GB/s |
+//! | 4 | **39.2 GB/s** |
+//! | 5 | **21.9 GB/s** |
+//! | 10 | 43.0 GB/s |
+//!
+//! **The fifth worker makes the machine slower**, and ten workers barely beat
+//! four. That is not contention. Measured one at a time, each on its own slice
+//! so none warms a cache for the next, the cores are not the same speed:
+//! everything in the boot cluster reads at ~11.3 GB/s and everything outside it
+//! at ~4.3 GB/s. Equal slices make wall time the *slowest* worker's time, so
+//! one 4.3 GB/s core sets the pace and the fast three idle for two thirds of
+//! it.
+//!
+//! Weighting each slice by its worker's own measured rate, same ten cores, same
+//! buffer: **60.1 GB/s, 1.40x the equal-slice result and 1.40x the best the
+//! equal-slice sweep reached at any width.** So `Dispatch` has to weight rather
+//! than divide, and `chunks()` returning a count is not enough of an interface
+//! to express that.
+//!
+//! # The 2.7x is not cache locality, and probably is not the cores
+//!
+//! At 1 MiB the same split looked like L2 locality: the fast group was the boot
+//! core's cluster and the buffer was sitting in its L2. At 64 MiB that
+//! explanation is dead -- nothing that size fits in any level of this part's
+//! cache -- and the gap is unchanged.
+//!
+//! What makes it suspicious is the direction. Cluster 0 has four cores and
+//! clusters 1 and 2 have three each, which on this part means cluster 0 is the
+//! **E** cluster and the slow six are the **P** cores. P cores streaming at
+//! 38% of E cores is backwards.
+//!
+//! The leading explanation is clock: `DVFS` is per-cluster, the boot core's
+//! cluster is at a running P-state because firmware left it there, and the two
+//! clusters that were powered down come up at their reset minimum. Nothing in
+//! this kernel has ever written a cluster P-state register. **That is a
+//! hypothesis and it has not been measured.** If it is right, the six fastest
+//! cores on the machine are currently the six slowest, and programming per-
+//! cluster `DVFS` is worth more than any other core-count work.
+//!
+//! One more caveat on all of these numbers: 60 GB/s against a part that has
+//! roughly 200 GB/s of memory bandwidth means this loop is issue-bound, not
+//! bandwidth-bound. They measure what *this scalar read loop* achieves per
+//! core, not what the machine's memory system can do.
 
 #![allow(unsafe_code)]
 
@@ -1012,11 +1065,17 @@ pub fn secondary_enable_mmu_address() -> u64 {
 
 /// Words in the buffer the memory-rate measurement reads.
 ///
-/// 1 MiB. Chosen to be far larger than a 128 KiB L1 and far smaller than the
-/// 16 MiB cluster L2, so the boot core's number is an L2 number rather than an
-/// L1 one -- a buffer that fitted in L1 would flatter the cached side and
-/// exaggerate the ratio this is being run to find.
-pub const BENCH_WORDS: usize = 1 << 17;
+/// **64 MiB, and the size is the measurement.** At 1 MiB this buffer sat inside
+/// the boot cluster's L2, and the consequence was a table that looked like a
+/// story about cores: three secondaries at 11.4 GB/s and six at about 4.4. The
+/// split was by cluster, and the fast group was the boot core's own -- they were
+/// hitting its L2 while the rest paid a fabric hop for the same lines. Neither
+/// number was a memory number.
+///
+/// A decode streams roughly 151 MB of weights per token and hits nothing. To
+/// say anything about that, the buffer has to be past the last level that could
+/// hold it: larger than the ~24 MB system cache, not merely larger than an L2.
+pub const BENCH_WORDS: usize = 1 << 23;
 
 /// Buffer for measuring what a core with its MMU off can actually read.
 ///
