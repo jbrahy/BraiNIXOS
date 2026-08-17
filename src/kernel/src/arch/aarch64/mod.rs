@@ -64,6 +64,7 @@ pub mod mmu;
 pub mod registers;
 pub mod timer;
 pub mod vectors;
+pub mod watchdog;
 
 pub use console::Console;
 pub use halt::{current_exception_level, park};

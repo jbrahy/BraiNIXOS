@@ -325,6 +325,36 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
     put(25, probe_va);
     put(26, par);
 
+    // Watchdog: locate it and check our answer against m1n1's own.
+    //
+    // Read-only. m1n1 printed "Primary WDT register @ 0x29e2c4000" on this
+    // machine, so there is a known-good answer to check the ADT lookup
+    // against before anything is ever written to that block -- and what would
+    // be written to it is a reset command, so the wrong address is expensive.
+    if !boot_args.is_null() {
+        // SAFETY: firmware guarantees the structure; the read is bounded and
+        // every field access inside it is bounds-checked by `brainix_adt`.
+        let header = unsafe { core::slice::from_raw_parts(boot_args, 0x100) };
+        if let Ok(window) = brainix_adt::adt_window(header) {
+            // SAFETY: `adt_window` validated the range lies inside the DRAM
+            // window firmware reported, is aligned, and does not overflow.
+            let blob = unsafe {
+                core::slice::from_raw_parts(
+                    window.phys_addr as usize as *const u8,
+                    window.len as usize,
+                )
+            };
+            if let Some(wdt) = brainix_kernel::arch::aarch64::watchdog::locate(blob) {
+                put(53, wdt);
+                // SAFETY: a read of the control register; changes nothing.
+                put(
+                    54,
+                    u64::from(unsafe { brainix_kernel::arch::aarch64::watchdog::control(wdt) }),
+                );
+            }
+        }
+    }
+
     // Can we even survive at EL1? Read-only pre-check, before any transition.
     //
     // Dropping to EL1 means instruction fetch uses EL1's translation regime.
@@ -430,3 +460,68 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
 #[cfg(target_arch = "aarch64")]
 #[used]
 static KERNEL_PROBE_KEEPALIVE: unsafe extern "C" fn(*const u8, *mut u64) -> u64 = kernel_probe;
+
+/// Arm the watchdog so the machine resets, and return.
+///
+/// # Why this is a separate entry point
+///
+/// `kernel_probe` is read-only by design and is run dozens of times; arming a
+/// reset inside it would make every measurement cost a reboot. This is
+/// deliberate, called on purpose, and named so that nobody invokes it by
+/// accident.
+///
+/// # Why it exists at all
+///
+/// Two reasons. It proves the watchdog driver works, which nothing short of an
+/// actual reset does. And it is the **signalling channel** for anything running
+/// after m1n1 has been chainloaded away: this rig's SBU serial path delivers
+/// nothing, the framebuffer given to a boot object is a dummy that is never
+/// scanned out, and m1n1's USB gadget leaves with m1n1. A payload that reaches
+/// a chosen point and arms the watchdog reports that point by *when the machine
+/// reboots*, which the workstation sees as the USB port disappearing and coming
+/// back. `BRINGUP_PLAN.md` named this fallback before there was any way to use
+/// it.
+///
+/// Returns the watchdog base it armed, or 0 if it could not find one -- in
+/// which case nothing was written and no reset is coming.
+///
+/// # Safety
+///
+/// Resets the machine. `boot_args` must be the firmware pointer.
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+pub unsafe extern "C" fn kernel_watchdog_arm(boot_args: *const u8, alarm_ticks: u64) -> u64 {
+    // SAFETY: first thing at an entry point, before any static is read.
+    unsafe { brainix_kernel::arch::aarch64::bss::zero() };
+
+    if boot_args.is_null() {
+        return 0;
+    }
+    // SAFETY: as in kernel_probe.
+    let header = unsafe { core::slice::from_raw_parts(boot_args, 0x100) };
+    let Ok(window) = brainix_adt::adt_window(header) else {
+        return 0;
+    };
+    // SAFETY: `adt_window` validated the range.
+    let blob = unsafe {
+        core::slice::from_raw_parts(window.phys_addr as usize as *const u8, window.len as usize)
+    };
+    let Some(base) = brainix_kernel::arch::aarch64::watchdog::locate(blob) else {
+        return 0;
+    };
+
+    // SAFETY: `base` is the translated reg of /arm-io/wdt, verified against the
+    // address m1n1 independently reported for this machine.
+    unsafe {
+        brainix_kernel::arch::aarch64::watchdog::arm_reset(
+            base,
+            u32::try_from(alarm_ticks).unwrap_or(u32::MAX),
+        )
+    };
+    base
+}
+
+/// Keeps [`kernel_watchdog_arm`] in the image under LTO.
+#[cfg(target_arch = "aarch64")]
+#[used]
+static WATCHDOG_ARM_KEEPALIVE: unsafe extern "C" fn(*const u8, u64) -> u64 = kernel_watchdog_arm;
