@@ -37,6 +37,26 @@ pub trait Dispatch {
     /// not divide, and one is always valid.
     fn chunks(&self) -> usize;
 
+    /// Smallest amount of work, in weight bytes, worth splitting.
+    ///
+    /// # Why a threshold exists at all
+    ///
+    /// Splitting costs a synchronization -- a barrier pair here, an IPI and a
+    /// completion signal on the target -- and that cost is per *call*, not per
+    /// byte. A projection smaller than the synchronization is slower split than
+    /// left alone, and a decode makes 168 of them per token, so the loss is paid
+    /// 168 times.
+    ///
+    /// The sizes are not close to each other. In the reference model a layer's
+    /// `k` and `v` projections are ~0.15 MB apiece while `gate`, `up` and `down`
+    /// are ~4.7 MB -- a factor of thirty. A single threshold cleanly separates
+    /// them, which is why this is one number rather than a policy.
+    ///
+    /// Returning 0 splits everything, which is the old behaviour.
+    fn minimum_split_bytes(&self) -> usize {
+        0
+    }
+
     /// Runs `body` over `out.chunks_mut(chunk_len)`.
     fn for_each_chunk<F>(&self, out: &mut [f32], chunk_len: usize, body: F)
     where

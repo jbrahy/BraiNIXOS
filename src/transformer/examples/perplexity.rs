@@ -95,6 +95,7 @@ unsafe impl Sync for Job {}
 /// barrier standing in for the doorbell.
 struct Pool<'scope> {
     workers: usize,
+    minimum_bytes: usize,
     start: &'scope Barrier,
     finish: &'scope Barrier,
     job: &'scope Mutex<Option<Job>>,
@@ -103,6 +104,10 @@ struct Pool<'scope> {
 impl Dispatch for Pool<'_> {
     fn chunks(&self) -> usize {
         self.workers
+    }
+
+    fn minimum_split_bytes(&self) -> usize {
+        self.minimum_bytes
     }
 
     fn for_each_chunk<F>(&self, out: &mut [f32], chunk_len: usize, body: F)
@@ -514,17 +519,10 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
         results.push((label, mean.exp(), predictions as f64 / elapsed));
     }
 
-    // Spawn-per-call as the control, then the persistent pool.
-    {
-        let dispatch = SpawnPerCall(workers);
-        let (ppl, rate) = evaluate(
-            "Q8_0 + spawn per call", &model, &config, &mut workspace_storage,
-            &mut quant_scratch, &mut cache_storage, geometry, &tokens, count,
-            &mut logits, &dispatch, workers,
-        )?;
-        results.push(("spawn", ppl, rate));
-    }
-    {
+    // Sweep the split threshold. 0 splits everything (the previous behaviour);
+    // the larger values progressively exclude the small projections whose work
+    // is smaller than a barrier pair.
+    for threshold in [0usize, 512 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024, usize::MAX] {
         let start = Barrier::new(workers + 1);
         let finish = Barrier::new(workers + 1);
         let job: Mutex<Option<Job>> = Mutex::new(None);
@@ -536,9 +534,16 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
                     (&start, &finish, &job, &shutting_down);
                 scope.spawn(move || worker_loop(index, start, finish, job, shutting_down));
             }
-            let pool = Pool { workers, start: &start, finish: &finish, job: &job };
+            let pool = Pool {
+                workers, minimum_bytes: threshold, start: &start, finish: &finish, job: &job,
+            };
+            let label = if threshold == usize::MAX {
+                "pool, split nothing".to_string()
+            } else {
+                format!("pool, split >= {} KB", threshold / 1024)
+            };
             outcome = Some(evaluate(
-                "Q8_0 + persistent pool", &model, &config, &mut workspace_storage,
+                &label, &model, &config, &mut workspace_storage,
                 &mut quant_scratch, &mut cache_storage, geometry, &tokens, count,
                 &mut logits, &pool, workers,
             ));
@@ -546,7 +551,14 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
             start.wait();
         });
         if let Some(Ok((ppl, rate))) = outcome {
-            results.push(("pool", ppl, rate));
+            let name: &'static str = match threshold {
+                0 => "all",
+                524_288 => ">=512K",
+                2_097_152 => ">=2M",
+                4_194_304 => ">=4M",
+                _ => "none",
+            };
+            results.push((name, ppl, rate));
         }
     }
 

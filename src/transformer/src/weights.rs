@@ -133,7 +133,17 @@ impl WeightMatrix<'_> {
                         // not a contiguous range of `destination`. Prefill
                         // therefore stays serial here and parallelizes over
                         // tokens elsewhere.
-                        if shape.n_tokens == 1 && dispatch.chunks() > 1 {
+                        // Weight bytes this projection moves: `Q8_0` costs 1.125 per
+                        // element. Compared against the dispatcher's threshold
+                        // so that work smaller than a synchronization stays on
+                        // the calling core.
+                        let weight_bytes = shape
+                            .n_out
+                            .saturating_mul(shape.n_in)
+                            .saturating_mul(9)
+                            / 8;
+                        let worth_splitting = weight_bytes >= dispatch.minimum_split_bytes();
+                        if shape.n_tokens == 1 && dispatch.chunks() > 1 && worth_splitting {
                             let width = chunk_len(shape.n_out, dispatch.chunks())?;
                             // Chunks run on other threads, so the closure is
                             // `Fn + Sync` and cannot carry a `Result` out. An
