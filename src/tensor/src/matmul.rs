@@ -251,22 +251,12 @@ fn block_dot(quant_block: &[u8], x_block: &[f32]) -> f32 {
             *slot += f32::from(quant as i8) * activation;
         }
     }
-    // Tree reduction over the lanes: log2(DOT_LANES) steps rather than
-    // DOT_LANES, and it mirrors how they were accumulated.
-    let mut width = DOT_LANES / 2;
-    while width > 0 {
-        for index in 0..width {
-            let upper = match lanes.get(index + width).copied() {
-                Some(value) => value,
-                None => continue,
-            };
-            if let Some(slot) = lanes.get_mut(index) {
-                *slot += upper;
-            }
-        }
-        width /= 2;
-    }
-    lanes.first().copied().unwrap_or(0.0)
+    // Pairwise, not left-to-right: one fewer step in the dependency chain, and
+    // it mirrors how the lanes were accumulated. Written out for the measured
+    // best width rather than as a loop over `DOT_LANES` -- the sweep that chose
+    // 4 is recorded above, and a generic reduction for a constant that is not
+    // going to change is complexity with no reader.
+    (lanes[0] + lanes[1]) + (lanes[2] + lanes[3])
 }
 
 /// `y = W xᵀ` with `Q8_0` weights and `f32` activations — the hot path.
