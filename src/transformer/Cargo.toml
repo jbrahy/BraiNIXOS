@@ -11,5 +11,13 @@ description = "Zero-allocation, no_std decoder-only transformer forward pass ove
 # capability, no syscall and no device.
 brainix-tensor = { path = "../tensor" }
 
+# Host-only, for `examples/perplexity.rs`: the quality gate for quantization
+# changes needs to load a real blob and tokenize real text, and neither belongs
+# in a `no_std` forward pass. Permitted without limit by NORTH_STAR's
+# dev-dependency carve-out (2026-08-17) -- these never ship.
+[dev-dependencies]
+brainix-bxw1 = { path = "../bxw1" }
+brainix-tokenizer = { path = "../tokenizer" }
+
 [lints]
 workspace = true

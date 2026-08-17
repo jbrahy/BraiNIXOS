@@ -290,7 +290,9 @@ version = "0.1.0"
 name = "brainix-transformer"
 version = "0.1.0"
 dependencies = [
+ "brainix-bxw1",
  "brainix-tensor",
+ "brainix-tokenizer",
 ]
 
 [[package]]
