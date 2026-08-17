@@ -205,6 +205,44 @@ authority, shared-memory IPC, a kernel heap, or a weakened confinement, and the 
 holds exactly the four named exceptions. What the review found is that the plan was **under-scheduled, not
 misaimed** — and that B2 mistakes writing a primitive for adopting it (see Track B).
 
+**2026-08-17, after AS-1b closed. Four platform facts that change design assumptions, and one that changes
+how this project debugs.**
+
+1. **This part has no hardware RNG.** `ID_AA64ISAR0_EL1 = 0x0221100110212120`; the `RNDR` field is zero.
+   Anything that assumed `FEAT_RNG` — pointer-authentication keys first, and stack canaries, ASLR and
+   nonce generation after it — needs another source. The one that exists is `/chosen/random-seed`, 64
+   bytes iBoot leaves in the device tree, **measured across four boots to differ every time**. It is
+   hashed with a domain separator rather than sliced, so consumers are independent, and **erased on use**,
+   because deriving from it and leaving it in DRAM keeps a key-equivalent readable for the rest of the
+   boot. `/chosen/cl4-entropy` is the other candidate and is 192 bytes of zeros; recorded so nobody spends
+   the hour twice.
+2. **m1n1 is a reference, not an authority.** Its `RVBAR_ADDR` mask is `GENMASK(47,12)`; on this part bits
+   47:44 carry die/cluster/core identity and read back unchanged whatever is written. Using m1n1's mask
+   said the reset vector was **locked** when it is writable, an answer that would have routed the SMP work
+   through m1n1's spin table for no reason. Read the machine, then read m1n1 to explain what the machine
+   said.
+3. **Enabling a mitigation and enforcing it are different work.** `SCTLR.BT` was set for a full day while
+   BTI could not fire, because BTI constrains only branches into pages carrying `GP` and firmware's tables
+   carry none. Every test of "BTI enabled" passed throughout. The same shape applies to anything whose
+   enable bit lives in a register and whose effect lives in a descriptor.
+4. **Apple's SMP is neither PSCI nor spin-tables.** Cores are powered down; releasing one is a reset vector
+   written into that core's own register window plus two MMIO writes at a SoC-specific PMGR offset. The
+   hard part is not architectural — it is that the released core runs with its MMU off, so its accesses
+   bypass the data cache while the boot core's writes may still be dirty in it, in both directions, and
+   neither direction fails loudly.
+
+5. **The instrument was worth more than any of the fixes.** AS-1b sat at four-of-nine for two days on a
+   loop that produced **one bit per ten-minute physical trip**. It closed in one session once
+   `bin/as-kernel-probe.sh` made the loop forty seconds with nobody in the room. Two rules came out of it
+   and both generalise: give every step that can hang a **non-faulting oracle first** — `AT S1E1R` and
+   `AT S1E0R` answer "can this level reach this address" and cannot fault — and make every experiment its
+   own returning call, so a hang costs the step that hung rather than the forty measurements that already
+   succeeded.
+
+   Of the four defects found that session, **none was visible in its symptom**; all four presented as a
+   hang with no console, and two of them (a missing `SPSR_EL2` write, an unaligned load address) had been
+   silently present since the vector table was written.
+
 ---
 
 ## Architecture target
@@ -418,7 +456,42 @@ discharges one of AS-5-T0's five signed preconditions on a laptop.
     3. **"Blocked on the rig, not on code" was half wrong.** There was a real bug: `adt_window` computed `devtree - virt_base` with `checked_sub`, which denies every boot under m1n1, because m1n1 passes a sign-extended kernel `virt_base` far above `devtree`. Both forms occur on this same hardware, so the parser worked under iBoot and denied under m1n1 — presenting exactly as "the payload is broken". Fixed; the containment check that was the real safety property is unchanged.
 
     **What is genuinely still open:** bytes emerging from the SBU pins. Proven independent of our code, and the remaining candidates are all physical — a cable without SBU pins, the wrong port, or serial mode not surviving a reboot.
-  - **AS-1b — the aarch64 core. Four of nine items done and verified on the machine, 2026-08-16.**
+  - **AS-1b — the aarch64 core. COMPLETE, 2026-08-17. Every item verified on the machine.**
+
+    This row read "four of nine" on 2026-08-16. The remaining five landed in one
+    session, and the thing that made that possible was not effort: it was
+    replacing a debugging loop that produced **one bit per ten-minute physical
+    trip** with `bin/as-kernel-probe.sh`, which builds, loads, runs and reports
+    in about forty seconds with nobody in the room.
+
+    Four defects were found in that session, and **none of them was visible in
+    its symptom** — every one presented as a hang with no console:
+
+    1. **The exception vector tail installed `ELR_EL2` and never `SPSR_EL2`.**
+       Any exception return that *changed level* resumed at the right address at
+       the wrong level. A `brk` at EL2 could never expose it, because there the
+       stale value happens to be correct. This is what made EL2→EL1 look
+       impossible for two days.
+    2. **The payload was being loaded at an unaligned address.** `VBAR` ignores
+       bits [10:0], so a misaligned vector table is not rejected — exceptions
+       branch that many bytes short of it. It had always been luck: m1n1's
+       allocator returns whatever the heap is at, so adding 2 KiB of vector table
+       changed the alignment and turned a working probe into a hang that nothing
+       in the diff explained.
+    3. **`SCTLR.BT` had been set since the PAC work and could not fire.** BTI
+       constrains branches only into pages carrying `GP`, and on firmware's
+       tables there was nothing to set it on. Every test of "BTI enabled" passed
+       the whole time.
+    4. **A magic constant disagreed with the `movz`/`movk` sequence that builds
+       it.** `0x5EC0_11DA_B0_0757` is fourteen hex digits; the instructions build
+       sixteen. Nothing cross-checks those, and the symptom would have been a
+       secondary CPU that looked dead.
+
+    The transferable lesson is the instrument, not the fixes. Every step that
+    could hang was given a **non-faulting oracle first** — `AT S1E1R` and
+    `AT S1E0R` answer "can this level reach this address" and cannot fault — and
+    every experiment became its own returning call, so a hang costs only the
+    step that hung instead of the forty measurements that already succeeded.
 
     | item | state |
     | --- | --- |
@@ -452,7 +525,49 @@ discharges one of AS-5-T0's five signed preconditions on a laptop.
     hang you cannot explain, on a machine with no console.
 
     `src/aarch64-mmu/` (Track C, C1) is the descriptor half and is done to the hardware gate.
-  - **AS-1c — the kernel crate itself builds for aarch64.** *(Named 2026-08-14; it was implied by AS-1a's deviation 2 and scheduled nowhere.)* `src/kernel` compiles for `x86_64-unknown-none` and for nothing else: `src/kernel/src/arch/` contains ten x86-64 modules and no aarch64 sibling, `.cargo/config.toml` hardcodes `build.target = "x86_64-unknown-none"`, and `find src/kernel -iname '*aarch64*'` is empty. AS-1a deliberately deferred this — cfg-gating the whole module tree before a character had been printed risked the frozen reference build (#26) for no gain — and that was the right call for AS-1a. It stops being right the moment anything needs to *run*.
+  - **AS-1c — the kernel crate itself builds for aarch64.** *(Named 2026-08-14; it was implied by AS-1a's deviation 2 and scheduled nowhere.)*
+
+    **STATUS, 2026-08-17: the seam criterion is met and the remaining work is a grind with a number on it.**
+    `arch/aarch64/` now holds thirteen modules — `bss`, `bti`, `console`, `el`, `entropy`, `halt`, `mmu`,
+    `pac`, `registers`, `smp`, `timer`, `vectors`, `watchdog` — a linked `EM_AARCH64` binary comes out, and
+    every one of them has been exercised on the machine. What is left is that the *rest* of the kernel is
+    still x86-only.
+
+    **Measured 2026-08-17, and the previously recorded figure was stale: 159 gate sites, not 150.**
+    42 `bare_metal_x86` plus 117 `target_arch = "x86_64"`. It grew because the port added gates, which is
+    the expected direction and is worth stating so the number is not read as drift.
+
+    | subsystem | sites | note |
+    | --- | --- | --- |
+    | `hardware_security` | 93 | 26 of them in `tpm/` have **no aarch64 successor at all** (#24) |
+    | `syscall` | 14 | |
+    | `arch` | 14 | the x86 backend itself; these stay gated |
+    | `process` | 10 | |
+    | `main.rs` | 9 | entry ABI; the aarch64 half already exists beside it |
+    | `boot` | 9 | 7 of them in `hardware_security_init` |
+    | `capability` | 4 | `audit_log_protection` |
+    | `lib.rs` | 4 | |
+    | `scheduler`, `memory` | 1 each | `context_switch`, `virtual_address_layout` |
+
+    Against 16 aarch64 gate sites. The distribution is the useful part: **more than half of everything left
+    is one subsystem**, and a quarter of *that* has nowhere to go on this platform. `scheduler`, `memory`
+    and `capability` are six sites between them and are the cheap end.
+
+    The original framing below is kept because its correction is instructive.
+
+    **SUPERSEDED, and the paragraph that follows was true when written and is now false in every clause.**
+    `src/kernel/src/arch/` no longer contains "no aarch64 sibling", `find src/kernel -iname '*aarch64*'` is
+    no longer empty, and `.cargo/config.toml`'s hardcoded target is no longer the only path — the aarch64
+    build is driven by the pinned toolchain with `--target` explicit, which is what `bin/as-kernel-probe.sh`
+    does. Left in place rather than rewritten, because it records what the row was reasoning from:
+
+    > `src/kernel` compiles for `x86_64-unknown-none` and for nothing else: `src/kernel/src/arch/` contains
+    > ten x86-64 modules and no aarch64 sibling, `.cargo/config.toml` hardcodes
+    > `build.target = "x86_64-unknown-none"`, and `find src/kernel -iname '*aarch64*'` is empty.
+
+    AS-1a deliberately deferred this — cfg-gating the whole module tree before a character had been printed
+    risked the frozen reference build (#26) for no gain — and that was the right call for AS-1a. It stops
+    being right the moment anything needs to *run*.
 
     **This is the dependency behind every "what remains needs a kernel" note in Track A.** `servd`'s `transportd` accept and its minted `CapServe`/`CapAdmin`, `modeld`'s storage read and region seal, `inferd`'s real IPC, `auditd`'s persistence, A12's deletion of `ssh_bridge.rs`, and A13's FP context switch are all waiting on one thing, and this row is that thing. Naming it separately is the point: five rows blocked on an unnamed task read as five independent stalls.
 
@@ -480,7 +595,15 @@ discharges one of AS-5-T0's five signed preconditions on a laptop.
     `/opt/homebrew/Cellar/rust/<ver>`, which has no bare-metal targets — so the port appears to fail with
     `can't find crate for core` while `rustup target list --installed` insists the target is there.
     `bin/as-boot.sh` already documents the fix and every aarch64 command must follow it: invoke the pinned
-    toolchain by absolute path out of `~/.rustup/toolchains/`, with `RUSTC` and `RUSTDOC` set to match. Scope: `arch/aarch64/` with the AS-1b core behind it, cfg gates over the module tree, a second `.cargo` target profile, and CI building both. **S** impl / **O** review — the context-switch and syscall entry paths are TCB. Deps: AS-1b. Verify: both bare-metal builds green in CI; x86-64 boot parity against the current QEMU job, which is the frozen reference's own regression bar (#26).
+    toolchain by absolute path out of `~/.rustup/toolchains/`, with `RUSTC` and `RUSTDOC` set to match. Scope: `arch/aarch64/` with the AS-1b core behind it, cfg gates over the module tree, a second `.cargo` target profile, and CI building both. **S** impl / **O** review — the context-switch and syscall entry paths are TCB. Deps: AS-1b — **discharged 2026-08-17**, the core is complete and hardware-verified. Verify: both bare-metal builds green in CI; x86-64 boot parity against the current QEMU job, which is the frozen reference's own regression bar (#26).
+
+    **Cheapest next slices, ranked by sites-per-subsystem rather than by importance**, because this row is
+    now a grind and the ordering that matters is the one that keeps the aarch64 build honest as it grows:
+    `scheduler` and `memory` (1 each), `capability` (4), `lib.rs` (4), `boot` (9, seven of them in
+    `hardware_security_init`), then `process` (10), `syscall` (14). `hardware_security` (93) is last and
+    needs its own decision, because 26 of its sites are `tpm/` and have **no aarch64 successor at all**
+    (#24) — that is a scope question, not an implementation one, and answering it is worth more than
+    starting on the other 67.
 
   **Two deviations from this document, recorded rather than left silent:**
 
@@ -737,7 +860,9 @@ this project to verify and the discipline `INV-PARSE-001` already demands.
 | C3 | **AS-3a** — DART model + **the IOMMU trait** | **DONE 2026-08-14 for the trait half.** `src/dart/` + `src/dart-verify/`: five Kani harnesses proving no holder operation widens a window, including one over a symbolic *pair* of operations. Deny-all is the `Default`. Kani found a real defect — a window whose extent overflows `u64` contains nothing, not even itself — fixed at construction rather than assumed away. **Still owed: per-instance ADT discovery, the PTE formats, register programming, and honest locked-DART semantics.** | Programming a real DART; DMA fault injection |
 | C4 | **AS-4a1** *(new slice)* — RTKit + ANS2 codecs | Mailbox message encode/decode and the ANS2 command/completion structures, as fail-closed parsers with fuzz targets | Talking to the co-processor |
 | C5 | **AS-4b1** — PCIe/NIC descriptor formats | **STARTED 2026-08-14**: `src/pcie-config/` walks the capability list with three independent termination bounds and two Kani proofs over symbolic pointers — the cyclic-list termination the tier table requires. PCI-SIG's layout, so no clean-room spec is needed. NIC descriptors remain. | Link training, TX/RX |
-| C6 | **AS-1c** — the kernel crate goes aarch64 | **STARTED 2026-08-14 — the seam landed and it measured the job.** `arch/aarch64/` exists as a module with no implementations, and the five previously-**ungated** x86-64 modules (`context_switch_assembly`, `hardware_registers`, `interrupts`, `paging`, `timer`) are now behind `target_arch = "x86_64"`, so an aarch64 build no longer swallows an x86 page-table walker and a bare `asm!("cli")`. Frozen reference verified unchanged by construction and by `cargo check --target x86_64-unknown-none`. **The measurement is the deliverable: 150 x86 gate sites** — 42 `bare_metal_x86` + 108 `target_arch = "x86_64"` — concentrated in `hardware_security` (67, plus 26 more in its `tpm/` subtree that have **no aarch64 successor at all**, #24), `syscall` (14), `arch` (14), `process` (10), `boot` (9). Every one is either frozen-reference-that-stays-gated or a backend that must be written. ~~**The aarch64 build is still green and still means nothing**~~ — **no longer true as of 2026-08-16.** `arch/aarch64/` now carries a real backend (`console`, `halt`, `registers`, `timer`, `vectors`, `mmu`, `bss`), `main.rs` has a cfg-gated aarch64 `_start` taking `boot_args` in `x0`, `build.rs` emits `bare_metal_aarch64`, and `linker-aarch64.ld` links at 0 rather than the x86 higher-half base that only exists once that bootloader's page tables are live. **A linked binary comes out** — `EM_AARCH64`, entry `0x0`, one `PT_LOAD` — and it has **run on the machine**: `kernel_probe` returned its magic, resolved the console from the real ADT to the address m1n1 independently printed, and reported EL2. The 150 gate sites are still mostly x86 and still mostly evaluate false; what changed is that the aarch64 side is no longer empty. *(Local caveat: `cargo build` for `x86_64-unknown-none` **segfaults rustc** when cross-compiling from this aarch64 workstation, so the frozen reference is checkable locally only via `cargo check`; a full build is CI's job.)* | ~~Whether any of it executes~~ — **it executes.** Verified through m1n1's proxy rather than by a serial banner, because this rig's SBU serial path delivers nothing even for m1n1 itself (see [`operations/FIRST_LIGHT_RUNBOOK.md`](operations/FIRST_LIGHT_RUNBOOK.md) §9a). The banner is still owed; what it would have proved is now proved another way. | The seam criterion — *does a backend exist behind it and does a linked binary come out* — is **met**. | Remaining: the 150 gate sites still need aarch64 successors one subsystem at a time, and 26 of them in `tpm/` have none at all (#24). |
+| C6 | **AS-1c** — the kernel crate goes aarch64 | **STARTED 2026-08-14 — the seam landed and it measured the job.** `arch/aarch64/` exists as a module with no implementations, and the five previously-**ungated** x86-64 modules (`context_switch_assembly`, `hardware_registers`, `interrupts`, `paging`, `timer`) are now behind `target_arch = "x86_64"`, so an aarch64 build no longer swallows an x86 page-table walker and a bare `asm!("cli")`. Frozen reference verified unchanged by construction and by `cargo check --target x86_64-unknown-none`. **The measurement is the deliverable: 159 x86 gate sites as of 2026-08-17** — 42 `bare_metal_x86` + 117 `target_arch = "x86_64"`, re-counted and up from the 150 first recorded, because the port itself added gates — concentrated in `hardware_security` (93 including the 26 in its `tpm/` subtree that have **no aarch64 successor at all**, #24), `syscall` (14), `arch` (14), `process` (10), `main.rs` (9), `boot` (9), `capability` (4), `lib.rs` (4), and one each in `scheduler` and `memory`. Against **16** aarch64 gate sites. Every one is either frozen-reference-that-stays-gated or a backend that must be written. ~~**The aarch64 build is still green and still means nothing**~~ — **no longer true as of 2026-08-16.** `arch/aarch64/` now carries a real backend (`console`, `halt`, `registers`, `timer`, `vectors`, `mmu`, `bss`), `main.rs` has a cfg-gated aarch64 `_start` taking `boot_args` in `x0`, `build.rs` emits `bare_metal_aarch64`, and `linker-aarch64.ld` links at 0 rather than the x86 higher-half base that only exists once that bootloader's page tables are live. **A linked binary comes out** — `EM_AARCH64`, entry `0x0`, one `PT_LOAD` — and it has **run on the machine**: `kernel_probe` returned its magic, resolved the console from the real ADT to the address m1n1 independently printed, and reported EL2. The gate sites are still mostly x86 and still mostly evaluate false; what changed is that the aarch64 side is no longer empty.
+
+**2026-08-17: `arch/aarch64/` is now thirteen modules and all of them have run on the machine.** `bss`, `bti`, `console`, `el`, `entropy`, `halt`, `mmu`, `pac`, `registers`, `smp`, `timer`, `vectors`, `watchdog`. AS-1b, the row this one depends on, is **complete** — EL0 and EL1 both reached, syscalls dispatched and returned from in both directions, page tables this repository built installed and run on, pointer authentication live on a key derived from a per-boot seed that is then erased, BTI enforced, and a second CPU released out of reset. One command reproduces all of it: `bin/as-kernel-probe.sh`. So the dependency is discharged and what remains in this row is the gate-site grind, not a blocked prerequisite. *(Local caveat: `cargo build` for `x86_64-unknown-none` **segfaults rustc** when cross-compiling from this aarch64 workstation, so the frozen reference is checkable locally only via `cargo check`; a full build is CI's job.)* | ~~Whether any of it executes~~ — **it executes.** Verified through m1n1's proxy rather than by a serial banner, because this rig's SBU serial path delivers nothing even for m1n1 itself (see [`operations/FIRST_LIGHT_RUNBOOK.md`](operations/FIRST_LIGHT_RUNBOOK.md) §9a). The banner is still owed; what it would have proved is now proved another way. | The seam criterion — *does a backend exist behind it and does a linked binary come out* — is **met**. | Remaining: the **159** gate sites still need aarch64 successors one subsystem at a time, and 26 of them in `tpm/` have none at all (#24). Ranked slices are in the AS-1 list above; `hardware_security` is over half the total and its `tpm/` quarter is a scope question before it is an implementation one. |
 | C7 | **AS-1a2** *(new slice, proposed 2026-08-14 — needs owner sign-off, because it changes a written exit criterion; **re-rated upward the same day**, see OQ-5 below)* — **framebuffer first light** | The `video` field of `boot_args` — the same structure AS-0-T4 already parses and whose module doc records that it deliberately skips this field — plus a font blitter into the framebuffer iBoot hands us. Both are pure functions over bytes, so both are unit-tested and fuzzed like every other firmware-supplied structure (`INV-PARSE-001`). | Whether the framebuffer base iBoot reports is where the pixels actually are |
 
 **C3 is the highest-value row in this table and it is not obvious why.** AS-5-T0 precondition 2 — a Kani
