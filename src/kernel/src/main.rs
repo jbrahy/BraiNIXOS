@@ -537,6 +537,25 @@ fn el1_stack_top() -> u64 {
     unsafe { (core::ptr::addr_of_mut!(EL1_STACK) as u64).wrapping_add(4096) & !0xF }
 }
 
+/// `SP_EL0` for the user excursion.
+///
+/// The EL0 code makes two `SVC`s and no memory access, so this is never
+/// dereferenced. It is set anyway, and to memory this image owns: `SP_EL0` is
+/// otherwise whatever was left in it, and a stray access at EL0 would then land
+/// on an arbitrary address instead of faulting somewhere attributable.
+///
+/// Its own allocation rather than a slice of EL1's, so that when EL0 does need
+/// a writable stack it can be mapped without also handing userspace the page
+/// holding the kernel's saved registers.
+#[cfg(target_arch = "aarch64")]
+fn el0_stack_top() -> u64 {
+    #[repr(align(16384))]
+    struct El0Stack([u8; 16384]);
+    static mut EL0_STACK: El0Stack = El0Stack([0; 16384]);
+    // SAFETY: single-threaded probe; only the address is taken.
+    unsafe { (core::ptr::addr_of_mut!(EL0_STACK) as u64).wrapping_add(16384) & !0xF }
+}
+
 /// Magic returned by [`el1_probe`].
 #[cfg(target_arch = "aarch64")]
 pub const EL1_PROBE_MAGIC: u64 = 0x4B72_6E6C_4E49_5803; // "Krnl NIX\x03"
@@ -738,6 +757,34 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
             // of this probe, which is printed and scrolled back through.
             put(6, seed.first_eight);
             put(7, u64::from(seed.erased));
+        }
+        7 => {
+            // EL0. The first time anything in this project runs unprivileged.
+            //
+            // SAFETY: inside `with_vectors` so the HVC home has an EL2 handler,
+            // and the excursion refuses to `eret` unless the MMU has confirmed
+            // that EL0 can reach its page and CANNOT reach the kernel's.
+            let user = unsafe {
+                brainix_kernel::arch::aarch64::with_vectors(|| {
+                    brainix_kernel::arch::aarch64::el::drop_to_el0_and_return(
+                        el1_stack_top(),
+                        el0_stack_top(),
+                    )
+                })
+            };
+            put(1, user.user_root);
+            put(2, user.tables_used as u64);
+            put(3, user.user_page);
+            put(4, user.par_kernel_from_el1);
+            put(5, user.par_user_from_el0);
+            put(6, user.par_kernel_from_el0);
+            put(7, u64::from(user.entered));
+            put(8, user.svc[0]);
+            put(9, user.svc[1]);
+            put(10, user.svc[3]);
+            put(11, user.fault[1]);
+            put(12, user.error);
+            put(13, user.hcr_after);
         }
         _ => {}
     }

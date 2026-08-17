@@ -186,6 +186,103 @@ struct TableArena([u64; 2048 * 6]);
 
 static mut BUILT_TABLES: TableArena = TableArena([0; 2048 * 6]);
 
+/// A second arena, for the EL1/EL0 regime.
+///
+/// Separate from [`BUILT_TABLES`] rather than shared, because the two are
+/// installed in different registers and one of them is live while the other is
+/// being built. Reusing one arena would mean the EL0 excursion overwrites the
+/// table `TTBR0_EL2` is walking.
+///
+/// Seven tables: root, intermediate, the leaf holding DRAM's blocks, and one
+/// more for the 32 MiB the user page lives in, split into 16 KiB pages. Plus
+/// slack.
+#[repr(align(16384))]
+struct UserArena([u64; 2048 * 7]);
+
+static mut USER_TABLES: UserArena = UserArena([0; 2048 * 7]);
+
+/// `AP[1]`, bit 6: the mapping is reachable from EL0.
+pub const AP_EL0: u64 = 1 << 6;
+/// `PXN`, bit 53: privileged execute never.
+pub const PXN: u64 = 1 << 53;
+/// `UXN`, bit 54: unprivileged execute never.
+pub const UXN: u64 = 1 << 54;
+
+/// Build an EL1 regime in which exactly one page is reachable from EL0.
+///
+/// # The shape, and why it is not simpler
+///
+/// All of DRAM as kernel-only blocks, except the 32 MiB containing `user_page`,
+/// which is laid out as individual granule-sized pages so that one of them --
+/// and only one -- carries `AP[1]`. Marking the *block* accessible instead would
+/// be one line shorter and would hand userspace 32 MiB of whatever else lives
+/// nearby, which here is the kernel's own code.
+///
+/// The user page also gets `PXN`: EL1 must not execute memory EL0 can write.
+/// Everything else gets `UXN`, so EL0 cannot execute the kernel even if a
+/// permission bug ever made it readable.
+///
+/// Returns the root and how many tables it cost.
+///
+/// # Safety
+///
+/// Writes `USER_TABLES`. Single-threaded, and the caller must not have this
+/// root installed while calling.
+pub unsafe fn build_user_root(
+    user_page: u64,
+    granule_bits: u32,
+    input_bits: u32,
+    kernel_attributes: u64,
+) -> Result<(u64, usize), BuildError> {
+    // SAFETY: `USER_TABLES` is ours, 16 KiB aligned, single-threaded here.
+    let arena: &mut [u64] = unsafe { &mut (*core::ptr::addr_of_mut!(USER_TABLES)).0 };
+    let arena_base = arena.as_ptr() as u64;
+    let mut builder = TableBuilder::new(arena, arena_base, granule_bits, input_bits)?;
+
+    let granule = 1u64 << granule_bits;
+    let block = builder.block_size();
+    let split_start = user_page & !(block.saturating_sub(1));
+    if split_start < DRAM_BASE || split_start >= DRAM_BASE.saturating_add(DRAM_SIZE) {
+        return Err(BuildError::AddressOutOfRange);
+    }
+
+    // The fine-grained region FIRST. `map_blocks` refuses to overwrite a table
+    // descriptor, and `map_pages` refuses to split a live block, so the order is
+    // forced -- which is the intended shape of both refusals rather than an
+    // inconvenience. See `aarch64_tables::map_pages`.
+    let mut offset = 0u64;
+    while offset < block {
+        let page = split_start.saturating_add(offset);
+        let attributes = if page == user_page {
+            // Reachable from EL0, executable by EL0, and NOT executable by EL1.
+            (kernel_attributes | AP_EL0 | PXN) & !UXN
+        } else {
+            // Kernel-only, and not executable from EL0 even if that changes.
+            kernel_attributes | UXN
+        };
+        builder.map_pages(page, page, granule, attributes)?;
+        offset = offset.saturating_add(granule);
+    }
+
+    // Then DRAM either side of it, in blocks.
+    let before = split_start.saturating_sub(DRAM_BASE);
+    if before > 0 {
+        builder.map_blocks(DRAM_BASE, DRAM_BASE, before, kernel_attributes | UXN)?;
+    }
+    let after_start = split_start.saturating_add(block);
+    let dram_end = DRAM_BASE.saturating_add(DRAM_SIZE);
+    if after_start < dram_end {
+        builder.map_blocks(
+            after_start,
+            after_start,
+            dram_end.saturating_sub(after_start),
+            kernel_attributes | UXN,
+        )?;
+    }
+
+    Ok((builder.root(), builder.tables_used()))
+}
+
 /// What building and installing our own tables produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuiltRootReport {

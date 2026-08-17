@@ -279,7 +279,7 @@ static EL1_FAULT_RECORD: [AtomicU64; 4] = [
     AtomicU64::new(EL1_FAULT_POISON),
 ];
 
-/// What an `SVC` at EL1 recorded: count, `ESR_EL1`, `ELR_EL1`.
+/// What an `SVC` recorded: count, `ESR_EL1`, `ELR_EL1`, caller `SPSR.M`.
 ///
 /// The count is first and is what distinguishes "no system call was made" from
 /// "one was made and its syndrome happened to be zero". It is incremented with
@@ -287,14 +287,41 @@ static EL1_FAULT_RECORD: [AtomicU64; 4] = [
 /// every plain store in a handler landed correctly while `fetch_add` on a
 /// counter read back as zero, because a read-modify-write needs the exclusive
 /// monitor to work on the memory it targets and a plain store does not.
-static EL1_SVC_RECORD: [AtomicU64; 3] = [
+///
+/// # The count is cumulative, and callers must treat it that way
+///
+/// The poison initialisers put this array in `.data`, not `.bss`, so
+/// `bss::zero` does **not** reset it and the count accumulates for as long as
+/// the image stays loaded -- across every `p.call` in a proxy session. That is
+/// the same shape as the bug that made the first exception readings
+/// unreproducible, arriving from the opposite direction: there, statics were
+/// never initialised; here, they are never *re*-initialised.
+///
+/// It is left this way on purpose. Zeroing the count at every entry point would
+/// hide a handler that ran when nothing asked it to. Excursions take a snapshot
+/// before they start and report the difference, so each reports what it did
+/// rather than what the session has done.
+static EL1_SVC_RECORD: [AtomicU64; 4] = [
     AtomicU64::new(0),
+    AtomicU64::new(EL1_FAULT_POISON),
     AtomicU64::new(EL1_FAULT_POISON),
     AtomicU64::new(EL1_FAULT_POISON),
 ];
 
 /// `ESR_ELx.EC` for an `SVC` executed in AArch64 state.
 pub const EC_SVC_AARCH64: u64 = 0x15;
+
+/// `SVC` immediate meaning "record this and put me back where I was".
+pub const SVC_RESUME: u64 = 0x55;
+/// `SVC` immediate meaning "record this and leave for EL2".
+///
+/// EL0 has no way to reach EL2 directly, so the way out of a user excursion is
+/// for EL1's handler to make the `HVC` on its behalf. Distinguishing the two by
+/// **immediate** rather than by a counter keeps the handler stateless: a
+/// counter would make the handler's behaviour depend on how many times it had
+/// run, which is exactly the property that made the exception statics
+/// unreadable across probe runs before `.bss` was zeroed.
+pub const SVC_LEAVE: u64 = 0x56;
 
 core::arch::global_asm!(
     r#"
@@ -355,7 +382,7 @@ brainix_el1_common:
     str  x3, [x1, #24]
     hvc  #0
 
-    // ---- a system call: record it and go back -----------------------------
+    // ---- a system call: record it, then resume or leave -------------------
 1:
     adrp x1, {svc}
     add  x1, x1, :lo12:{svc}
@@ -370,10 +397,25 @@ brainix_el1_common:
     // instruction of the caller.
     mrs  x3, ELR_EL1
     str  x3, [x1, #16]
+    // Record the level the call came from, taken from SPSR_EL1.M[3:0]: 0 is
+    // EL0t, 4 is EL1t, 5 is EL1h. Without this, an SVC from EL0 and one from
+    // EL1 produce identical records, and "userspace made a system call" is the
+    // claim the whole excursion exists to support.
+    mrs  x3, SPSR_EL1
+    and  x3, x3, #0xF
+    str  x3, [x1, #24]
+    // SVC_LEAVE means the caller cannot get itself home: EL0 has no way to
+    // reach EL2, so EL1 makes the HVC on its behalf. The redirect the excursion
+    // registered is still pending, so this lands back at the EL2 landing pad.
+    and  x3, x2, #0xFFFF
+    cmp  x3, #0x56
+    b.eq 2f
     ldp  x2, x3, [sp, #(16 * 1)]
     ldp  x0, x1, [sp, #(16 * 0)]
     add  sp, sp, #(16 * 2)
     eret
+2:
+    hvc  #0
 "#,
     fault = sym EL1_FAULT_RECORD,
     svc = sym EL1_SVC_RECORD,
@@ -401,15 +443,58 @@ pub fn el1_fault() -> [u64; 4] {
     ]
 }
 
-/// What an `SVC` at EL1 recorded: `[count, ESR_EL1, ELR_EL1]`.
+/// What the last `SVC` recorded: `[count, ESR_EL1, ELR_EL1, caller SPSR.M]`.
 ///
-/// A count of zero means no system call was dispatched.
-pub fn el1_svc() -> [u64; 3] {
+/// A count of zero means no system call was dispatched. The caller mode is
+/// `SPSR_EL1.M[3:0]`: **0 is EL0t**, 4 is EL1t, 5 is EL1h.
+pub fn el1_svc() -> [u64; 4] {
     [
         EL1_SVC_RECORD[0].load(Ordering::Relaxed),
         EL1_SVC_RECORD[1].load(Ordering::Relaxed),
         EL1_SVC_RECORD[2].load(Ordering::Relaxed),
+        EL1_SVC_RECORD[3].load(Ordering::Relaxed),
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Code that runs at EL0.
+//
+// In a section of its own, aligned to the 16 KiB granule at both ends, because
+// the page containing it is going to be marked reachable from EL0. Anything
+// sharing that page is handed to userspace along with it -- and at this granule
+// a page holds four thousand instructions, so "it will probably be alone" is not
+// a thing worth assuming. The trailing `.balign` pads the section out so the
+// next function starts on the following page.
+// ---------------------------------------------------------------------------
+
+core::arch::global_asm!(
+    r#"
+.section .text.el0, "ax"
+.balign 16384
+.globl brainix_el0_entry
+brainix_el0_entry:
+    // Two calls, because one proves half of it. The first has to come back --
+    // that is a system call returning to userspace, which is the thing a kernel
+    // does constantly and a trap test never shows. The second is the way out.
+    svc #0x55
+    svc #0x56
+    // Unreachable. A landing pad that falls through into whatever the linker
+    // put next would run kernel code at EL0 with no indication it had happened.
+1:  b 1b
+.balign 16384
+"#
+);
+
+extern "C" {
+    /// The EL0 entry point, defined above.
+    static brainix_el0_entry: u8;
+}
+
+/// Address of the code that runs at EL0.
+pub fn el0_entry_address() -> u64 {
+    // SAFETY: taking the address of an `extern` symbol defined in this crate's
+    // own assembly. Never dereferenced.
+    unsafe { core::ptr::addr_of!(brainix_el0_entry) as u64 }
 }
 
 /// Vector index of the last exception taken, or [`NO_EXCEPTION`].

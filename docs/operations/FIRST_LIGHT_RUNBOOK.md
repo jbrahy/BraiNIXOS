@@ -609,6 +609,56 @@ Check all four. A dispatch count alone does not say *which* trap arrived, the
 syndrome alone does not say EL1 resumed, and the absence of a fault record is
 what proves the return path rather than the entry path.
 
+### Getting to EL0
+
+**Give the user page its own page, at both ends.** The EL0 code lives in a
+section with `.balign 16384` before *and* after it. At this granule a page holds
+four thousand instructions, so anything sharing it is handed to userspace along
+with the code — verify with `llvm-nm -n` that no other symbol falls in the range.
+
+**One page, not one block.** The smallest thing a block descriptor can say
+anything about at a 16 KiB granule is 32 MiB. Marking the block EL0-accessible
+is shorter and hands userspace the kernel's own code, so the 32 MiB containing
+the user page is laid out as individual pages instead. Map the fine-grained
+region **first**: the builder refuses to overwrite a table descriptor with a
+block, and refuses to split a live block into pages, so the order is forced.
+
+**Set `PXN` on user pages and `UXN` on kernel pages.** EL1 must not execute
+memory EL0 can write, and EL0 must not execute the kernel even if a permission
+bug ever made it readable.
+
+**The gate is three `AT` instructions, and the one that matters must fail.**
+
+```
+kernel@EL1  0xff0001000c6f0b00  -> PA 0x1000c6f0000     must succeed
+user@EL0    0xff0001000c6d0b00  -> PA 0x1000c6d0000     must succeed
+kernel@EL0  0x000000000000081f  UNREACHABLE (FST 0xf)   MUST FAIL
+```
+
+`AT S1E0R` applies the unprivileged permission rules, so it answers "can
+userspace reach this" rather than "is this mapped". Without the third question a
+regime that accidentally made all of DRAM EL0-accessible passes every other
+check. `AT` cannot fault, so the whole gate is free — and the `eret` to EL0 does
+not happen unless all three answer correctly. Note `TGE` must be clear first, or
+these describe the EL2&0 regime and say nothing about EL0 under EL1.
+
+**Record the caller's exception level.** `SPSR_EL1.M[3:0]` is 0 for EL0t and 5
+for EL1h. Without it an `SVC` from EL0 and one from EL1 produce identical
+records, and "userspace made a system call" is the entire claim.
+
+**Two calls, not one.** A syscall that *returns to userspace* is what a kernel
+does constantly, and no trap test shows it. EL0 cannot reach EL2 itself, so the
+second call carries a different immediate and EL1's handler makes the `HVC` on
+its behalf. Split on the immediate rather than a counter: a handler whose
+behaviour depends on how many times it has run is the same shape as the bug that
+made the exception statics unreadable across probe runs.
+
+**Counters in `.data` do not get zeroed.** `bss::zero` resets `.bss`. A static
+with a non-zero initialiser lives in `.data` and accumulates for as long as the
+image stays loaded — across every `p.call` in a session. The syscall count read
+3 instead of 2 for exactly this reason. Excursions snapshot before they start
+and report the difference.
+
 ## 9g. Pointer authentication: enabled is not the same as working
 
 `SCTLR` bits for features a part does not implement are **RES0** — the write is

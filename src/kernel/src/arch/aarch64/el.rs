@@ -61,10 +61,11 @@ pub struct Excursion {
     /// All four still poisoned means EL1 ran to its `hvc` without faulting,
     /// which is the outcome being aimed at.
     pub el1_fault: [u64; 4],
-    /// `[count, ESR_EL1, ELR_EL1]` from the `SVC` dispatched at EL1.
+    /// `[count, ESR_EL1, ELR_EL1, caller SPSR.M]` from the last `SVC`.
     ///
-    /// Count zero when the excursion was asked not to make one.
-    pub el1_svc: [u64; 3],
+    /// Count zero when the excursion was asked not to make one. The caller mode
+    /// is 0 for EL0t, 5 for EL1h.
+    pub el1_svc: [u64; 4],
 }
 
 /// Immediate carried by the `SVC` the excursion issues.
@@ -95,6 +96,10 @@ pub const PROBE_SVC_IMMEDIATE: u64 = 0x42;
 /// handler, and with `el1_stack` pointing at memory this image owns.
 pub unsafe fn drop_to_el1_and_return(el1_stack: u64, issue_svc: bool) -> Excursion {
     let hcr_before = registers::hcr_el2();
+    // See `vectors::EL1_SVC_RECORD`: the count is cumulative for the life of the
+    // loaded image, so this excursion reports the difference rather than the
+    // total.
+    let svc_before = vectors::el1_svc()[0];
 
     // Give EL1 the same translation regime, attributes and vectors EL2 is using.
     // Without this the first fetch at EL1 has no mapping.
@@ -180,7 +185,11 @@ pub unsafe fn drop_to_el1_and_return(el1_stack: u64, issue_svc: bool) -> Excursi
         hcr_after: registers::hcr_el2(),
         return_vector: vectors::last_exception().index,
         el1_fault: vectors::el1_fault(),
-        el1_svc: vectors::el1_svc(),
+        el1_svc: {
+            let mut svc = vectors::el1_svc();
+            svc[0] = svc[0].saturating_sub(svc_before);
+            svc
+        },
     }
 }
 
@@ -315,6 +324,234 @@ unsafe fn program_el1_registers() {
             options(nomem, nostack)
         );
     }
+}
+
+/// `SPSR` selecting EL0t with all interrupts masked.
+///
+/// `M[3:0] = 0b0000`. EL0 has only `SP_EL0`, so there is no `h` variant to
+/// choose; the `t` is the whole of it.
+const SPSR_EL0T_MASKED: u64 = 0x3C0;
+
+/// What a trip through EL0 observed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserExcursion {
+    /// Root of the regime built for EL1 and EL0.
+    pub user_root: u64,
+    /// Tables it cost.
+    pub tables_used: usize,
+    /// The page made reachable from EL0.
+    pub user_page: u64,
+    /// `PAR_EL1` from `AT S1E1R` on the EL1 code. Must succeed.
+    pub par_kernel_from_el1: u64,
+    /// `PAR_EL1` from `AT S1E0R` on the user page. Must succeed.
+    pub par_user_from_el0: u64,
+    /// `PAR_EL1` from `AT S1E0R` on a **kernel** page.
+    ///
+    /// Must **fail**. This is the isolation check, and it is the only one of the
+    /// three that can distinguish a working user mapping from one that simply
+    /// made everything reachable. It costs nothing: `AT` cannot fault.
+    pub par_kernel_from_el0: u64,
+    /// Whether the excursion was actually run.
+    pub entered: bool,
+    /// `[count, ESR_EL1, ELR_EL1, caller SPSR.M]` of the last `SVC`.
+    pub svc: [u64; 4],
+    /// `[index, ESR_EL1, ELR_EL1, FAR_EL1]` if anything faulted.
+    pub fault: [u64; 4],
+    /// `HCR_EL2` after restoring.
+    pub hcr_after: u64,
+    /// Build failure code, or 0.
+    pub error: u64,
+}
+
+/// Drop through EL1 to **EL0**, make two system calls, and come back.
+///
+/// # What this proves that the EL1 excursion does not
+///
+/// EL1 running our code means the kernel can change its own privilege level.
+/// EL0 running our code means there is a *boundary*: a level that reaches one
+/// page and not the rest, and a way across it that firmware does not mediate.
+/// Everything this project is for lives on the far side of that line.
+///
+/// Two calls, deliberately. `SVC_RESUME` has to come back to EL0 -- a system
+/// call that returns to userspace is what a kernel does constantly, and no trap
+/// test shows it. `SVC_LEAVE` is the way out, made by EL1 on EL0's behalf
+/// because EL0 cannot reach EL2 itself.
+///
+/// # The gate
+///
+/// Before the `eret`, three `AT` instructions ask the MMU what each level can
+/// reach. Two must succeed and **one must fail** -- `AT S1E0R` on a kernel page.
+/// Without that third question, a regime that accidentally made all of DRAM
+/// EL0-accessible would pass every other check in this function.
+///
+/// # Safety
+///
+/// Changes `HCR_EL2`, installs a translation regime for EL1 and EL0, and
+/// executes at both. Must be called inside [`vectors::with_vectors`], and
+/// `el1_stack`/`el0_stack` must point at memory this image owns.
+pub unsafe fn drop_to_el0_and_return(el1_stack: u64, el0_stack: u64) -> UserExcursion {
+    let hcr_before = registers::hcr_el2();
+    let svc_before = vectors::el1_svc()[0];
+    let user_page = vectors::el0_entry_address() & !((1u64 << 14) - 1);
+
+    let mut excursion = UserExcursion {
+        user_root: 0,
+        tables_used: 0,
+        user_page,
+        par_kernel_from_el1: 0,
+        par_user_from_el0: 0,
+        par_kernel_from_el0: 0,
+        entered: false,
+        svc: [0; 4],
+        fault: vectors::el1_fault(),
+        hcr_after: hcr_before,
+        error: 0,
+    };
+
+    let tcr = registers::tcr_el2();
+    let Some(config) = crate::aarch64_walk::WalkConfig::from_tcr(tcr) else {
+        excursion.error = 5;
+        return excursion;
+    };
+
+    // Attributes from a live descriptor, not invented. Memory type is an index
+    // into MAIR, so a plausible constant produces a regime that resolves and
+    // cannot be executed -- the mistake that made the first EL1 drop look
+    // impossible.
+    let live_root = registers::ttbr0_el2() & 0x0000_FFFF_FFFF_FFFE;
+    let granule = 1u64 << config.granule_bits;
+    let address_mask = ((1u64 << 48) - 1) & !(granule - 1);
+    // SAFETY: reading descriptors from physical addresses the live tables point
+    // at, under the identity mapping m1n1 leaves in force.
+    let live = crate::aarch64_walk::walk(live_root, user_page, config, |pa| unsafe {
+        core::ptr::read_volatile(pa as usize as *const u64)
+    });
+    let Ok(live) = live else {
+        excursion.error = 3;
+        return excursion;
+    };
+    let kernel_attributes = live.descriptor & !address_mask & !0b11;
+
+    // SAFETY: nothing has this root installed yet.
+    match unsafe {
+        super::mmu::build_user_root(
+            user_page,
+            config.granule_bits,
+            config.input_address_bits(),
+            kernel_attributes,
+        )
+    } {
+        Ok((root, tables)) => {
+            excursion.user_root = root;
+            excursion.tables_used = tables;
+        }
+        Err(error) => {
+            excursion.error = super::mmu::build_error_code(error);
+            return excursion;
+        }
+    }
+
+    // Install it as EL1's regime, with TGE clear so the _EL12 registers and the
+    // `AT S1E*` instructions describe EL1&0 rather than EL2&0.
+    //
+    // SAFETY: EL2 keeps walking TTBR0_EL2 throughout; only EL1's and EL0's
+    // regime changes, and nothing is executing there yet.
+    unsafe {
+        core::arch::asm!(
+            "msr s3_5_c2_c0_0, {ttbr0}",    // TTBR0_EL12
+            "msr s3_5_c2_c0_2, {tcr}",      // TCR_EL12
+            "msr s3_5_c1_c0_0, {sctlr}",    // SCTLR_EL12
+            "msr s3_5_c10_c2_0, {mair}",    // MAIR_EL12
+            "msr s3_5_c12_c0_0, {vbar}",    // VBAR_EL12
+            "mrs {tmp}, HCR_EL2",
+            "bic {tmp}, {tmp}, {tge}",
+            "msr HCR_EL2, {tmp}",
+            "isb",
+            "tlbi vmalle1is",
+            "dsb ish",
+            "isb",
+            tmp = out(reg) _,
+            ttbr0 = in(reg) excursion.user_root,
+            tcr = in(reg) tcr,
+            sctlr = in(reg) registers::sctlr_el1(),
+            mair = in(reg) registers::mair_el1(),
+            vbar = in(reg) vectors::el1_table_address(),
+            tge = in(reg) HCR_TGE,
+            options(nomem, nostack)
+        );
+    }
+
+    excursion.par_kernel_from_el1 = registers::translate_el1_read(el1_stack.wrapping_sub(8));
+    excursion.par_user_from_el0 = registers::translate_el0_read(user_page);
+    excursion.par_kernel_from_el0 = registers::translate_el0_read(el1_stack.wrapping_sub(8));
+
+    let gate_passed = excursion.par_kernel_from_el1 & 1 == 0
+        && excursion.par_user_from_el0 & 1 == 0
+        // MUST fail. A regime that lets EL0 read the kernel stack is not
+        // isolation, and every other check here would still pass.
+        && excursion.par_kernel_from_el0 & 1 == 1;
+
+    if gate_passed {
+        let (redirect_pc, redirect_spsr) = vectors::redirect_slots();
+        // SAFETY: the excursion as one block, so nothing the compiler inserts
+        // lands between an `eret` and its landing pad.
+        unsafe {
+            core::arch::asm!(
+                "adr {tmp}, 3f",
+                "str {tmp}, [{redirect_pc}]",
+                "str {el2_spsr}, [{redirect_spsr}]",
+                // EL2 -> EL1.
+                "msr SP_EL1, {el1_stack}",
+                "msr SPSR_EL2, {el1_spsr}",
+                "adr {tmp}, 1f",
+                "msr ELR_EL2, {tmp}",
+                "isb",
+                "eret",
+                // ---- EL1 ----
+                "1:",
+                "msr SP_EL0, {el0_stack}",
+                "msr SPSR_EL1, {el0_spsr}",
+                "msr ELR_EL1, {el0_entry}",
+                "isb",
+                "eret",
+                // ---- EL0 runs `brainix_el0_entry`, and never comes back here.
+                // Its second SVC is SVC_LEAVE, which EL1's handler turns into an
+                // HVC, which the EL2 redirect lands at `3f`. ----
+                "3:",
+                tmp = out(reg) _,
+                redirect_pc = in(reg) redirect_pc,
+                redirect_spsr = in(reg) redirect_spsr,
+                el2_spsr = in(reg) SPSR_EL2H_MASKED,
+                el1_stack = in(reg) el1_stack,
+                el1_spsr = in(reg) SPSR_EL1H_MASKED,
+                el0_stack = in(reg) el0_stack,
+                el0_spsr = in(reg) SPSR_EL0T_MASKED,
+                el0_entry = in(reg) vectors::el0_entry_address(),
+                options(nostack)
+            );
+        }
+        excursion.entered = true;
+    }
+
+    // SAFETY: restoring exactly what was read.
+    unsafe {
+        core::arch::asm!(
+            "msr HCR_EL2, {hcr}",
+            "isb",
+            hcr = in(reg) hcr_before,
+            options(nomem, nostack)
+        );
+    }
+
+    excursion.hcr_after = registers::hcr_el2();
+    excursion.svc = vectors::el1_svc();
+    // The raw count is cumulative for the life of the loaded image -- see
+    // `EL1_SVC_RECORD`. Reporting it directly would mean this excursion's result
+    // depended on which stages ran before it, which is how a passing check turns
+    // into a failing one for no reason connected to what it tests.
+    excursion.svc[0] = excursion.svc[0].saturating_sub(svc_before);
+    excursion.fault = vectors::el1_fault();
+    excursion
 }
 
 /// Clear `TGE`, observe, and restore -- without dropping a level.

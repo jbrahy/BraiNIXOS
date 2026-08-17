@@ -122,13 +122,13 @@ MAGIC = 0x4B726E6C4E495802
 DROP_MAGIC = 0x4B726E6C4E495803
 EL1_FAULT_POISON = 0xE11FA01700000000
 
-def par(name, value):
+def par(name, value, level="EL1"):
     # PAR_EL1 bit 0 set means the translation FAILED, and the failure is the
-    # answer rather than an error: it says EL1 genuinely cannot reach that
-    # address, which is a drop that lands nowhere.
+    # answer rather than an error. For an EL1 query it means a drop that lands
+    # nowhere; for an EL0 query on a kernel address it is the isolation working.
     if value & 1:
-        return "  %-16s 0x%016x  UNREACHABLE FROM EL1 (FST 0x%x)" % (
-            name, value, (value >> 1) & 0x3F)
+        return "  %-16s 0x%016x  UNREACHABLE FROM %s (FST 0x%x)" % (
+            name, value, level, (value >> 1) & 0x3F)
     return "  %-16s 0x%016x  -> PA 0x%x" % (name, value, value & 0x000FFFFFFFFFF000)
 
 image = open(BIN, "rb").read()
@@ -433,11 +433,55 @@ if mmu_ok:
 else:
     print("  BUILT TABLES NOT PROVEN. See the lines above.")
 
+print()
+print("  -- stage 7: EL0. running unprivileged ------------------------------")
+if p.call(code + DROP_OFF, 7, ba, dout) != DROP_MAGIC:
+    print("  stage 7 did not return the magic")
+    raise SystemExit(1)
+uroot, utables, upage = d(1), d(2), d(3)
+par_k1, par_u0, par_k0 = d(4), d(5), d(6)
+entered, svc_n, svc_esr, svc_mode = d(7), d(8), d(9), d(10)
+ufault, uerr, uhcr = d(11), d(12), d(13)
+if uerr:
+    print("  BUILD FAILED     %s" % BUILD_ERRORS.get(uerr, "code %d" % uerr))
+print("  user root        0x%016x  %d tables" % (uroot, utables))
+print("  page for EL0     0x%016x" % upage)
+print(par("kernel@EL1", par_k1, "EL1"))
+print(par("user@EL0", par_u0, "EL0"))
+print(par("kernel@EL0", par_k0, "EL0"))
+# The third one MUST fail. A regime that made all of DRAM EL0-accessible would
+# satisfy every other check on this page.
+isolated = (par_k1 & 1) == 0 and (par_u0 & 1) == 0 and (par_k0 & 1) == 1
+print("  isolation        %s" % ("EL0 cannot reach kernel memory -- as required"
+                                 if isolated else "NOT ISOLATED"))
+print("  entered EL0      %d" % entered)
+if entered:
+    print("  SVC dispatches   %d" % svc_n)
+    print("  last ESR_EL1     0x%016x  EC 0x%x  ISS 0x%x"
+          % (svc_esr, (svc_esr >> 26) & 0x3F, svc_esr & 0xFFFF))
+    modes = {0: "EL0t", 4: "EL1t", 5: "EL1h"}
+    print("  caller mode      %d (%s)" % (svc_mode, modes.get(svc_mode, "?")))
+    print("  EL1 fault        %s" % ("none" if ufault == EL1_FAULT_POISON
+                                     else "ESR 0x%016x" % ufault))
+print("  HCR_EL2 after    0x%016x  %s" % (uhcr, "RESTORED" if uhcr == hcr_before else "NOT RESTORED"))
+
+# Four conditions. Isolation, arrival, both calls, and that the LAST one came
+# from EL0t -- without the mode, an SVC made at EL1 looks identical.
+el0_ok = (uerr == 0 and isolated and entered == 1 and svc_n == 2
+          and (svc_esr >> 26) & 0x3F == 0x15 and svc_esr & 0xFFFF == 0x56
+          and svc_mode == 0 and ufault == EL1_FAULT_POISON and uhcr == hcr_before)
+print()
+if el0_ok:
+    print("  OK: code ran at EL0, made a system call that RETURNED to EL0, then")
+    print("      a second that left through EL1. Userspace exists.")
+else:
+    print("  EL0 NOT PROVEN. See the lines above.")
+
 entropy_ok = seed_usable and (keys & 1) == 1 and erased_ok
 print()
-if el1_ok and svc_ok and verdict and mmu_ok and entropy_ok:
-    print("  EL1 DROP, SVC ENTRY, OUR OWN PAGE TABLES, AND PAC ON A KEY THIS")
-    print("  KERNEL DERIVED FROM A PER-BOOT SEED IT THEN ERASED.")
+if el1_ok and svc_ok and verdict and mmu_ok and entropy_ok and el0_ok:
+    print("  EL0 AND EL1 BOTH REACHED, SYSCALLS BOTH WAYS, OUR OWN PAGE TABLES,")
+    print("  AND PAC ON A KEY DERIVED FROM A PER-BOOT SEED THEN ERASED.")
 else:
     raise SystemExit(1)
 PYEOF

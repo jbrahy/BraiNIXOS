@@ -14,6 +14,16 @@
 //! exhausted this returns [`BuildError::OutOfTables`] rather than doing
 //! anything clever.
 //!
+//! # Granularity is a permissions question
+//!
+//! [`TableBuilder::map_blocks`] and [`TableBuilder::map_pages`] both exist
+//! because the size of a mapping and the size of a *permission* are not the
+//! same question. Blocks describe "all of DRAM belongs to the kernel" in a few
+//! hundred descriptors. They cannot describe "this one page is reachable from
+//! EL0", because the smallest thing a block can say anything about at this
+//! granule is 32 MiB -- and 32 MiB of EL0-accessible memory here contains the
+//! kernel's own code.
+//!
 //! # Blocks, not pages
 //!
 //! Identity-mapping the target's 32 GiB out of leaf pages at a 16 KiB granule
@@ -267,6 +277,111 @@ impl<'arena> TableBuilder<'arena> {
         // 0b01 is the block encoding. Only legal at this level.
         *self.arena.get_mut(slot).ok_or(BuildError::OutOfTables)? =
             (physical_address & self.address_mask()) | attributes | 0b01;
+        Ok(())
+    }
+
+    /// Map `length` bytes at page granularity rather than in blocks.
+    ///
+    /// # Why both exist
+    ///
+    /// Blocks describe a regular range in a few hundred descriptors and are the
+    /// right tool for "all of DRAM belongs to the kernel". They are the wrong
+    /// tool the moment a *smaller* region needs different permissions, because
+    /// the smallest thing a block can say something about is 32 MiB at this
+    /// granule. Giving EL0 access to a page by marking its block accessible
+    /// hands userspace 32 MiB, which here contains the kernel's own code.
+    ///
+    /// So this maps leaf descriptors: one per granule, permissions expressible
+    /// at the size the permission is actually about.
+    ///
+    /// # Splitting a block is not attempted
+    ///
+    /// If a block descriptor already covers this range, mapping returns
+    /// [`BuildError::AlreadyMapped`] rather than replacing it with a table.
+    /// Splitting a live block is a real operation, but it is one that has to
+    /// happen with break-before-make and TLB maintenance against a running
+    /// machine, and doing it silently inside a builder is how a range ends up
+    /// briefly unmapped underneath the code doing the mapping. The caller maps
+    /// the fine-grained region *before* the coarse one, or asks for a hole.
+    pub fn map_pages(
+        &mut self,
+        virtual_address: u64,
+        physical_address: u64,
+        length: u64,
+        attributes: u64,
+    ) -> Result<(), BuildError> {
+        let granule = 1u64 << self.granule_bits;
+        if !virtual_address.is_multiple_of(granule)
+            || !physical_address.is_multiple_of(granule)
+            || !length.is_multiple_of(granule)
+        {
+            return Err(BuildError::MisalignedRange);
+        }
+        if self.input_bits < 64 {
+            let limit = 1u64 << self.input_bits;
+            let end = virtual_address
+                .checked_add(length)
+                .ok_or(BuildError::AddressOutOfRange)?;
+            if end > limit {
+                return Err(BuildError::AddressOutOfRange);
+            }
+        }
+
+        let mut offset = 0u64;
+        while offset < length {
+            self.map_one_page(
+                virtual_address.saturating_add(offset),
+                physical_address.saturating_add(offset),
+                attributes,
+            )?;
+            offset = offset.saturating_add(granule);
+        }
+        Ok(())
+    }
+
+    fn map_one_page(
+        &mut self,
+        virtual_address: u64,
+        physical_address: u64,
+        attributes: u64,
+    ) -> Result<(), BuildError> {
+        let last = self.levels.saturating_sub(1);
+        let mut table = self.base;
+
+        // Descend to the final level, creating tables. One level deeper than
+        // `map_one_block`, which stops where blocks are legal.
+        for level in 0..last {
+            let index = self.index_at(virtual_address, level);
+            let slot = self.slot_of(table, index)?;
+            let existing = *self.arena.get(slot).ok_or(BuildError::OutOfTables)?;
+
+            table = if existing & 0b11 == 0b11 {
+                existing & self.address_mask()
+            } else if existing == 0 {
+                let fresh = self.allocate_table()?;
+                let descriptor = fresh | 0b11;
+                *self.arena.get_mut(slot).ok_or(BuildError::OutOfTables)? = descriptor;
+                fresh
+            } else {
+                // A block covers this range at a higher level. See the note on
+                // splitting in `map_pages`.
+                return Err(BuildError::AlreadyMapped);
+            };
+        }
+
+        let index = self.index_at(virtual_address, last);
+        let slot = self.slot_of(table, index)?;
+        let existing = *self.arena.get(slot).ok_or(BuildError::OutOfTables)?;
+        if existing != 0 {
+            return Err(BuildError::AlreadyMapped);
+        }
+        // 0b11 at the final level is a PAGE. The same bit pattern one level up
+        // is a table descriptor, which is why this cannot be shared with
+        // `map_one_block`: an identical encoding means two different things
+        // depending on where it sits, and a page written at the block level is
+        // a pointer the walker follows into the middle of nothing.
+        *self.arena.get_mut(slot).ok_or(BuildError::OutOfTables)? =
+            (physical_address & self.address_mask()) | attributes | 0b11;
         Ok(())
     }
 

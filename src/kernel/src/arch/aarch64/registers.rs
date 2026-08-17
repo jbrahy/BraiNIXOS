@@ -265,6 +265,37 @@ pub fn ttbr1_el2() -> u64 {
 /// EL2's. An address that translates fine at EL2 and not at EL1 is a landing
 /// pad that never executes, on a machine with no way to say so.
 ///
+/// Ask the MMU to translate `virtual_address` as an **EL0** read.
+///
+/// The one that can prove a *boundary* rather than a mapping. `AT S1E1R`
+/// says whether the kernel can reach an address; `AT S1E0R` says whether
+/// **userspace** can, applying `AP[1]` and the unprivileged permission rules.
+///
+/// Its most useful answers are the failures. A regime that accidentally made
+/// all of DRAM reachable from EL0 passes every "can EL0 reach its own page"
+/// check ever written; the only thing that catches it is asking whether EL0 can
+/// reach a page it must not, and requiring `PAR_EL1.F` to come back set.
+///
+/// Returns `PAR_EL1`; bit 0 set means the translation failed. Requires
+/// `HCR_EL2.TGE` clear, or this describes the EL2&0 regime and says nothing
+/// about EL0 under EL1.
+pub fn translate_el0_read(virtual_address: u64) -> u64 {
+    let par: u64;
+    // SAFETY: `at s1e0r` performs a lookup and writes `PAR_EL1`. It cannot
+    // fault; failure is reported in `PAR_EL1.F`.
+    unsafe {
+        core::arch::asm!(
+            "at s1e0r, {va}",
+            "isb",
+            "mrs {par}, PAR_EL1",
+            va = in(reg) virtual_address,
+            par = out(reg) par,
+            options(nostack)
+        )
+    }
+    par
+}
+
 /// Returns `PAR_EL1`; bit 0 set means the translation failed.
 pub fn translate_el1_read(virtual_address: u64) -> u64 {
     let par: u64;
