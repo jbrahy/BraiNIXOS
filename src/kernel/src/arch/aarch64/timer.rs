@@ -15,6 +15,8 @@
 //! derived from a hardcoded frequency is a bug that only shows up as
 //! "everything is slightly wrong".
 
+#![allow(unsafe_code)]
+
 use super::registers::{counter_frequency_hz, physical_counter};
 
 /// A monotonic clock over the generic timer.
@@ -64,5 +66,111 @@ impl Timer {
     /// Microseconds since the counter started.
     pub fn micros(&self) -> u64 {
         self.ticks_to_micros(self.ticks())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The comparator.
+// ---------------------------------------------------------------------------
+
+/// `CNTP_CTL_EL0` bit 0: the timer is enabled.
+const CTL_ENABLE: u64 = 1 << 0;
+/// `CNTP_CTL_EL0` bit 1: the interrupt is **masked**.
+const CTL_IMASK: u64 = 1 << 1;
+/// `CNTP_CTL_EL0` bit 2: the condition has been met. Read-only.
+const CTL_ISTATUS: u64 = 1 << 2;
+
+/// What an armed countdown did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Countdown {
+    /// Whether `ISTATUS` was observed set before the poll budget ran out.
+    pub fired: bool,
+    /// Counter ticks that actually elapsed between arming and firing.
+    pub elapsed_ticks: u64,
+    /// Ticks the countdown was armed for.
+    pub requested_ticks: u64,
+    /// Polls consumed. A budget rather than a spin: an unbounded wait on a
+    /// timer that never fires is a hang, and a hang is the one failure mode
+    /// this platform cannot report.
+    pub polls: u64,
+}
+
+impl Timer {
+    /// Arm the physical timer for `ticks` and wait for the condition, with the
+    /// interrupt **masked**.
+    ///
+    /// # Why masked
+    ///
+    /// `IMASK` set means the comparator still fires and `ISTATUS` still
+    /// reports it, but no interrupt is signalled to the interrupt controller.
+    /// That separates two things which are usually brought up together and fail
+    /// together: *does the timer count and compare*, and *does an interrupt get
+    /// delivered and routed*. The first needs no interrupt controller, no
+    /// vector wiring and no unmasking, and it cannot deliver a spurious
+    /// interrupt into a machine hosting the measurement.
+    ///
+    /// Delivery is the next step and needs the AIC. This is the half that can
+    /// be proved on its own, so it is proved on its own.
+    ///
+    /// # Safety
+    ///
+    /// Writes the physical timer's control and comparator. The previous control
+    /// value is restored before returning, but any timer the caller had armed
+    /// is lost.
+    pub unsafe fn armed_countdown(&self, ticks: u64, poll_budget: u64) -> Countdown {
+        let saved_control: u64;
+        // SAFETY: reading the timer control register has no side effects.
+        unsafe {
+            core::arch::asm!("mrs {}, CNTP_CTL_EL0", out(reg) saved_control, options(nomem, nostack))
+        }
+
+        let start = self.ticks();
+
+        // SAFETY: arming the physical timer. `isb` so the write is in effect
+        // before the counter is read for the elapsed measurement.
+        unsafe {
+            core::arch::asm!(
+                "msr CNTP_TVAL_EL0, {ticks}",
+                "msr CNTP_CTL_EL0, {control}",
+                "isb",
+                ticks = in(reg) ticks,
+                control = in(reg) CTL_ENABLE | CTL_IMASK,
+                options(nomem, nostack)
+            )
+        }
+
+        let mut polls = 0u64;
+        let mut fired = false;
+        while polls < poll_budget {
+            let control: u64;
+            // SAFETY: as above.
+            unsafe {
+                core::arch::asm!("mrs {}, CNTP_CTL_EL0", out(reg) control, options(nomem, nostack))
+            }
+            if control & CTL_ISTATUS != 0 {
+                fired = true;
+                break;
+            }
+            polls = polls.saturating_add(1);
+        }
+
+        let elapsed_ticks = self.ticks().wrapping_sub(start);
+
+        // SAFETY: restoring what was read.
+        unsafe {
+            core::arch::asm!(
+                "msr CNTP_CTL_EL0, {control}",
+                "isb",
+                control = in(reg) saved_control,
+                options(nomem, nostack)
+            )
+        }
+
+        Countdown {
+            fired,
+            elapsed_ticks,
+            requested_ticks: ticks,
+            polls,
+        }
     }
 }

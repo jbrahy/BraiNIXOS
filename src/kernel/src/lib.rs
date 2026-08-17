@@ -16,6 +16,9 @@ pub mod aarch64_ident;
 /// Stage-1 page-table walking: pure, host-tested, no instructions.
 pub mod aarch64_walk;
 
+/// Stage-1 table construction: pure, host-tested, no instructions.
+pub mod aarch64_tables;
+
 #[cfg(bare_metal_x86)]
 pub mod boot;
 

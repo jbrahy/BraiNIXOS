@@ -325,6 +325,19 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
     put(25, probe_va);
     put(26, par);
 
+    // Generic timer: arm a 1 ms countdown, masked, and see it fire.
+    if let Some(timer) = brainix_kernel::arch::aarch64::Timer::current() {
+        let one_millisecond = timer.frequency_hz() / 1000;
+        // SAFETY: arms the physical timer with the interrupt masked, so the
+        // condition fires and ISTATUS reports it without signalling anything.
+        // The previous control value is restored before returning.
+        let countdown = unsafe { timer.armed_countdown(one_millisecond, 50_000_000) };
+        put(36, u64::from(countdown.fired));
+        put(37, countdown.requested_ticks);
+        put(38, countdown.elapsed_ticks);
+        put(39, timer.ticks_to_micros(countdown.elapsed_ticks));
+    }
+
     // Program TTBR0_EL2 with a table this image owns, and read through it.
     //
     // SAFETY: at EL2 with translation already on, and the installed root is a
