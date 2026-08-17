@@ -515,11 +515,55 @@ if bti_ok:
 else:
     print("  BTI NOT ENFORCED. See the lines above.")
 
+print()
+print("  -- stage 9: releasing a second CPU ---------------------------------")
+print("     One shot per boot. The stub parks in wfe and nothing here can")
+print("     recall it -- m1n1 does not know it exists and we have no IPI.")
+if p.call(code + DROP_OFF, 9, ba, dout) != DROP_MAGIC:
+    print("  stage 9 did not return the magic")
+    raise SystemExit(1)
+ncpu, pmgr, sbase, tgt = d(1), d(2), d(3), d(4)
+timpl, rv_before, rv_after, rv_ok = d(5), d(6), d(7), d(8)
+entry, started, waited, s_mpidr, s_el, s_sctlr = d(9), d(10), d(11), d(12), d(13), d(14)
+print("  cores in the ADT %d" % ncpu)
+print("  pmgr             0x%x   cpu-start base 0x%x" % (pmgr, sbase))
+print("  target           cpu%d  cpu-impl-reg 0x%x" % (tgt, timpl))
+print("  entry written    0x%016x" % entry)
+print("  RVBAR before     0x%016x  LOCK=%d" % (rv_before, rv_before & 1))
+print("  RVBAR after      0x%016x  LOCK=%d  %s"
+      % (rv_after, rv_after & 1, "ACCEPTED" if rv_ok else "REJECTED"))
+if not rv_ok:
+    print("  Refused to start it. A core whose reset vector we did not choose")
+    print("  would run arbitrary code beside this one and could not be stopped.")
+else:
+    # Microseconds, not milliseconds: the release is fast enough that ms
+    # rounds to 0.0 and reads like the measurement failed.
+    print("  started          %d   after %d ticks (%.1f us at 24 MHz)"
+          % (started, waited, waited / 24.0))
+    if started:
+        print("  MPIDR_EL1        0x%016x  aff0=%d aff1=%d aff2=%d"
+              % (s_mpidr, s_mpidr & 0xFF, (s_mpidr >> 8) & 0xFF, (s_mpidr >> 16) & 0xFF))
+        print("  CurrentEL        EL%d" % s_el)
+        print("  SCTLR_EL1        0x%016x  M=%d (MMU off, as a core out of reset)"
+              % (s_sctlr, s_sctlr & 1))
+
+# The MPIDR is the check that matters. A magic word only proves something wrote
+# the buffer; a DIFFERENT affinity proves it was a different core.
+smp_ok = (rv_ok == 1 and started == 1 and s_mpidr != 0
+          and (s_mpidr & 0xFFFFFF) != (r(5) & 0xFFFFFF))
+print()
+if smp_ok:
+    print("  OK: a second core came out of reset into our code and reported an")
+    print("      MPIDR that is not the boot core's. Two CPUs are running.")
+else:
+    print("  SECONDARY NOT PROVEN. See the lines above.")
+
 entropy_ok = seed_usable and (keys & 1) == 1 and erased_ok
 print()
-if el1_ok and svc_ok and verdict and mmu_ok and entropy_ok and el0_ok and bti_ok:
-    print("  EL0 AND EL1 REACHED, SYSCALLS BOTH WAYS, OUR OWN PAGE TABLES, PAC ON")
-    print("  A KEY FROM A PER-BOOT SEED THEN ERASED, AND BTI ENFORCED.")
+if (el1_ok and svc_ok and verdict and mmu_ok and entropy_ok and el0_ok
+        and bti_ok and smp_ok):
+    print("  EL0 AND EL1, SYSCALLS BOTH WAYS, OUR OWN PAGE TABLES, PAC ON A KEY")
+    print("  FROM A PER-BOOT SEED THEN ERASED, BTI ENFORCED, AND TWO CPUS UP.")
 else:
     raise SystemExit(1)
 PYEOF

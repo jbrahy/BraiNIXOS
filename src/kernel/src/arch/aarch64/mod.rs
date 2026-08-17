@@ -66,6 +66,7 @@ pub mod halt;
 pub mod mmu;
 pub mod pac;
 pub mod registers;
+pub mod smp;
 pub mod timer;
 pub mod vectors;
 pub mod watchdog;

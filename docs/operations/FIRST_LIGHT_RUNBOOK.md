@@ -780,6 +780,63 @@ test. The composition gives per-boot keys. Comparing two signatures across boots
 would *not* show it, because the signed pointer is the load address and that
 moves on its own.
 
+## 9i. Starting a second CPU
+
+**There is no PSCI and there are no spin-tables.** The other cores are powered
+down, not parked in a loop. Starting one is a reset vector plus two MMIO writes:
+
+```
+write64(cpu_impl_reg, entry)                       // RVBAR, 4 KiB aligned
+write32(pmgr + 0x28000 + 0x4, 1 << (4*cluster+core))   // enable
+write32(pmgr + 0x28000 + 0x8 + 4*cluster, 1 << core)   // release
+```
+
+`0x28000` is the T6020 offset and every Apple part has a different one. m1n1's
+only comment on the first write is *"some kind of system level startup/status
+bit. Without this, IRQs don't work"* -- that is the state of public knowledge.
+
+**The RVBAR address field is bits 43:12, not `GENMASK(47,12)`.** Bits 47:44
+carry die/cluster/core identity and read back unchanged whatever you write. A
+mask that includes them makes a successful write look rejected -- which is
+exactly the wrong conclusion the first measurement here produced. Writing the
+register also **clears the lock bit**, which is what m1n1's cryptic "this also
+clears RVBAR_LOCK" refers to. Measured on this part: writable.
+
+Read it back and **refuse to start the core if the vector did not take**. A core
+released to an address you did not choose runs arbitrary code beside you and
+cannot be stopped: there is no IPI here, and m1n1 does not know it exists.
+
+**The hard part is cache coherency, not architecture.** The secondary arrives
+with `SCTLR.M = 0`, so its accesses bypass the data cache entirely, while the
+boot core's writes may still be dirty in it. Both directions need handling and
+neither fails loudly:
+
+- Clean the stub *and* its report buffer with **`dc civac`** before release --
+  point of coherency. `dc cvau` reaches only the point of unification, which is
+  enough for instruction fetch on a coherent core and not for this one.
+- Invalidate before every poll, or the boot core reads a line it cached earlier
+  and never sees the report.
+
+**Write the magic last, after a `dsb sy`, and poison the buffer first.**
+Otherwise a reader can see the magic while the rest is still stale, and report a
+core that started with an MPIDR it never wrote.
+
+**Compare MPIDR, not just the magic.** A magic word proves *something* wrote the
+buffer. A different affinity proves it was a different core.
+
+```
+RVBAR before     0x00111100039fc001  LOCK=1
+RVBAR after      0x001111000dfac000  LOCK=0  ACCEPTED
+started          1   after 176 ticks (7.3 us at 24 MHz)
+MPIDR_EL1        0x0000000080000001  aff0=1 aff1=0 aff2=0
+CurrentEL        EL2
+SCTLR_EL1        0x0000100030d50980  M=0
+```
+
+It is one shot per boot. The stub parks in `wfe` and there is no way to recall
+it, so a second attempt in the same session times out -- which is honest: the
+core is running, just not listening.
+
 ## 10. Driving the machine when you are not next to it
 
 Recovery work needs a keyboard on the target and eyes on its screen. Both can be

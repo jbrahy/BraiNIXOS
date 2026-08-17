@@ -556,6 +556,28 @@ fn el0_stack_top() -> u64 {
     unsafe { (core::ptr::addr_of_mut!(EL0_STACK) as u64).wrapping_add(16384) & !0xF }
 }
 
+/// The device tree as a slice, from the firmware `boot_args` pointer.
+///
+/// # Safety
+///
+/// `boot_args` must be the firmware pointer or null. The returned slice aliases
+/// live firmware memory.
+#[cfg(target_arch = "aarch64")]
+unsafe fn adt_blob<'a>(boot_args: *const u8) -> Option<&'a [u8]> {
+    if boot_args.is_null() {
+        return None;
+    }
+    // SAFETY: firmware guarantees the structure; every field access inside it
+    // is bounds-checked by `brainix_adt`.
+    let header = unsafe { core::slice::from_raw_parts(boot_args, 256) };
+    let window = brainix_adt::adt_window(header).ok()?;
+    // SAFETY: `adt_window` validated that this range lies entirely inside the
+    // DRAM window firmware reported, is aligned, and does not overflow.
+    Some(unsafe {
+        core::slice::from_raw_parts(window.phys_addr as usize as *const u8, window.len as usize)
+    })
+}
+
 /// Magic returned by [`el1_probe`].
 #[cfg(target_arch = "aarch64")]
 pub const EL1_PROBE_MAGIC: u64 = 0x4B72_6E6C_4E49_5803; // "Krnl NIX\x03"
@@ -813,6 +835,64 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
             put(11, bti.restored_root);
             put(12, bti.error);
             put(13, u64::from(bti.enforcement_works()));
+        }
+        9 => {
+            // Release a second CPU. The first thing in this project that runs
+            // on hardware the boot core does not control, and the first that
+            // cannot be undone: nothing here can stop a core once started --
+            // m1n1 does not know it exists and this kernel has no IPI.
+            use brainix_kernel::aarch64_cpus;
+
+            // SAFETY: the caller supplies the firmware `boot_args` pointer.
+            let Some(blob) = (unsafe { adt_blob(boot_args) }) else {
+                put(1, u64::MAX);
+                return EL1_PROBE_MAGIC;
+            };
+            let mut list = [aarch64_cpus::Cpu::default(); 16];
+            let found = aarch64_cpus::cpus(blob, &mut list);
+            put(1, found as u64);
+
+            // `/arm-io/pmgr` reg[0], translated through `/arm-io`'s ranges. An
+            // untranslated address here is a valid-looking physical address
+            // pointing at the wrong block, and what gets written to it starts
+            // a CPU.
+            let Some(pmgr) = brainix_kernel::aarch64_devices::translated_reg(blob, b"/arm-io/pmgr", 0)
+            else {
+                put(2, u64::MAX);
+                return EL1_PROBE_MAGIC;
+            };
+            let start_base = pmgr.wrapping_add(aarch64_cpus::CPU_START_OFFSET_T6020);
+            put(2, pmgr);
+            put(3, start_base);
+
+            let Some(target) = aarch64_cpus::first_waiting_cpu(list.get(..found).unwrap_or(&[]))
+            else {
+                put(4, u64::MAX);
+                return EL1_PROBE_MAGIC;
+            };
+
+            // A second of ticks at the measured frequency. Generous: the core
+            // has to power up. Bounded because a core that never reports must
+            // not take this one with it -- a timeout is a reading, a hang is not.
+            let timeout = brainix_kernel::arch::aarch64::registers::counter_frequency_hz();
+            // SAFETY: `target` is a core the tree says is not running, the start
+            // base came from the ADT with translation checked, and the boot core
+            // is under an identity map so the secondary resolves the same
+            // addresses with its MMU off.
+            let released = unsafe {
+                brainix_kernel::arch::aarch64::smp::release(&target, start_base, timeout)
+            };
+            put(4, u64::from(released.cpu_id));
+            put(5, released.impl_reg);
+            put(6, released.rvbar_before);
+            put(7, released.rvbar_after);
+            put(8, u64::from(released.rvbar_accepted));
+            put(9, released.entry);
+            put(10, u64::from(released.started));
+            put(11, released.waited_ticks);
+            put(12, released.mpidr);
+            put(13, released.exception_level);
+            put(14, released.sctlr);
         }
         _ => {}
     }

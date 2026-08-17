@@ -28,6 +28,9 @@ pub mod aarch64_devices;
 /// Boot-seed entropy and key derivation: pure, host-tested, no instructions.
 pub mod aarch64_entropy;
 
+/// CPU topology from the ADT: pure, host-tested, no instructions.
+pub mod aarch64_cpus;
+
 #[cfg(bare_metal_x86)]
 pub mod boot;
 
