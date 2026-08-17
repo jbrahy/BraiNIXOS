@@ -70,7 +70,7 @@ fn run_batches(fixture: &Fixture, batches: &[&[u32]]) -> Vec<f32> {
     let mut logits = vec![0.0_f32; config.vocabulary_size];
     for batch in batches {
         model
-            .forward(&mut workspace, &mut session, batch, &mut logits)
+            .forward(&brainix_transformer::Serial, &mut workspace, &mut session, batch, &mut logits)
             .unwrap();
     }
     logits
@@ -265,6 +265,7 @@ fn interleaved_sessions_are_indistinguishable_from_isolated_ones() {
         if let Some(token) = first_prompt.get(step) {
             model
                 .forward(
+                    &brainix_transformer::Serial,
                     &mut workspace,
                     &mut first,
                     core::slice::from_ref(token),
@@ -275,6 +276,7 @@ fn interleaved_sessions_are_indistinguishable_from_isolated_ones() {
         if let Some(token) = second_prompt.get(step) {
             model
                 .forward(
+                    &brainix_transformer::Serial,
                     &mut workspace,
                     &mut second,
                     core::slice::from_ref(token),
@@ -313,12 +315,12 @@ fn a_reset_session_decodes_as_a_fresh_one() {
     let mut logits = vec![0.0_f32; config.vocabulary_size];
 
     model
-        .forward(&mut workspace, &mut session, &[44, 8, 19, 3], &mut logits)
+        .forward(&brainix_transformer::Serial, &mut workspace, &mut session, &[44, 8, 19, 3], &mut logits)
         .unwrap();
     session.reset();
     assert_eq!(session.position(), 0);
     model
-        .forward(&mut workspace, &mut session, &prompt, &mut logits)
+        .forward(&brainix_transformer::Serial, &mut workspace, &mut session, &prompt, &mut logits)
         .unwrap();
 
     assert_eq!(logits, fresh);

@@ -136,6 +136,8 @@ pub mod weights;
 mod workspace;
 
 pub use crate::cache::{session_cache_floats, CacheGeometry, KeyValueArena, SessionCache};
+pub mod dispatch;
+pub use crate::dispatch::{Dispatch, Serial};
 pub use crate::config::ModelConfig;
 pub use crate::error::TransformerError;
 pub use crate::forward::Model;

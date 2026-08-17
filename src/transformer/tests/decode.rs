@@ -49,6 +49,7 @@ fn generate(fixture: &Fixture, prompt: &[u32], count: usize, sampler: Sampler) -
     let mut generated = Vec::new();
     let mut next = model
         .next_token(
+            &brainix_transformer::Serial,
             &mut workspace,
             &mut session,
             prompt,
@@ -60,6 +61,7 @@ fn generate(fixture: &Fixture, prompt: &[u32], count: usize, sampler: Sampler) -
     for _ in 1..count {
         next = model
             .next_token(
+                &brainix_transformer::Serial,
                 &mut workspace,
                 &mut session,
                 &[next],
@@ -142,6 +144,7 @@ fn a_prefilled_generation_matches_a_fully_incremental_one() {
     for token in &prompt {
         next = model
             .next_token(
+                &brainix_transformer::Serial,
                 &mut workspace,
                 &mut session,
                 core::slice::from_ref(token),
@@ -154,6 +157,7 @@ fn a_prefilled_generation_matches_a_fully_incremental_one() {
     for _ in 1..4 {
         next = model
             .next_token(
+                &brainix_transformer::Serial,
                 &mut workspace,
                 &mut session,
                 &[next],

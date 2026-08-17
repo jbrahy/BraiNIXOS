@@ -50,6 +50,7 @@ use crate::math::attention_scale;
 use crate::sampling::SamplingRequest;
 use crate::slices::{add_into, copy_into, prefix, prefix_mut, row, span};
 use crate::weights::{LayerWeights, ModelWeights};
+use crate::dispatch::Dispatch;
 use crate::workspace::Workspace;
 
 /// A validated model: hyperparameters, borrowed weights, and the one derived
@@ -120,8 +121,9 @@ impl<'a> Model<'a> {
     /// [`TransformerError::LogitsLengthMismatch`], or
     /// [`TransformerError::WorkspaceGeometryMismatch`]. Past that point only
     /// [`TransformerError::Kernel`] is reachable.
-    pub fn forward(
+    pub fn forward<D: Dispatch>(
         &self,
+        dispatch: &D,
         workspace: &mut Workspace<'_>,
         cache: &mut SessionCache<'_>,
         tokens: &[u32],
@@ -130,9 +132,9 @@ impl<'a> Model<'a> {
         let start = self.admit(workspace, cache, tokens, logits)?;
         self.embed(workspace, tokens)?;
         for (index, layer) in self.weights.layers.iter().enumerate() {
-            self.run_layer(workspace, cache, layer, index, start, tokens.len())?;
+            self.run_layer(dispatch, workspace, cache, layer, index, start, tokens.len())?;
         }
-        self.project_logits(workspace, tokens.len(), logits)?;
+        self.project_logits(dispatch, workspace, tokens.len(), logits)?;
         cache.commit(tokens.len())
     }
 
@@ -159,15 +161,16 @@ impl<'a> Model<'a> {
     /// # Errors
     ///
     /// Whatever [`Self::forward`] or [`SamplingRequest::choose`] refuse.
-    pub fn next_token(
+    pub fn next_token<D: Dispatch>(
         &self,
+        dispatch: &D,
         workspace: &mut Workspace<'_>,
         cache: &mut SessionCache<'_>,
         tokens: &[u32],
         logits: &mut [f32],
         request: &mut SamplingRequest<'_>,
     ) -> Result<u32, TransformerError> {
-        self.forward(workspace, cache, tokens, logits)?;
+        self.forward(dispatch, workspace, cache, tokens, logits)?;
         request.choose(logits)
     }
 
@@ -248,8 +251,9 @@ impl<'a> Model<'a> {
         Ok(())
     }
 
-    fn run_layer(
+    fn run_layer<D: Dispatch>(
         &self,
+        dispatch: &D,
         workspace: &mut Workspace<'_>,
         cache: &mut SessionCache<'_>,
         layer: &LayerWeights<'_>,
@@ -257,13 +261,14 @@ impl<'a> Model<'a> {
         start: usize,
         token_count: usize,
     ) -> Result<(), TransformerError> {
-        self.attention_block(workspace, cache, layer, index, start, token_count)?;
-        self.feed_forward_block(workspace, layer, token_count)
+        self.attention_block(dispatch, workspace, cache, layer, index, start, token_count)?;
+        self.feed_forward_block(dispatch, workspace, layer, token_count)
     }
 
     /// RMSNorm, QKV, RoPE, cache write, attention, `wo`, residual.
-    fn attention_block(
+    fn attention_block<D: Dispatch>(
         &self,
+        dispatch: &D,
         workspace: &mut Workspace<'_>,
         cache: &mut SessionCache<'_>,
         layer: &LayerWeights<'_>,
@@ -279,7 +284,7 @@ impl<'a> Model<'a> {
             prefix_mut(workspace.normed, span)?,
             // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
-        self.project_query_key_value(workspace, layer, token_count)?;
+        self.project_query_key_value(dispatch, workspace, layer, token_count)?;
         self.rotate(workspace, start, token_count)?;
         self.store_batch(workspace, cache, index, start, token_count)?;
         attend(
@@ -291,15 +296,16 @@ impl<'a> Model<'a> {
             self.attention_shape()?,
             // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
-        self.project_attention_output(workspace, layer, token_count)?;
+        self.project_attention_output(dispatch, workspace, layer, token_count)?;
         add_into(
             prefix(workspace.projected, span)?,
             prefix_mut(workspace.hidden, span)?,
         )
     }
 
-    fn project_query_key_value(
+    fn project_query_key_value<D: Dispatch>(
         &self,
+        dispatch: &D,
         workspace: &mut Workspace<'_>,
         layer: &LayerWeights<'_>,
         token_count: usize,
@@ -313,6 +319,7 @@ impl<'a> Model<'a> {
             shape,
             normed,
             workspace.quant_scratch,
+            dispatch,
             prefix_mut(workspace.query, checked_product(token_count, query_width)?)?,
             // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
@@ -321,11 +328,11 @@ impl<'a> Model<'a> {
         layer
             .key_projection
             .project(
-            shape, normed, workspace.quant_scratch, prefix_mut(workspace.key, key_span)?)?;
+            shape, normed, workspace.quant_scratch, dispatch, prefix_mut(workspace.key, key_span)?)?;
         layer
             .value_projection
             .project(
-            shape, normed, workspace.quant_scratch, prefix_mut(workspace.value, key_span)?)
+            shape, normed, workspace.quant_scratch, dispatch, prefix_mut(workspace.value, key_span)?)
     }
 
     /// RoPE over the query and the key of every token in the batch.
@@ -402,8 +409,9 @@ impl<'a> Model<'a> {
         Ok(())
     }
 
-    fn project_attention_output(
+    fn project_attention_output<D: Dispatch>(
         &self,
+        dispatch: &D,
         workspace: &mut Workspace<'_>,
         layer: &LayerWeights<'_>,
         token_count: usize,
@@ -420,13 +428,15 @@ impl<'a> Model<'a> {
             shape,
             attention,
             workspace.quant_scratch,
+            dispatch,
             prefix_mut(workspace.projected, span)?,
         )
     }
 
     /// RMSNorm, gate and up projections, SwiGLU, down projection, residual.
-    fn feed_forward_block(
+    fn feed_forward_block<D: Dispatch>(
         &self,
+        dispatch: &D,
         workspace: &mut Workspace<'_>,
         layer: &LayerWeights<'_>,
         token_count: usize,
@@ -439,8 +449,8 @@ impl<'a> Model<'a> {
             prefix_mut(workspace.normed, span)?,
             // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
-        self.project_branches(workspace, layer, token_count)?;
-        self.project_down(workspace, layer, token_count)?;
+        self.project_branches(dispatch, workspace, layer, token_count)?;
+        self.project_down(dispatch, workspace, layer, token_count)?;
         add_into(
             prefix(workspace.feed_forward, span)?,
             prefix_mut(workspace.hidden, span)?,
@@ -448,8 +458,9 @@ impl<'a> Model<'a> {
     }
 
     /// `gate = w1 · normed`, `up = w3 · normed`, `activated = SiLU(gate) ⊙ up`.
-    fn project_branches(
+    fn project_branches<D: Dispatch>(
         &self,
+        dispatch: &D,
         workspace: &mut Workspace<'_>,
         layer: &LayerWeights<'_>,
         token_count: usize,
@@ -465,6 +476,7 @@ impl<'a> Model<'a> {
             shape,
             prefix(workspace.normed, span)?,
             workspace.quant_scratch,
+            dispatch,
             prefix_mut(workspace.gate, inner)?,
             // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
@@ -472,6 +484,7 @@ impl<'a> Model<'a> {
             shape,
             prefix(workspace.normed, span)?,
             workspace.quant_scratch,
+            dispatch,
             prefix_mut(workspace.up, inner)?,
             // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
@@ -484,8 +497,9 @@ impl<'a> Model<'a> {
         Ok(())
     }
 
-    fn project_down(
+    fn project_down<D: Dispatch>(
         &self,
+        dispatch: &D,
         workspace: &mut Workspace<'_>,
         layer: &LayerWeights<'_>,
         token_count: usize,
@@ -501,14 +515,16 @@ impl<'a> Model<'a> {
             shape,
             prefix(workspace.activated, inner)?,
             workspace.quant_scratch,
+            dispatch,
             prefix_mut(workspace.feed_forward, span)?,
         )
     }
 
     /// Final norm on the last token's hidden state, then the output
     /// projection.
-    fn project_logits(
+    fn project_logits<D: Dispatch>(
         &self,
+        dispatch: &D,
         workspace: &mut Workspace<'_>,
         token_count: usize,
         logits: &mut [f32],
@@ -528,7 +544,7 @@ impl<'a> Model<'a> {
         self.weights
             .logit_matrix()
             .project(
-            shape, prefix(workspace.normed, width)?, workspace.quant_scratch, logits)
+            shape, prefix(workspace.normed, width)?, workspace.quant_scratch, dispatch, logits)
     }
 
     const fn projection_shape(

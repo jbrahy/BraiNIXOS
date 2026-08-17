@@ -41,8 +41,11 @@
 //! table, already takes either dtype: a projection is a matmul, not a lookup.
 
 use brainix_tensor::{
-    matmul_f32, matmul_q8_0, matmul_q8_0_q8a, quantize_activations, MatMulShape, Q8Weights,
+    matmul_f32, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations,
+    MatMulShape, Q8Weights,
 };
+use crate::dispatch::{chunk_len, Dispatch};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::{checked_product, ModelConfig};
 use crate::error::TransformerError;
@@ -99,11 +102,12 @@ impl WeightMatrix<'_> {
     ///
     /// [`TransformerError::Kernel`] carrying whichever shape rule the kernel
     /// refused.
-    pub(crate) fn project(
+    pub(crate) fn project<D: Dispatch>(
         &self,
         shape: MatMulShape,
         activations: &[f32],
         quant_scratch: &mut [u8],
+        dispatch: &D,
         destination: &mut [f32],
     ) -> Result<(), TransformerError> {
         match self {
@@ -123,7 +127,44 @@ impl WeightMatrix<'_> {
                     Some(scratch) => {
                         quantize_activations(shape.n_tokens, shape.n_in, activations, scratch)?;
                         let view = Q8Weights::new(scratch, shape.n_tokens, shape.n_in)?;
-                        matmul_q8_0_q8a(shape, weights, &view, destination)?;
+                        // Row-splitting is only sound for a single token: for
+                        // `n_tokens > 1` the output is `[n_tokens, n_out]`
+                        // row-major, so a contiguous range of *output rows* is
+                        // not a contiguous range of `destination`. Prefill
+                        // therefore stays serial here and parallelizes over
+                        // tokens elsewhere.
+                        if shape.n_tokens == 1 && dispatch.chunks() > 1 {
+                            let width = chunk_len(shape.n_out, dispatch.chunks())?;
+                            // Chunks run on other threads, so the closure is
+                            // `Fn + Sync` and cannot carry a `Result` out. An
+                            // atomic flag is the most a shared closure can set
+                            // without allocation or a lock.
+                            //
+                            // **The specific kernel error is lost, and that is a
+                            // deliberate narrowing rather than an oversight.**
+                            // Every argument here is derived from shapes this
+                            // function has already validated against the weight
+                            // view, so a refusal is a bug in the split
+                            // arithmetic and not a runtime condition. The flag
+                            // exists so that such a bug is loud instead of
+                            // producing a silently half-written output.
+                            let failed = AtomicBool::new(false);
+                            dispatch.for_each_chunk(destination, width, |index, chunk| {
+                                let start = index.saturating_mul(width);
+                                if matmul_q8_0_q8a_rows(
+                                    shape, weights, &view, start, chunk.len(), chunk,
+                                )
+                                .is_err()
+                                {
+                                    failed.store(true, Ordering::Relaxed);
+                                }
+                            });
+                            if failed.load(Ordering::Relaxed) {
+                                return Err(TransformerError::WeightShapeMismatch);
+                            }
+                        } else {
+                            matmul_q8_0_q8a(shape, weights, &view, destination)?;
+                        }
                     }
                     None => matmul_q8_0(shape, weights, activations, destination)?,
                 }

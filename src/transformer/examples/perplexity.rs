@@ -34,7 +34,33 @@ use brainix_tensor::RopePairing;
 use brainix_transformer::{
     LayerWeights, LogitProjection, Model, ModelConfig, ModelWeights, WeightMatrix,
 };
+use brainix_transformer::{Dispatch, Serial};
 use std::process::ExitCode;
+use std::thread;
+
+/// A `Dispatch` backed by scoped OS threads.
+///
+/// The kernel will supply its own; this exists so the speedup can be measured
+/// on the workstation before the scheduler is built to chase it.
+struct Threads(usize);
+
+impl Dispatch for Threads {
+    fn chunks(&self) -> usize {
+        self.0
+    }
+
+    fn for_each_chunk<F>(&self, out: &mut [f32], chunk_len: usize, body: F)
+    where
+        F: Fn(usize, &mut [f32]) + Sync,
+    {
+        thread::scope(|scope| {
+            for (index, chunk) in out.chunks_mut(chunk_len.max(1)).enumerate() {
+                let body = &body;
+                scope.spawn(move || body(index, chunk));
+            }
+        });
+    }
+}
 
 /// The passage perplexity is measured over.
 ///
@@ -307,6 +333,10 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
 
     let mut logits = vec![0.0f32; config.vocabulary_size];
     let mut results = Vec::new();
+    let workers: usize = std::env::args()
+        .nth(3)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(4);
     for (label, use_sdot) in [("f32 activations", false), ("Q8_0 activations (SDOT)", true)] {
         let scratch: &mut [u8] = if use_sdot { &mut quant_scratch } else { &mut [] };
         let mut workspace =
@@ -327,7 +357,40 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
             let token = *tokens.get(position).ok_or("token index")?;
             let target = *tokens.get(position + 1).ok_or("target index")?;
             model
-                .forward(&mut workspace, &mut cache, &[token], &mut logits)
+                .forward(&Serial, &mut workspace, &mut cache, &[token], &mut logits)
+                .map_err(|error| format!("forward at {position}: {error:?}"))?;
+            let nats = cross_entropy(&logits, target)
+                .ok_or_else(|| format!("non-finite logits at position {position}"))?;
+            total_nats += f64::from(nats);
+            predictions = predictions.saturating_add(1);
+        }
+        let elapsed = start.elapsed().as_secs_f64();
+        let mean = total_nats / predictions as f64;
+        println!("  mean CE     {mean:.4} nats");
+        println!("  PERPLEXITY  {:.3}", mean.exp());
+        println!("  throughput  {:.2} tok/s  ({elapsed:.1}s)", predictions as f64 / elapsed);
+        results.push((label, mean.exp(), predictions as f64 / elapsed));
+    }
+
+    {
+        let label = "Q8_0 + threads";
+        let mut workspace = brainix_transformer::Workspace::new(
+            &mut workspace_storage, &mut quant_scratch, &config, 1)
+            .map_err(|error| format!("workspace: {error:?}"))?;
+        let mut arena = brainix_transformer::KeyValueArena::new(&mut cache_storage, geometry)
+            .map_err(|error| format!("arena: {error:?}"))?;
+        let mut cache = arena.issue_session().map_err(|e| format!("session: {e:?}"))?;
+        let dispatch = Threads(workers);
+        println!();
+        println!("evaluating {count} tokens -- {label} ({workers} workers)");
+        let start = std::time::Instant::now();
+        let mut total_nats = 0.0f64;
+        let mut predictions = 0usize;
+        for position in 0..count.saturating_sub(1) {
+            let token = *tokens.get(position).ok_or("token index")?;
+            let target = *tokens.get(position + 1).ok_or("target index")?;
+            model
+                .forward(&dispatch, &mut workspace, &mut cache, &[token], &mut logits)
                 .map_err(|error| format!("forward at {position}: {error:?}"))?;
             let nats = cross_entropy(&logits, target)
                 .ok_or_else(|| format!("non-finite logits at position {position}"))?;
@@ -348,6 +411,11 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
                  base.1, fast.1, (fast.1 / base.1 - 1.0) * 100.0);
         println!("  SPEED    {:.2} -> {:.2} tok/s  ({:.2}x)",
                  base.2, fast.2, fast.2 / base.2);
+        if let Some(par) = results.get(2) {
+            println!("  THREADS  {:.2} -> {:.2} tok/s  ({:.2}x over 1 core, {:.2}x over f32)",
+                     fast.2, par.2, par.2 / fast.2, par.2 / base.2);
+            println!("  QUALITY  {:.3} (threaded) -- must equal {:.3}", par.1, fast.1);
+        }
     }
 
     Ok(())

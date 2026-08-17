@@ -196,7 +196,7 @@ fn forward_once(
     )
     .unwrap();
     let mut session = arena.issue_session().unwrap();
-    model.forward(&mut workspace, &mut session, tokens, &mut harness.logits)
+    model.forward(&brainix_transformer::Serial, &mut workspace, &mut session, tokens, &mut harness.logits)
 }
 
 #[test]
@@ -267,18 +267,18 @@ fn running_past_the_context_is_refused_and_leaves_the_session_intact() {
     let mut logits = vec![0.0_f32; config.vocabulary_size];
 
     model
-        .forward(&mut workspace, &mut session, &[1, 2], &mut logits)
+        .forward(&brainix_transformer::Serial, &mut workspace, &mut session, &[1, 2], &mut logits)
         .unwrap();
     assert_eq!(session.position(), 2);
     assert_eq!(
-        model.forward(&mut workspace, &mut session, &[3, 4], &mut logits),
+        model.forward(&brainix_transformer::Serial, &mut workspace, &mut session, &[3, 4], &mut logits),
         Err(TransformerError::ContextExhausted)
     );
     // The refused call did not move the clock, so the remaining slot is still
     // available and the session is still usable.
     assert_eq!(session.position(), 2);
     model
-        .forward(&mut workspace, &mut session, &[3], &mut logits)
+        .forward(&brainix_transformer::Serial, &mut workspace, &mut session, &[3], &mut logits)
         .unwrap();
     assert_eq!(session.position(), 3);
 }
@@ -305,7 +305,7 @@ fn a_cache_cut_for_another_geometry_is_refused() {
     let mut logits = vec![0.0_f32; config.vocabulary_size];
 
     assert_eq!(
-        model.forward(&mut workspace, &mut session, &[1], &mut logits),
+        model.forward(&brainix_transformer::Serial, &mut workspace, &mut session, &[1], &mut logits),
         Err(TransformerError::CacheGeometryMismatch)
     );
 }
@@ -417,7 +417,7 @@ fn a_workspace_built_for_another_model_is_refused() {
     let mut logits = vec![0.0_f32; config.vocabulary_size];
 
     assert_eq!(
-        model.forward(&mut workspace, &mut session, &[1], &mut logits),
+        model.forward(&brainix_transformer::Serial, &mut workspace, &mut session, &[1], &mut logits),
         Err(TransformerError::WorkspaceGeometryMismatch)
     );
 }
