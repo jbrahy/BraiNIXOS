@@ -285,6 +285,25 @@ extern "C" fn brainix_handle_exception(
         (esr_el2, elr_el2, far_el2)
     };
 
+    // Interrupts do not have a faulting instruction to step over.
+    //
+    // The table's sixteen entries run synchronous, IRQ, FIQ, SError within each
+    // group of four, so `index % 4 == 0` is exactly the synchronous ones.
+    // Advancing past an IRQ or FIQ would skip an instruction of the interrupted
+    // code -- silently, and at whatever point the interrupt happened to land.
+    let synchronous = index % 4 == 0;
+
+    // A level-triggered timer interrupt stays asserted until the condition is
+    // cleared. Returning without clearing it re-enters this handler
+    // immediately and forever, which on this platform is a hang with no
+    // console. Disabling the timer removes the condition.
+    if index % 4 == 2 || index % 4 == 1 {
+        // SAFETY: writing the timer control register; no memory effects.
+        unsafe {
+            core::arch::asm!("msr CNTP_CTL_EL0, xzr", "isb", options(nomem, nostack));
+        }
+    }
+
     LAST_INDEX.store(index, Ordering::Relaxed);
     LAST_ESR.store(esr, Ordering::Relaxed);
     LAST_ELR.store(elr, Ordering::Relaxed);
@@ -310,7 +329,11 @@ extern "C" fn brainix_handle_exception(
     // revisiting *and* the memory attributes need establishing first.
     COUNT.store(COUNT.load(Ordering::Relaxed).wrapping_add(1), Ordering::Relaxed);
 
-    elr.wrapping_add(4)
+    if synchronous {
+        elr.wrapping_add(4)
+    } else {
+        elr
+    }
 }
 
 /// The address of our vector table.

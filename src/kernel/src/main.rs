@@ -417,6 +417,12 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
         put(39, timer.ticks_to_micros(countdown.elapsed_ticks));
     }
 
+    // Timer interrupt DELIVERY is NOT exercised here. See
+    // `arch::aarch64::timer::wait_for_interrupt`: it was attempted on the
+    // target and did not work, and running it corrupted the surrounding
+    // measurements, so it stays out of the read-only probe until it is
+    // understood.
+
     // Program TTBR0_EL2 with a table this image owns, and read through it.
     //
     // SAFETY: at EL2 with translation already on, and the installed root is a

@@ -174,3 +174,117 @@ impl Timer {
         }
     }
 }
+
+/// Result of waiting for a real timer interrupt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InterruptReport {
+    /// Whether an exception was taken while waiting.
+    pub taken: bool,
+    /// Which vector it arrived on. 6 is FIQ from the current EL on `SP_ELx`.
+    pub vector_index: u64,
+    /// Counter ticks between arming and the handler running.
+    pub elapsed_ticks: u64,
+    /// `DAIF` as it was before unmasking, restored afterwards.
+    pub saved_daif: u64,
+}
+
+impl Timer {
+    /// Arm the timer **unmasked** and wait for the interrupt to be delivered.
+    ///
+    /// # UNVERIFIED. Attempted on the target 2026-08-16 and it did not work.
+    ///
+    /// The interrupt was not observed (`taken` false), and worse, the run left
+    /// the probe's report buffer holding values nothing in this code wrote --
+    /// a frequency and two m1n1 addresses in slots that should have held the
+    /// vector index and elapsed ticks. m1n1 evidently recovered from something
+    /// mid-window. So this both failed and disturbed its neighbours, and it is
+    /// deliberately not called from `kernel_probe`.
+    ///
+    /// The reasoning below still looks right and is kept for whoever picks it
+    /// up: the timer really is an FIQ source on this platform, `TGE=1` really
+    /// does route physical FIQ to EL2, and `DAIFClr #1` really does clear the F
+    /// bit. Something else is wrong -- a candidate is the handler running on
+    /// whatever stack the interrupted context was using, which for an
+    /// asynchronous exception is not a stack this code chose.
+    ///
+    /// Recorded as broken rather than removed, because the next person will
+    /// otherwise rediscover the same dead end.
+    ///
+    /// # Why this needs no interrupt controller
+    ///
+    /// On Apple Silicon the generic timer is wired directly to **FIQ** rather
+    /// than routed through the AIC. m1n1 says so implicitly: its
+    /// `exception_initialize` writes `CNTP_CTL_EL0` and `CNTV_CTL_EL0`
+    /// specifically "to clear FIQ sources". So delivery can be proved with a
+    /// vector table and a `DAIF` write, with no AIC driver at all.
+    ///
+    /// This is the other half of [`Timer::armed_countdown`], which proves the
+    /// timer counts and compares with the interrupt masked. Together they cover
+    /// counting, comparison, and delivery.
+    ///
+    /// # Safety
+    ///
+    /// Unmasks FIQ. Must be called with a vector table installed that handles
+    /// and returns from one, i.e. inside `vectors::with_vectors`. Without that,
+    /// the FIQ lands on whatever `VBAR` currently points at.
+    pub unsafe fn wait_for_interrupt(&self, ticks: u64, poll_budget: u64) -> InterruptReport {
+        use super::vectors;
+
+        let before = vectors::last_exception().count;
+        let saved_daif: u64;
+        // SAFETY: reading DAIF has no side effects.
+        unsafe { core::arch::asm!("mrs {}, DAIF", out(reg) saved_daif, options(nomem, nostack)) }
+
+        let start = self.ticks();
+
+        // SAFETY: arm the timer with IMASK clear so the condition is signalled,
+        // then unmask FIQ. `msr DAIFClr, #1` clears the F bit.
+        unsafe {
+            core::arch::asm!(
+                "msr CNTP_TVAL_EL0, {ticks}",
+                "mov {tmp}, #1",
+                "msr CNTP_CTL_EL0, {tmp}",   // ENABLE, IMASK clear
+                "isb",
+                "msr DAIFClr, #1",           // unmask FIQ
+                "isb",
+                ticks = in(reg) ticks,
+                tmp = out(reg) _,
+                options(nomem, nostack)
+            )
+        }
+
+        let mut polls = 0u64;
+        let mut taken = false;
+        while polls < poll_budget {
+            if vectors::last_exception().count != before {
+                taken = true;
+                break;
+            }
+            polls = polls.saturating_add(1);
+        }
+
+        let elapsed_ticks = self.ticks().wrapping_sub(start);
+
+        // SAFETY: restore the interrupt mask and stop the timer, in that order.
+        // Restoring DAIF first would leave a window where a re-armed timer
+        // could deliver into a handler the caller has already torn down.
+        unsafe {
+            core::arch::asm!(
+                "msr CNTP_CTL_EL0, xzr",
+                "isb",
+                "msr DAIF, {daif}",
+                "isb",
+                daif = in(reg) saved_daif,
+                options(nomem, nostack)
+            )
+        }
+
+        let last = vectors::last_exception();
+        InterruptReport {
+            taken,
+            vector_index: last.index,
+            elapsed_ticks,
+            saved_daif,
+        }
+    }
+}
