@@ -51,6 +51,8 @@ use brainix_tensor::{
     Q8Weights, Q8_0_BLOCK,
 };
 use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Barrier;
 use std::thread;
 
 /// Bytes a `Q8_0` weight element costs: one quant byte plus 4/32 of a scale.
@@ -297,6 +299,106 @@ fn measure_row_split(label: &str, n_in: usize, n_out: usize) {
     }
 }
 
+/// Row-split across a **persistent** worker pool.
+///
+/// # What this isolates
+///
+/// [`measure_row_split`] spawns threads inside the timed loop, so its figure is
+/// (useful work + thread creation) and its six-worker regression is creation
+/// cost overtaking the work. A kernel cannot pay that: a decode performs 168
+/// projections per token against a 12.2 ms budget, and four spawns per
+/// projection at 10-20 us costs 6.7-13.4 ms of that budget on thread creation
+/// alone.
+///
+/// So the workers here are spawned **once** and park on a barrier. Waking a
+/// parked thread is what a real implementation pays -- an IPI on the target --
+/// and the gap between this measurement and the previous one is the cost of
+/// getting that wrong.
+///
+/// # Why each worker owns its output
+///
+/// Handing every worker a disjoint `&mut` sub-slice of one buffer is what
+/// `chunks_mut` does inside a `scope`, and it does not survive the workers
+/// outliving the call. Each worker owning its rows sidesteps the lifetime
+/// problem entirely and costs one 16 KB copy per projection -- about 0.4% of a
+/// token budget, measured rather than waved at.
+fn measure_pool(label: &str, n_in: usize, n_out: usize) {
+    let payload = synthetic_payload(n_out, n_in);
+    let weights = Q8Weights::new(&payload, n_out, n_in).expect("payload is well formed");
+    let shape = MatMulShape { n_tokens: 1, n_in, n_out };
+    let x = vec![0.5_f32; n_in];
+    let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, n_in).expect("len")];
+    quantize_activations(1, n_in, &x, &mut scratch).expect("quantize");
+    let quantized = Q8Weights::new(&scratch, 1, n_in).expect("view");
+
+    let weight_bytes = n_out as f64 * n_in as f64 * BYTES_PER_WEIGHT_ELEMENT;
+    let iterations = (500_000_000.0 / weight_bytes).max(20.0) as usize;
+    println!("  {label}");
+
+    let mut single = 0.0f64;
+    for workers in [1usize, 2, 4, 6] {
+        let per = n_out / workers;
+        let mut outputs: Vec<Vec<f32>> = (0..workers).map(|_| vec![0.0_f32; per]).collect();
+        let start_gate = Barrier::new(workers + 1);
+        let finish_gate = Barrier::new(workers + 1);
+        let shutting_down = AtomicBool::new(false);
+        let mut seconds = 0.0f64;
+
+        thread::scope(|scope| {
+            for (index, output) in outputs.iter_mut().enumerate() {
+                let (weights, quantized) = (&weights, &quantized);
+                let (start_gate, finish_gate, shutting_down) =
+                    (&start_gate, &finish_gate, &shutting_down);
+                scope.spawn(move || loop {
+                    start_gate.wait();
+                    if shutting_down.load(Ordering::Acquire) {
+                        break;
+                    }
+                    matmul_q8_0_q8a_rows(
+                        shape,
+                        weights,
+                        quantized,
+                        index * per,
+                        output.len(),
+                        output,
+                    )
+                    .expect("range matmul");
+                    finish_gate.wait();
+                });
+            }
+
+            // One untimed round so the pool is warm and every worker has
+            // reached its park before the clock starts.
+            start_gate.wait();
+            finish_gate.wait();
+
+            let began = Instant::now();
+            for _ in 0..iterations {
+                start_gate.wait();
+                finish_gate.wait();
+            }
+            seconds = began.elapsed().as_secs_f64();
+
+            // Release the workers to exit. They break before `finish_gate`, so
+            // the main thread must not wait on it again.
+            shutting_down.store(true, Ordering::Release);
+            start_gate.wait();
+        });
+
+        std::hint::black_box(&outputs);
+        let gb = weight_bytes * iterations as f64 / seconds / 1e9;
+        if workers == 1 {
+            single = gb;
+        }
+        println!(
+            "    {workers} worker{}  {gb:7.2} GB/s   {:.2}x   ({:.1} us/call)",
+            if workers == 1 { " " } else { "s" },
+            gb / single,
+            seconds / iterations as f64 * 1e6
+        );
+    }
+}
+
 fn main() {
     println!();
     println!("  matmul_q8_0 — weight-byte throughput, single core");
@@ -353,6 +455,13 @@ fn main() {
     measure_row_split("4096x4096 (attention proj, 18.9 MB)", 4096, 4096);
     println!();
     measure_row_split("4096x11008 (ffn up, 50.7 MB)", 4096, 11008);
+
+    println!();
+    println!("  Persistent pool — workers parked on a barrier, spawned once");
+    println!();
+    measure_pool("4096x4096 (attention proj, 18.9 MB)", 4096, 4096);
+    println!();
+    measure_pool("4096x11008 (ffn up, 50.7 MB)", 4096, 11008);
 
     println!();
     println!("  Interpretation:");
