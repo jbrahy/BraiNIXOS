@@ -544,6 +544,38 @@ return vector    8  (lower EL, AArch64, synchronous)
 EL1 fault        none -- EL1 reached its hvc without faulting
 ```
 
+### SVC entry
+
+Once the drop works, a system call is a small step, with two traps in it.
+
+**Split on `ESR_EL1.EC`, not the vector index.** Vector 4 is "current EL,
+`SP_ELx`, synchronous" — that is `SVC` *and* every data abort, alignment fault
+and undefined instruction EL1 can raise. A handler that returns because the
+index was 4 will re-execute a faulting instruction forever. `EC 0x15` is `SVC`
+from AArch64; everything else on that vector should abandon the level.
+
+**Do not advance `ELR_EL1`.** The EL2 handler adds 4 to step past a `brk`.
+`ELR_EL1` after an `SVC` already points at the next instruction, so adding 4
+skips a real instruction of the caller — silently, and only in the syscall path.
+
+**Preserve registers on the return path.** The abandon path owes nothing,
+because nothing resumes. The `SVC` path resumes, so it owes the caller every
+register it touched — the same debt the EL2 handler learned when a timer FIQ
+corrupted the values its neighbours were holding.
+
+Measured:
+
+```
+SVC dispatches   1
+ESR_EL1          0x0000000056000042  EC 0x15  ISS 0x42
+ELR_EL1          0x000001000dfab120  (the instruction after the svc)
+EL1 fault        none -- EL1 resumed after the svc and reached its hvc
+```
+
+Check all four. A dispatch count alone does not say *which* trap arrived, the
+syndrome alone does not say EL1 resumed, and the absence of a fault record is
+what proves the return path rather than the entry path.
+
 ## 9g. Pointer authentication: enabled is not the same as working
 
 `SCTLR` bits for features a part does not implement are **RES0** — the write is

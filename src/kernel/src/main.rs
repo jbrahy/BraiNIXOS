@@ -559,13 +559,15 @@ pub const EL1_PROBE_MAGIC: u64 = 0x4B72_6E6C_4E49_5803; // "Krnl NIX\x03"
 /// | 1 | programme EL1's regime, ask `AT S1E1R` what EL1 could reach | no; `AT` cannot fault |
 /// | 2 | drop to EL1, read `CurrentEL`, return via `HVC` | yes; this is the experiment |
 /// | 3 | enable pointer authentication and prove a forged signature is rejected | yes; writes `SCTLR` |
+/// | 4 | stage 2, and `SVC` at EL1 with a return to the instruction after it | yes |
 ///
 /// # Report layout
 ///
 /// Stage 1: `[magic, HCR while asking, PAR code, PAR vectors, PAR stack]`.
 ///
-/// Stage 2: `[magic, observed EL, HCR before, HCR after, return vector,
-/// EL1 fault index, ESR_EL1, ELR_EL1, FAR_EL1]`.
+/// Stages 2 and 4: `[magic, observed EL, HCR before, HCR after, return vector,
+/// EL1 fault index, ESR_EL1, ELR_EL1, FAR_EL1, SVC count, SVC ESR_EL1,
+/// SVC ELR_EL1]`.
 ///
 /// Stage 3: `[magic, SCTLR before, SCTLR enabled, SCTLR after, APCTL, signed as
 /// found, signed, recovered, authenticated tampered, plain, vector,
@@ -611,13 +613,21 @@ pub unsafe extern "C" fn el1_probe(stage: u64, out: *mut u64) -> u64 {
             put(3, reach.par_vectors);
             put(4, reach.par_stack);
         }
-        2 => {
+        2 | 4 => {
+            // Stage 4 is stage 2 plus a system call. Same code path, so the
+            // drop that was verified on hardware is still exercised in the form
+            // it was verified in, and a regression in SVC dispatch cannot
+            // present as the drop breaking.
+            let issue_svc = stage == 4;
             // SAFETY: inside `with_vectors` so the HVC home has an EL2 handler,
             // and `VBAR_EL12` points at the EL1-only table, which reads no EL2
             // registers.
             let excursion = unsafe {
                 brainix_kernel::arch::aarch64::with_vectors(|| {
-                    brainix_kernel::arch::aarch64::el::drop_to_el1_and_return(el1_stack_top())
+                    brainix_kernel::arch::aarch64::el::drop_to_el1_and_return(
+                        el1_stack_top(),
+                        issue_svc,
+                    )
                 })
             };
             put(1, excursion.observed_el);
@@ -628,6 +638,9 @@ pub unsafe extern "C" fn el1_probe(stage: u64, out: *mut u64) -> u64 {
             put(6, excursion.el1_fault[1]);
             put(7, excursion.el1_fault[2]);
             put(8, excursion.el1_fault[3]);
+            put(9, excursion.el1_svc[0]);
+            put(10, excursion.el1_svc[1]);
+            put(11, excursion.el1_svc[2]);
         }
         3 => {
             // A value shaped like a pointer this image owns. The signature goes

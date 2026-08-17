@@ -61,16 +61,39 @@ pub struct Excursion {
     /// All four still poisoned means EL1 ran to its `hvc` without faulting,
     /// which is the outcome being aimed at.
     pub el1_fault: [u64; 4],
+    /// `[count, ESR_EL1, ELR_EL1]` from the `SVC` dispatched at EL1.
+    ///
+    /// Count zero when the excursion was asked not to make one.
+    pub el1_svc: [u64; 3],
 }
 
+/// Immediate carried by the `SVC` the excursion issues.
+///
+/// Chosen to be recognisable in `ESR_EL1.ISS`, which is where the immediate
+/// lands. A zero immediate would be indistinguishable from a syndrome that was
+/// never written, which is the same mistake as a sentinel that collides with a
+/// real value.
+pub const PROBE_SVC_IMMEDIATE: u64 = 0x42;
+
 /// Drop to EL1, read `CurrentEL` there, and trap back to EL2.
+///
+/// With `issue_svc`, EL1 also executes an `SVC` and **carries on afterwards**,
+/// which is what makes it a system-call test rather than another trap test: the
+/// EL1 handler has to dispatch it, record it, and return to the instruction
+/// after it. Anything that merely reaches a handler proves dispatch; only
+/// resuming proves the other half.
+///
+/// It is a parameter rather than unconditional so that the excursion which was
+/// verified on hardware stays verifiable in exactly the form it was verified.
+/// Folding a new experiment into a proven measurement means a regression in the
+/// new one presents as the old one breaking.
 ///
 /// # Safety
 ///
 /// Changes `HCR_EL2` and the EL1 translation regime, and executes at EL1.
 /// Must be called inside [`vectors::with_vectors`] so the `HVC` home has a
 /// handler, and with `el1_stack` pointing at memory this image owns.
-pub unsafe fn drop_to_el1_and_return(el1_stack: u64) -> Excursion {
+pub unsafe fn drop_to_el1_and_return(el1_stack: u64, issue_svc: bool) -> Excursion {
     let hcr_before = registers::hcr_el2();
 
     // Give EL1 the same translation regime, attributes and vectors EL2 is using.
@@ -118,6 +141,12 @@ pub unsafe fn drop_to_el1_and_return(el1_stack: u64) -> Excursion {
             // ---- EL1 ----
             "1:",
             "mrs {observed}, CurrentEL",
+            "cbz {do_svc}, 3f",
+            // The system call. Reaching the instruction after this one is the
+            // measurement: it means EL1's handler dispatched the SVC, recorded
+            // it, and returned here rather than abandoning the level.
+            "svc #{imm}",
+            "3:",
             "hvc #0",
             // ---- back at EL2, via the handler's redirection ----
             "2:",
@@ -129,6 +158,8 @@ pub unsafe fn drop_to_el1_and_return(el1_stack: u64) -> Excursion {
             stack = in(reg) el1_stack,
             spsr = in(reg) SPSR_EL1H_MASKED,
             observed = out(reg) observed,
+            do_svc = in(reg) u64::from(issue_svc),
+            imm = const PROBE_SVC_IMMEDIATE,
             options(nostack)
         );
     }
@@ -149,6 +180,7 @@ pub unsafe fn drop_to_el1_and_return(el1_stack: u64) -> Excursion {
         hcr_after: registers::hcr_el2(),
         return_vector: vectors::last_exception().index,
         el1_fault: vectors::el1_fault(),
+        el1_svc: vectors::el1_svc(),
     }
 }
 

@@ -241,10 +241,21 @@ extern "C" {
 // left EL1's vectors alone -- and that turned any EL1 fault into a silent hang,
 // because nothing had ever written `VBAR_EL1` on this machine either.
 //
-// This table is the smallest thing that removes both problems. It reads only
-// EL1 registers, records them, and leaves EL1 immediately via `hvc`, which the
-// EL2 handler's redirect turns into a normal return. It never returns to EL1 and
-// therefore never has to preserve anything: an excursion that faulted is over.
+// This table reads only EL1 registers, and then splits on the syndrome:
+//
+//   * **`SVC` returns.** A system call is not a failure; the whole point of
+//     dispatching one is to go back and carry on. It records the syndrome and
+//     `eret`s, which means it owes the interrupted code every register it
+//     touched -- the same debt the EL2 handler learned the hard way when a
+//     timer FIQ corrupted its neighbours.
+//   * **Everything else abandons EL1** via `hvc`, which the EL2 handler's
+//     redirect turns into a normal return. An excursion that faulted is over,
+//     so that path preserves nothing.
+//
+// The split is on `ESR_EL1.EC`, not on the vector index. Vector 4 is "current
+// EL, SP_ELx, synchronous", which is `SVC` *and* every data abort, alignment
+// fault and undefined instruction that EL1 can raise. Returning from those
+// would re-execute the faulting instruction forever.
 // ---------------------------------------------------------------------------
 
 /// Value each slot of [`EL1_FAULT_RECORD`] starts at.
@@ -268,6 +279,23 @@ static EL1_FAULT_RECORD: [AtomicU64; 4] = [
     AtomicU64::new(EL1_FAULT_POISON),
 ];
 
+/// What an `SVC` at EL1 recorded: count, `ESR_EL1`, `ELR_EL1`.
+///
+/// The count is first and is what distinguishes "no system call was made" from
+/// "one was made and its syndrome happened to be zero". It is incremented with
+/// a load, an add and a store rather than `fetch_add`: measured on this target,
+/// every plain store in a handler landed correctly while `fetch_add` on a
+/// counter read back as zero, because a read-modify-write needs the exclusive
+/// monitor to work on the memory it targets and a plain store does not.
+static EL1_SVC_RECORD: [AtomicU64; 3] = [
+    AtomicU64::new(0),
+    AtomicU64::new(EL1_FAULT_POISON),
+    AtomicU64::new(EL1_FAULT_POISON),
+];
+
+/// `ESR_ELx.EC` for an `SVC` executed in AArch64 state.
+pub const EC_SVC_AARCH64: u64 = 0x15;
+
 core::arch::global_asm!(
     r#"
 .section .text.vectors, "ax"
@@ -275,9 +303,14 @@ core::arch::global_asm!(
 .globl brainix_el1_vector_table
 brainix_el1_vector_table:
 
+// Reserve the frame and save the interrupted x0/x1 BEFORE x0 is overwritten
+// with the vector index, exactly as the EL2 table does. The SVC path returns to
+// EL1, so those two registers have to survive.
 .macro EL1_VECTOR_ENTRY index
+    sub sp, sp, #(16 * 2)
+    stp x0, x1, [sp, #(16 * 0)]
     mov x0, #\index
-    b   brainix_el1_fault_common
+    b   brainix_el1_common
     .balign 0x80
 .endm
 
@@ -298,27 +331,52 @@ brainix_el1_vector_table:
     EL1_VECTOR_ENTRY 14
     EL1_VECTOR_ENTRY 15
 
-// No stack, no frame, no register preservation.
-//
 // `adrp`/`:lo12:` rather than a literal address: this image is loaded wherever
 // the proxy's allocator put it, not where it was linked, so every reference to
 // its own data has to be PC-relative or it addresses someone else's memory.
-brainix_el1_fault_common:
-    adrp x1, {record}
-    add  x1, x1, :lo12:{record}
+brainix_el1_common:
+    stp x2, x3, [sp, #(16 * 1)]
+    mrs x2, ESR_EL1
+    lsr x3, x2, #26
+    and x3, x3, #0x3F
+    cmp x3, #0x15               // EC 0x15: SVC from AArch64
+    b.eq 1f
+
+    // ---- not a system call: record it and abandon EL1 --------------------
+    // Nothing is restored, because nothing returns here. The `hvc` leaves EL1
+    // for good and the EL2 redirect resumes at the landing pad.
+    adrp x1, {fault}
+    add  x1, x1, :lo12:{fault}
     str  x0, [x1, #0]
-    mrs  x2, ESR_EL1
     str  x2, [x1, #8]
-    mrs  x2, ELR_EL1
-    str  x2, [x1, #16]
-    mrs  x2, FAR_EL1
-    str  x2, [x1, #24]
-    // Straight back to EL2. The redirect the excursion registered is still
-    // pending, so this arrives at EL2 vector 8 and returns to the landing pad
-    // like an ordinary `hvc` home -- with the syndrome already recorded.
+    mrs  x3, ELR_EL1
+    str  x3, [x1, #16]
+    mrs  x3, FAR_EL1
+    str  x3, [x1, #24]
     hvc  #0
+
+    // ---- a system call: record it and go back -----------------------------
+1:
+    adrp x1, {svc}
+    add  x1, x1, :lo12:{svc}
+    // Load, add, store. See EL1_SVC_RECORD: `fetch_add` does not work on the
+    // memory this payload runs from.
+    ldr  x3, [x1, #0]
+    add  x3, x3, #1
+    str  x3, [x1, #0]
+    str  x2, [x1, #8]
+    // ELR_EL1 already points at the instruction AFTER the `svc`. Advancing it
+    // the way the EL2 handler advances past a `brk` would skip a real
+    // instruction of the caller.
+    mrs  x3, ELR_EL1
+    str  x3, [x1, #16]
+    ldp  x2, x3, [sp, #(16 * 1)]
+    ldp  x0, x1, [sp, #(16 * 0)]
+    add  sp, sp, #(16 * 2)
+    eret
 "#,
-    record = sym EL1_FAULT_RECORD,
+    fault = sym EL1_FAULT_RECORD,
+    svc = sym EL1_SVC_RECORD,
 );
 
 extern "C" {
@@ -340,6 +398,17 @@ pub fn el1_fault() -> [u64; 4] {
         EL1_FAULT_RECORD[1].load(Ordering::Relaxed),
         EL1_FAULT_RECORD[2].load(Ordering::Relaxed),
         EL1_FAULT_RECORD[3].load(Ordering::Relaxed),
+    ]
+}
+
+/// What an `SVC` at EL1 recorded: `[count, ESR_EL1, ELR_EL1]`.
+///
+/// A count of zero means no system call was dispatched.
+pub fn el1_svc() -> [u64; 3] {
+    [
+        EL1_SVC_RECORD[0].load(Ordering::Relaxed),
+        EL1_SVC_RECORD[1].load(Ordering::Relaxed),
+        EL1_SVC_RECORD[2].load(Ordering::Relaxed),
     ]
 }
 

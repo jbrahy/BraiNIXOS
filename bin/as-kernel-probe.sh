@@ -263,6 +263,40 @@ else:
     print("  NOT YET. The lines above say which half is wrong.")
 
 print()
+print("  -- stage 4: SVC dispatched at EL1, and resumed from ---------------")
+if p.call(code + DROP_OFF, 4, dout) != DROP_MAGIC:
+    print("  stage 4 did not return the magic")
+    raise SystemExit(1)
+svc_count, svc_esr, svc_elr = d(9), d(10), d(11)
+svc_fault = [d(5), d(6), d(7), d(8)]
+print("  observed EL      EL%d" % d(1))
+print("  SVC dispatches   %d" % svc_count)
+if svc_count:
+    print("  ESR_EL1          0x%016x  EC 0x%x  ISS 0x%x"
+          % (svc_esr, (svc_esr >> 26) & 0x3F, svc_esr & 0xFFFF))
+    print("  ELR_EL1          0x%016x  (the instruction after the svc)" % svc_elr)
+if all(v == EL1_FAULT_POISON for v in svc_fault):
+    print("  EL1 fault        none -- EL1 resumed after the svc and reached its hvc")
+else:
+    print("  EL1 fault        vector %d  ESR 0x%016x  EC 0x%x"
+          % (svc_fault[0], svc_fault[1], (svc_fault[1] >> 26) & 0x3F))
+
+# Three conditions, not one. Reaching a handler proves dispatch; the syndrome
+# proves it was the SVC we issued and not some other trap on the same vector;
+# and the absence of a fault record proves EL1 RESUMED rather than abandoning
+# the level, which is the half a trap test cannot show.
+svc_ok = (svc_count == 1
+          and (svc_esr >> 26) & 0x3F == 0x15
+          and svc_esr & 0xFFFF == 0x42
+          and all(v == EL1_FAULT_POISON for v in svc_fault))
+print()
+if svc_ok:
+    print("  OK: SVC #0x42 dispatched to EL1's handler with EC 0x15, and EL1")
+    print("      carried on from the instruction after it.")
+else:
+    print("  SVC NOT PROVEN. All of: one dispatch, EC 0x15, ISS 0x42, no fault.")
+
+print()
 print("  -- stage 3: enabling pointer authentication -----------------------")
 if p.call(code + DROP_OFF, 3, dout) != DROP_MAGIC:
     print("  stage 3 did not return the magic")
@@ -319,8 +353,8 @@ else:
     print("  PAC NOT PROVEN. All three conditions must hold; see the lines above.")
 
 print()
-if el1_ok and verdict:
-    print("  ITEMS 6 AND 7 COMPLETE.")
+if el1_ok and svc_ok and verdict:
+    print("  EL1 DROP, SVC ENTRY AND POINTER AUTHENTICATION ALL VERIFIED.")
 else:
     raise SystemExit(1)
 PYEOF
