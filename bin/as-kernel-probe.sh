@@ -353,8 +353,48 @@ else:
     print("  PAC NOT PROVEN. All three conditions must hold; see the lines above.")
 
 print()
-if el1_ok and svc_ok and verdict:
-    print("  EL1 DROP, SVC ENTRY AND POINTER AUTHENTICATION ALL VERIFIED.")
+print("  -- stage 5: installing tables THIS REPO built ---------------------")
+if p.call(code + DROP_OFF, 5, dout) != DROP_MAGIC:
+    print("  stage 5 did not return the magic")
+    raise SystemExit(1)
+gl, block, live_desc, attrs = d(1), d(2), d(3), d(4)
+built_root, tables, checks, switched = d(5), d(6), d(7), d(8)
+probe_v, expect_v, restored, err = d(9), d(10), d(11), d(12)
+checked, mismatches = checks & 0xFFFFFFFF, checks >> 32
+BUILD_ERRORS = {0: "none", 1: "OutOfTables", 2: "MisalignedArena",
+                3: "AddressOutOfRange", 4: "MisalignedRange",
+                5: "UnsupportedConfiguration", 6: "AlreadyMapped"}
+print("  granule / levels %d bits / %d levels   block 0x%x (%d MiB)"
+      % (gl & 0xFF, (gl >> 8) & 0xFF, block, block >> 20))
+print("  live descriptor  0x%016x  (the machine's own, for a block)" % live_desc)
+print("  attributes lifted 0x%016x  AF=%d SH=%d AP=%d AttrIndx=%d"
+      % (attrs, (attrs >> 10) & 1, (attrs >> 8) & 3, (attrs >> 6) & 3, (attrs >> 2) & 7))
+print("  built root       0x%016x  %d tables for all 32 GiB of DRAM" % (built_root, tables))
+print("  cross-checked    %d addresses against AT s1e2r, %d mismatches"
+      % (checked, mismatches))
+if err:
+    print("  BUILD FAILED     %s" % BUILD_ERRORS.get(err, "code %d" % err))
+elif not switched:
+    print("  SWITCH REFUSED   our walker and the MMU disagreed. Nothing installed,")
+    print("                   TTBR0_EL2 never written. A refused switch costs")
+    print("                   nothing; a wrong one costs the machine.")
+else:
+    print("  read through it  0x%016x  (before: 0x%016x)  %s"
+          % (probe_v, expect_v, "SAME" if probe_v == expect_v else "DIFFERENT"))
+    print("  TTBR0_EL2 after  0x%016x  RESTORED" % restored)
+
+mmu_ok = (err == 0 and switched == 1 and mismatches == 0 and checked >= 5
+          and probe_v == expect_v)
+print()
+if mmu_ok:
+    print("  OK: the hardware walked tables this repository built, resolved the")
+    print("      running code through them, and TTBR0_EL2 is back where it was.")
+else:
+    print("  BUILT TABLES NOT PROVEN. See the lines above.")
+
+print()
+if el1_ok and svc_ok and verdict and mmu_ok:
+    print("  EL1 DROP, SVC ENTRY, PAC AND OUR OWN PAGE TABLES ALL VERIFIED.")
 else:
     raise SystemExit(1)
 PYEOF

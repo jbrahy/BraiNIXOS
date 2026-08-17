@@ -29,6 +29,8 @@
 #![allow(unsafe_code)]
 
 use super::registers;
+use crate::aarch64_tables::{BuildError, TableBuilder};
+use crate::aarch64_walk::{walk, WalkConfig};
 
 /// A root table this image owns, aligned to the 16 KiB granule the target uses.
 ///
@@ -138,4 +140,261 @@ pub unsafe fn switch_to_copied_root(probe_address: u64) -> SwitchReport {
         restored_root: registers::ttbr0_el2(),
         entries_copied: entries,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tables this repository built, rather than a copy of the machine's.
+//
+// The copied-root switch above deliberately held the mapping constant so a
+// fault would be attributable to the register change alone. This is the other
+// half, and the last untested step of MMU bring-up: the register AND the
+// mapping are ours.
+//
+// It is the most dangerous operation in the kernel. Between `msr TTBR0_EL2` and
+// the restore, every instruction fetch, every stack access and every load goes
+// through a table this code wrote. A single wrong descriptor is not a fault
+// that gets reported -- there is no console, and the vector table is itself at
+// an address that may no longer resolve.
+//
+// Three things make it survivable, and none of them is care.
+// ---------------------------------------------------------------------------
+
+/// DRAM base on this target, from m1n1's own `MMU: RAM base` line.
+const DRAM_BASE: u64 = 0x100_0000_0000;
+/// DRAM size: `mem_size_act` from `boot_args`, 32 GiB.
+const DRAM_SIZE: u64 = 0x8_0000_0000;
+
+/// Tables for the built root.
+///
+/// **All of DRAM costs three tables.** At a 16 KiB granule the block level
+/// resolves 32 MiB per descriptor, one level-2 table spans 2048 of them (64 GiB)
+/// and 32 GiB of DRAM is 1024 entries inside a single one. So the whole of
+/// memory is a root, one intermediate and one leaf table: 48 KiB.
+///
+/// That is what makes mapping *everything* the safe choice rather than the
+/// expensive one. `p.call` runs this on **m1n1's stack**, not ours, and
+/// `boot_args`, m1n1's own code and the payload are scattered across its heap;
+/// a mapping sized to "what we think we need" is a guess, and the failure mode
+/// of guessing wrong is a hang with no console. Mapping all of DRAM removes the
+/// guess for less memory than the arena's alignment padding.
+///
+/// Six tables rather than three so that a mapping request which needs more
+/// levels than expected returns [`BuildError::OutOfTables`] instead of running
+/// off the end.
+#[repr(align(16384))]
+struct TableArena([u64; 2048 * 6]);
+
+static mut BUILT_TABLES: TableArena = TableArena([0; 2048 * 6]);
+
+/// What building and installing our own tables produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltRootReport {
+    /// Granule the live `TCR` selects, decoded rather than assumed.
+    pub granule_bits: u32,
+    /// Levels the walk traverses.
+    pub levels: u32,
+    /// Bytes one block descriptor covers.
+    pub block_size: u64,
+    /// A live block descriptor, from the machine's own tables.
+    pub live_descriptor: u64,
+    /// Attribute bits lifted from it.
+    pub attributes: u64,
+    /// Physical base of the built root table.
+    pub built_root: u64,
+    /// Tables the build consumed.
+    pub tables_used: usize,
+    /// Addresses cross-checked against the hardware before switching.
+    pub checked: usize,
+    /// How many of them disagreed. Anything but zero and no switch happens.
+    pub mismatches: usize,
+    /// Whether the switch was actually performed.
+    pub switched: bool,
+    /// A value read through the built mapping while it was installed.
+    pub probe_value: u64,
+    /// The same address read before the switch.
+    pub expected_value: u64,
+    /// `TTBR0_EL2` after restoring.
+    pub restored_root: u64,
+    /// Build failure, as [`build_error_code`], or 0.
+    pub error: u64,
+}
+
+/// Numeric code for a [`BuildError`], for a report that crosses into Python.
+///
+/// Zero means no error, so the codes start at one.
+pub fn build_error_code(error: BuildError) -> u64 {
+    match error {
+        BuildError::OutOfTables => 1,
+        BuildError::MisalignedArena => 2,
+        BuildError::AddressOutOfRange => 3,
+        BuildError::MisalignedRange => 4,
+        BuildError::UnsupportedConfiguration => 5,
+        BuildError::AlreadyMapped => 6,
+    }
+}
+
+/// Build an identity map of DRAM, check it against the hardware, install it.
+///
+/// # Why it cannot simply be built and switched to
+///
+/// A table builder that is subtly wrong does not produce a table that fails to
+/// build. It produces one that resolves to a plausible wrong page, and the only
+/// symptom is that the machine stops. So this refuses to install anything it has
+/// not first checked against an independent oracle:
+///
+/// 1. **The attributes are the machine's, not invented.** They are lifted from a
+///    live block descriptor covering the address we are about to run through.
+///    Memory type is expressed as an `AttrIndx` into `MAIR`, so a plausible
+///    constant here yields a mapping that resolves and cannot be executed.
+/// 2. **Every checked address is walked twice.** Once by
+///    [`crate::aarch64_walk`] over the table just built, and once by the MMU
+///    itself via `AT S1E2R` on the live tables. Two independent implementations
+///    of opposite directions of the same specification, and `AT` cannot fault.
+/// 3. **A single disagreement aborts the switch.** `mismatches` is reported and
+///    `TTBR0_EL2` is never written. A refused switch costs nothing; a wrong one
+///    costs the machine.
+///
+/// # Safety
+///
+/// The caller must be at EL2 with translation enabled and an identity mapping
+/// over DRAM, which is what the target runs under m1n1. `check` should include
+/// the currently-executing code and anything the window touches.
+pub unsafe fn switch_to_built_root(probe_address: u64, check: &[u64]) -> BuiltRootReport {
+    let original_root = registers::ttbr0_el2();
+    let tcr = registers::tcr_el2();
+
+    let mut report = BuiltRootReport {
+        granule_bits: 0,
+        levels: 0,
+        block_size: 0,
+        live_descriptor: 0,
+        attributes: 0,
+        built_root: 0,
+        tables_used: 0,
+        checked: 0,
+        mismatches: 0,
+        switched: false,
+        probe_value: 0,
+        expected_value: 0,
+        restored_root: original_root,
+        error: 0,
+    };
+
+    let Some(config) = WalkConfig::from_tcr(tcr) else {
+        report.error = build_error_code(BuildError::UnsupportedConfiguration);
+        return report;
+    };
+    report.granule_bits = config.granule_bits;
+    report.levels = config.levels();
+
+    let live_root = original_root & 0x0000_FFFF_FFFF_FFFE;
+    // SAFETY: reading descriptors from physical addresses the live tables
+    // themselves point at, under the identity mapping this function's contract
+    // requires.
+    let live = walk(live_root, probe_address, config, |pa| unsafe {
+        core::ptr::read_volatile(pa as usize as *const u64)
+    });
+    let Ok(live) = live else {
+        report.error = build_error_code(BuildError::AddressOutOfRange);
+        return report;
+    };
+    report.live_descriptor = live.descriptor;
+
+    // Everything the descriptor says except where it points and what kind it is.
+    // That is access flag, shareability, permissions, AttrIndx and the upper
+    // attributes -- the parts this module has no business inventing.
+    let granule = 1u64 << config.granule_bits;
+    let address_mask = ((1u64 << 48) - 1) & !(granule - 1);
+    report.attributes = live.descriptor & !address_mask & !0b11;
+
+    // SAFETY: `BUILT_TABLES` is ours, 16 KiB aligned, and single-threaded here.
+    let arena: &mut [u64] = unsafe { &mut (*core::ptr::addr_of_mut!(BUILT_TABLES)).0 };
+    let arena_base = arena.as_ptr() as u64;
+
+    let mut builder = match TableBuilder::new(
+        arena,
+        arena_base,
+        config.granule_bits,
+        config.input_address_bits(),
+    ) {
+        Ok(builder) => builder,
+        Err(error) => {
+            report.error = build_error_code(error);
+            return report;
+        }
+    };
+    report.block_size = builder.block_size();
+
+    if let Err(error) = builder.map_blocks(DRAM_BASE, DRAM_BASE, DRAM_SIZE, report.attributes) {
+        report.error = build_error_code(error);
+        return report;
+    }
+    report.tables_used = builder.tables_used();
+    report.built_root = builder.root();
+
+    // ---- the gate ---------------------------------------------------------
+    // Our walker against the MMU's own answer, for every address the window
+    // will touch. Disagreement here is a table that would have hung the machine.
+    for &address in check {
+        report.checked = report.checked.saturating_add(1);
+        // SAFETY: as above -- reading descriptors from the table just built,
+        // through the identity mapping still in force.
+        let ours = walk(report.built_root, address, config, |pa| unsafe {
+            core::ptr::read_volatile(pa as usize as *const u64)
+        });
+        let par = registers::translate_el2_read(address);
+        let agrees = match ours {
+            // PAR_EL1 bit 0 set means the hardware could not translate it, so
+            // there is nothing to agree with and our mapping is the wrong one.
+            Ok(translation) if par & 1 == 0 => {
+                let hardware = (par & 0x0000_FFFF_FFFF_F000) | (address & 0xFFF);
+                translation.physical_address == hardware
+            }
+            _ => false,
+        };
+        if !agrees {
+            report.mismatches = report.mismatches.saturating_add(1);
+        }
+    }
+    if report.mismatches != 0 {
+        return report;
+    }
+
+    // SAFETY: the address is one the caller listed and the check above proved
+    // both mappings resolve it to the same place.
+    report.expected_value = unsafe { core::ptr::read_volatile(probe_address as *const u64) };
+
+    // SAFETY: same barrier sequence and same reasoning as
+    // `switch_to_copied_root`, with one difference that matters: the mapping is
+    // ours as well as the register, so the fetch of the instruction after the
+    // `isb` is the first real test of the table.
+    report.probe_value = unsafe {
+        core::arch::asm!(
+            "dsb ishst",
+            "msr TTBR0_EL2, {root}",
+            "isb",
+            "tlbi alle2is",
+            "dsb ish",
+            "isb",
+            root = in(reg) report.built_root,
+            options(nostack)
+        );
+
+        let value = core::ptr::read_volatile(probe_address as *const u64);
+
+        core::arch::asm!(
+            "dsb ishst",
+            "msr TTBR0_EL2, {root}",
+            "isb",
+            "tlbi alle2is",
+            "dsb ish",
+            "isb",
+            root = in(reg) original_root,
+            options(nostack)
+        );
+        value
+    };
+    report.switched = true;
+    report.restored_root = registers::ttbr0_el2();
+    report
 }

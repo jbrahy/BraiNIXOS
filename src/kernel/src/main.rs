@@ -670,6 +670,45 @@ pub unsafe extern "C" fn el1_probe(stage: u64, out: *mut u64) -> u64 {
             put(11, u64::from(report.keys_installed) | (u64::from(report.random_present) << 1));
             put(12, u64::from(report.authentication_works()));
         }
+        5 => {
+            // Install tables this repository built. The last untested step of
+            // MMU bring-up, and the most dangerous operation here: between the
+            // `msr` and the restore, every instruction fetch and every stack
+            // access goes through descriptors this code wrote.
+            let probe_va = el1_probe as *const () as u64;
+            let stack_pointer: u64;
+            // SAFETY: reading SP has no effects. It is included in the checked
+            // set because `p.call` runs this on **m1n1's** stack, not ours, and
+            // a mapping that omits it faults on the first push after the switch.
+            unsafe {
+                core::arch::asm!("mov {}, sp", out(reg) stack_pointer, options(nomem, nostack));
+            }
+            let check = [
+                probe_va,
+                stack_pointer,
+                brainix_kernel::arch::aarch64::vectors::table_address(),
+                brainix_kernel::arch::aarch64::vectors::el1_table_address(),
+                el1_stack_top().wrapping_sub(8),
+            ];
+            // SAFETY: at EL2 with translation on and an identity mapping over
+            // DRAM, which is what m1n1 leaves. The switch is refused unless our
+            // walker and the MMU agree on every address above.
+            let built = unsafe {
+                brainix_kernel::arch::aarch64::mmu::switch_to_built_root(probe_va, &check)
+            };
+            put(1, u64::from(built.granule_bits) | (u64::from(built.levels) << 8));
+            put(2, built.block_size);
+            put(3, built.live_descriptor);
+            put(4, built.attributes);
+            put(5, built.built_root);
+            put(6, built.tables_used as u64);
+            put(7, (built.checked as u64) | ((built.mismatches as u64) << 32));
+            put(8, u64::from(built.switched));
+            put(9, built.probe_value);
+            put(10, built.expected_value);
+            put(11, built.restored_root);
+            put(12, built.error);
+        }
         _ => {}
     }
     EL1_PROBE_MAGIC

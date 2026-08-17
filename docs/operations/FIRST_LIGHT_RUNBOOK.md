@@ -465,6 +465,39 @@ isb            invalidation complete before execution continues
 `tlbi` is the one people skip. It **appears to work**, because the TLB still
 holds correct translations, and then fails later at an unrelated address.
 
+### Installing tables you built yourself
+
+Step 4 above, and three rules make the difference between a measurement and a
+coin flip.
+
+**Map all of DRAM, not what you think you need.** It is the *cheap* option, not
+the expensive one: at a 16 KiB granule the block level covers 32 MiB, one
+level-2 table spans 64 GiB of it, and all 32 GiB of this machine's memory is
+1024 entries inside a single table. Root plus intermediate plus leaf is **three
+tables, 48 KiB**. Sizing the map to the payload instead is a guess — `p.call`
+runs on **m1n1's** stack, and `boot_args`, m1n1's code and your image are
+scattered across its heap — and the failure mode of guessing wrong is a hang.
+
+**Lift the attributes from a live descriptor.** Do not write a plausible
+constant. Memory type is an `AttrIndx` into `MAIR`, so the same descriptor bits
+mean different things under different `MAIR` values, and a wrong index produces
+a mapping that resolves perfectly and cannot be executed. On this target a live
+block reads `0x1000c000601`, giving attribute bits `0x600`: `AF=1`, `SH=2`,
+`AP=0`, `AttrIndx=0`.
+
+**Check before you switch, and refuse on any disagreement.** Walk every address
+the window will touch twice — once with your own walker over the table you just
+built, once with `AT s1e2r`, which cannot fault. A refused switch costs nothing;
+a wrong one costs the machine and tells you nothing about why. Include the
+stack pointer in the checked set.
+
+```
+built root       0x000001000cc94000  3 tables for all 32 GiB of DRAM
+cross-checked    5 addresses against AT s1e2r, 0 mismatches
+read through it  0xa90957fed102c3ff  (before: 0xa90957fed102c3ff)  SAME
+TTBR0_EL2 after  0x0000010002e3c000  RESTORED
+```
+
 Values measured on the target, for reference:
 
 | | |
