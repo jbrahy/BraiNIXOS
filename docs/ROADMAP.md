@@ -400,7 +400,24 @@ waits. Those slices are enumerated as **Track C** in *The plan from here*, and A
 discharges one of AS-5-T0's five signed preconditions on a laptop.
 
 - **AS-1** **SLICED (2026-08-10).** AS-1 as written below is a dozen independent subsystems, and one spec across all of them would be written entirely against unverified assumptions. It is now delivered in slices, each with its own design doc. **AS-1a is COMPLETE to the hardware gate (`e90ea1e`)**; the rest are unstarted.
-  - **AS-1a — first light.** [`architecture/AS-1a-first-light-boot-stub.md`](architecture/AS-1a-first-light-boot-stub.md). The smallest payload that proves the delivery chain: target plumbing, linker script, entry assembly, s5l UART transmit, ADT-derived UART discovery, banner. Landed as **`src/boot-stub-apple/`** with 32 host tests and a linked `aarch64-unknown-none-softfloat` image. **Everything except the hardware run is done**; the run is blocked on the rig, not on code.
+  - **AS-1a — first light. RAN ON THE HARDWARE 2026-08-16.** [`architecture/AS-1a-first-light-boot-stub.md`](architecture/AS-1a-first-light-boot-stub.md). Landed as **`src/boot-stub-apple/`**, now 64 host tests plus a hardware run.
+
+    Our code executed on the target (`Mac14,12`, M2 Pro), parsed the real `boot_args`, located the real ADT, walked it, selected the console and translated its `reg` to the address m1n1 independently reported:
+
+    ```
+    returned 0x427261694e495801 -> OUR CODE RAN
+      stage        3 (console resolved)
+      adt          0x1000361c000  len 0x78000
+      console      DockChannel @ 0x29e528000
+    ```
+
+    Reproduce with `./bin/as-probe.sh`. Three things this row said before are now known to have been wrong, and each was found by running rather than reasoning:
+
+    1. **"s5l UART transmit" was the wrong peripheral.** The console on `T6020` is **DockChannel**; the debug-serial mux presents it on the Type-C SBU pins. `/arm-io/uart0` exists, is correctly described, translates correctly and even carries `boot-console` — and emits nothing a host can see. That is OQ-5, resolved on the machine, and it means a *flawless* s5l implementation produces silence indistinguishable from never running. `src/boot-stub-apple/src/dockchannel.rs` is the driver that works.
+    2. **The banner was never observable on this rig, for reasons outside our code.** The framebuffer iBoot hands a custom boot object is a dummy that is never scanned out (HDMI reads `No Signal` throughout), and the SBU serial path delivers zero bytes — *including for m1n1 itself*, which is known-good and prints 3,738 bytes over USB. Both output paths this row assumed are unavailable. See [`operations/FIRST_LIGHT_RUNBOOK.md`](operations/FIRST_LIGHT_RUNBOOK.md) §9a and §9b.
+    3. **"Blocked on the rig, not on code" was half wrong.** There was a real bug: `adt_window` computed `devtree - virt_base` with `checked_sub`, which denies every boot under m1n1, because m1n1 passes a sign-extended kernel `virt_base` far above `devtree`. Both forms occur on this same hardware, so the parser worked under iBoot and denied under m1n1 — presenting exactly as "the payload is broken". Fixed; the containment check that was the real safety property is unchanged.
+
+    **What is genuinely still open:** bytes emerging from the SBU pins. Proven independent of our code, and the remaining candidates are all physical — a cable without SBU pins, the wrong port, or serial mode not surviving a reboot.
   - **AS-1b — the aarch64 core, unstarted except for the MMU encoder.** EL2→EL1, MMU init and the table walk, exception vectors, generic timer, SVC entry, RNDR/PAC-BTI, watchdog reset, Image4/`kmutil` delivery, secondary-CPU release. `src/aarch64-mmu/` (Track C, C1) is its descriptor half and is done to the hardware gate.
   - **AS-1c — the kernel crate itself builds for aarch64.** *(Named 2026-08-14; it was implied by AS-1a's deviation 2 and scheduled nowhere.)* `src/kernel` compiles for `x86_64-unknown-none` and for nothing else: `src/kernel/src/arch/` contains ten x86-64 modules and no aarch64 sibling, `.cargo/config.toml` hardcodes `build.target = "x86_64-unknown-none"`, and `find src/kernel -iname '*aarch64*'` is empty. AS-1a deliberately deferred this — cfg-gating the whole module tree before a character had been printed risked the frozen reference build (#26) for no gain — and that was the right call for AS-1a. It stops being right the moment anything needs to *run*.
 
