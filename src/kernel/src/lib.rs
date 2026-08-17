@@ -10,6 +10,9 @@
 #[cfg(any(bare_metal_x86, bare_metal_aarch64))]
 pub mod arch;
 
+/// aarch64 identification decoding: pure, host-tested, no instructions.
+pub mod aarch64_ident;
+
 #[cfg(bare_metal_x86)]
 pub mod boot;
 

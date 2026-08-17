@@ -131,8 +131,11 @@ fn write_panic_details(
 ///
 /// # Safety
 ///
-/// `boot_args` must be the pointer firmware placed in `x0`. The MMU is off at
-/// entry, so physical addresses are directly usable.
+/// `boot_args` must be the pointer firmware placed in `x0`, and the addresses
+/// it yields must be directly dereferenceable. Entered from iBoot the MMU is
+/// off; entered under m1n1 it is on with an identity mapping over the device
+/// memory this touches (`SCTLR_EL1 = 0x30901185`, measured). See
+/// `arch::aarch64::Console::from_boot_args`.
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
 // Placed in `.text.boot`, which linker-aarch64.ld KEEPs first.
@@ -241,6 +244,24 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
     let (base, from_adt) = unsafe { brainix_kernel::arch::aarch64::Console::probe(boot_args) };
     put(2, base);
     put(3, u64::from(from_adt));
+
+    // AS-1b groundwork, all reads. `TCR_EL1` and `TTBR*_EL1` cannot be written
+    // correctly without these, and a wrong translation configuration takes the
+    // machine down before it can report why -- so they are measured first.
+    use brainix_kernel::arch::aarch64::registers;
+    put(4, registers::midr());
+    put(5, registers::mpidr());
+    put(6, registers::counter_frequency_hz());
+    put(7, registers::sctlr_el1());
+    put(8, registers::id_aa64mmfr0_el1());
+
+    let model = brainix_kernel::arch::aarch64::memory_model();
+    put(9, u64::from(model.physical_address_bits.unwrap_or(0)));
+    put(
+        10,
+        u64::from(model.granule_4k) | (u64::from(model.granule_16k) << 1) | (u64::from(model.granule_64k) << 2),
+    );
+    put(11, u64::from(registers::el1_mmu_enabled()));
 
     KERNEL_PROBE_MAGIC
 }

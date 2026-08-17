@@ -79,8 +79,20 @@ impl Console {
     /// # Safety
     ///
     /// `boot_args` must be the pointer firmware placed in `x0` at entry, or
-    /// null. The MMU must still be off, so physical addresses are usable
-    /// directly.
+    /// null, and the addresses it yields must be **directly dereferenceable**.
+    ///
+    /// That holds in the two cases this runs in, for different reasons, and the
+    /// distinction was measured rather than assumed:
+    ///
+    /// - entered from iBoot as a boot object, the MMU is **off**, so a physical
+    ///   address is a usable pointer;
+    /// - running under m1n1's proxy, the MMU is **on** — `SCTLR_EL1` read
+    ///   `0x30901185` on the target, `M` set — and m1n1's mapping is identity
+    ///   over this device memory, so the same addresses still work.
+    ///
+    /// An earlier version of this comment asserted flatly that the MMU is off.
+    /// It is not, half the time, and a safety comment that is wrong about its
+    /// own precondition is worse than none.
     pub unsafe fn from_boot_args(boot_args: *const u8) -> Self {
         let base = unsafe { Self::resolve_base(boot_args) };
         Self {

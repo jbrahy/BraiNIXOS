@@ -59,6 +59,11 @@
 
 pub mod console;
 pub mod halt;
+pub mod registers;
+pub mod timer;
 
 pub use console::Console;
 pub use halt::{current_exception_level, park};
+pub use crate::aarch64_ident::MemoryModel;
+pub use registers::memory_model;
+pub use timer::Timer;
