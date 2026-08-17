@@ -27,8 +27,6 @@
 
 #![allow(unsafe_code)]
 
-use brainix_adt::DeviceTree;
-
 /// Counter. Cleared before arming so the alarm measures from now.
 const WDT_COUNT: u64 = 0x10;
 /// Alarm threshold. The counter reaching this triggers the configured action.
@@ -46,16 +44,12 @@ pub const WDT_ADT_PATH: &[u8] = b"/arm-io/wdt";
 
 /// Find the watchdog's translated register base in `adt_blob`.
 ///
-/// Translated, never raw: an untranslated `/arm-io` address is a valid-looking
-/// physical address pointing at the wrong device, and the wrong device here is
-/// one we would be writing a reset command to.
+/// Delegates to [`crate::aarch64_devices::translated_reg`], which is host-tested
+/// against the real tree. The guards it applies are not optional here: what
+/// gets written to this address is a machine reset, so an untranslated or
+/// mis-resolved one is not a wasted cycle.
 pub fn locate(adt_blob: &[u8]) -> Option<u64> {
-    let tree = DeviceTree::parse(adt_blob).ok()?;
-    let node = tree.resolve(WDT_ADT_PATH).ok()?;
-    // The parent must carry `ranges`, or `translated_reg` returns the raw
-    // address successfully -- the same trap `discover` documents.
-    node.parent()?.find_property(b"ranges").ok()??;
-    Some(node.translated_reg(0).ok()?.address)
+    crate::aarch64_devices::translated_reg(adt_blob, WDT_ADT_PATH, 0)
 }
 
 /// Arm the watchdog to reset the machine after `alarm` counter ticks.

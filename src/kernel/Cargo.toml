@@ -51,9 +51,18 @@ curve25519-dalek = { version = "4", default-features = false }
 # the ADT console discovery that were verified on the target machine on
 # 2026-08-16 -- reusing them is the difference between an aarch64 backend that
 # has been run and one that has been written.
+# brainix-adt is NOT target-gated, unlike the boot stub below.
+#
+# It is a pure no_std crate whose own tests run on the host, and the pure ADT
+# code in this crate (aarch64_devices) needs it to be host-testable at all.
+# Gating it would put the device lookup back where it started: correct-looking,
+# and untested against the tree it actually parses. The gate below exists
+# because a host build has no business compiling a boot stub; that reasoning
+# does not extend to a byte-slice parser.
+brainix-adt = { path = "../adt" }
+
 [target.'cfg(all(target_arch = "aarch64", target_os = "none"))'.dependencies]
 brainix-boot-stub-apple = { path = "../boot-stub-apple" }
-brainix-adt = { path = "../adt" }
 
 # Bare-metal x86-64 ONLY -- note `target_os = "none"`, which is load-bearing.
 #

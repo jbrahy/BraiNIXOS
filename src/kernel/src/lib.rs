@@ -22,6 +22,9 @@ pub mod aarch64_tables;
 /// CPU feature detection: pure, host-tested, no instructions.
 pub mod aarch64_features;
 
+/// ADT device lookup: pure, host-tested, no instructions.
+pub mod aarch64_devices;
+
 #[cfg(bare_metal_x86)]
 pub mod boot;
 
