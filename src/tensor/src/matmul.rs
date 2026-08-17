@@ -612,3 +612,66 @@ pub fn matmul_q8_0_q8a_rows(
     }
     Ok(())
 }
+
+/// `y = W xᵀ` with `Q4_0` weights and `Q8_0` activations.
+///
+/// Each 16-byte weight block is unpacked to 32 signed bytes and then fed to the
+/// same [`block_dot_i8`] the `Q8_0` path uses, so the two kernels differ by
+/// exactly one step: the unpack. That is deliberate -- it makes the benchmark a
+/// measurement of the unpack rather than of two unrelated implementations.
+///
+/// # Errors
+///
+/// As [`matmul_q8_0_q8a`].
+pub fn matmul_q4_0_q8a(
+    shape: MatMulShape,
+    weights: &crate::q4::Q4Weights<'_>,
+    activations: &Q8Weights<'_>,
+    y: &mut [f32],
+) -> Result<(), TensorError> {
+    if shape.n_tokens == 0 || shape.n_in == 0 || shape.n_out == 0 {
+        return Err(TensorError::ZeroDimension);
+    }
+    if shape.n_in != weights.n_in() || shape.n_out != weights.n_out() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    if shape.n_in != activations.n_in() || shape.n_tokens != activations.n_out() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    let required_y = shape
+        .n_tokens
+        .checked_mul(shape.n_out)
+        .ok_or(TensorError::DimensionOverflow)?;
+    if y.len() != required_y {
+        return Err(TensorError::ShapeMismatch);
+    }
+
+    let mut unpacked = [0u8; Q8_0_BLOCK];
+    for (out_index, (weight_scales, weight_packed)) in weights.rows().enumerate() {
+        for (token_index, (x_scales, x_quants)) in activations.rows().enumerate() {
+            let mut acc = 0.0_f32;
+            for (((weight_scale, packed_block), x_scale), x_block) in weight_scales
+                .chunks_exact(SCALE_BYTES)
+                .zip(weight_packed.chunks_exact(Q8_0_BLOCK / 2))
+                .zip(x_scales.chunks_exact(SCALE_BYTES))
+                .zip(x_quants.chunks_exact(Q8_0_BLOCK))
+            {
+                let ws = read_f32_le(weight_scale).ok_or(TensorError::MalformedPayload)?;
+                let xs = read_f32_le(x_scale).ok_or(TensorError::MalformedPayload)?;
+                crate::q4::unpack_block(packed_block, &mut unpacked);
+                acc += ws * xs * block_dot_i8(&unpacked, x_block) as f32;
+            }
+            let slot = y
+                .get_mut(
+                    token_index
+                        .checked_mul(shape.n_out)
+                        .ok_or(TensorError::DimensionOverflow)?
+                        .checked_add(out_index)
+                        .ok_or(TensorError::DimensionOverflow)?,
+                )
+                .ok_or(TensorError::ShapeMismatch)?;
+            *slot = acc;
+        }
+    }
+    Ok(())
+}

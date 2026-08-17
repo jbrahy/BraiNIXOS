@@ -47,8 +47,8 @@
 //! does not, and must be re-measured on the target.
 
 use brainix_tensor::{
-    matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations, MatMulShape,
-    Q8Weights, Q8_0_BLOCK,
+    matmul_q4_0_q8a, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations,
+    quantize_q4_0, MatMulShape, Q4Weights, Q8Weights, Q8_0_BLOCK,
 };
 use std::time::Instant;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -399,6 +399,88 @@ fn measure_pool(label: &str, n_in: usize, n_out: usize) {
     }
 }
 
+/// Bytes a `Q4_0` weight element costs: half a nibble byte plus 4/32 of a scale.
+const Q4_BYTES_PER_ELEMENT: f64 = 0.625;
+
+/// `Q4_0` against `Q8_0` on identical shapes.
+///
+/// Reports **both** weight-byte throughput and time per call, because they
+/// answer different questions and `Q4_0` can win one while losing the other.
+/// GB/s is bytes moved per second, and `Q4_0` moves 1.8x fewer of them for the
+/// same result -- so the honest comparison of *speed* is microseconds per call.
+fn measure_q4(label: &str, n_in: usize, n_out: usize, threads: usize) {
+    let q8_payload = synthetic_payload(n_out, n_in);
+    let q8 = Q8Weights::new(&q8_payload, n_out, n_in).expect("q8");
+
+    // Same underlying values in both formats, so the comparison is of encodings
+    // rather than of two different matrices.
+    let mut dense = vec![0.0f32; n_out * n_in];
+    q8.dequantize_into(&mut dense).expect("dequantize");
+    let mut q4_payload = vec![0u8; Q4Weights::derived_payload_len(n_out, n_in).expect("len")];
+    quantize_q4_0(n_out, n_in, &dense, &mut q4_payload).expect("quantize q4");
+    let q4 = Q4Weights::new(&q4_payload, n_out, n_in).expect("q4");
+
+    let shape = MatMulShape { n_tokens: 1, n_in, n_out };
+    let x = vec![0.5_f32; n_in];
+    let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, n_in).expect("len")];
+    quantize_activations(1, n_in, &x, &mut scratch).expect("quantize");
+    let activations = Q8Weights::new(&scratch, 1, n_in).expect("view");
+    let mut y = vec![0.0_f32; n_out];
+
+    let q8_bytes = n_out as f64 * n_in as f64 * BYTES_PER_WEIGHT_ELEMENT;
+    let q4_bytes = n_out as f64 * n_in as f64 * Q4_BYTES_PER_ELEMENT;
+    let iterations = (500_000_000.0 / q8_bytes).max(20.0) as usize;
+
+    let _ = &mut y;
+    let began = Instant::now();
+    thread::scope(|scope| {
+        for _ in 0..threads {
+            let (q8, activations) = (&q8, &activations);
+            scope.spawn(move || {
+                let mut y = vec![0.0_f32; n_out];
+                for _ in 0..iterations {
+                    matmul_q8_0_q8a(shape, q8, activations, &mut y).expect("q8");
+                }
+                std::hint::black_box(&y);
+            });
+        }
+    });
+    let q8_seconds = began.elapsed().as_secs_f64();
+
+    let began = Instant::now();
+    thread::scope(|scope| {
+        for _ in 0..threads {
+            let (q4, activations) = (&q4, &activations);
+            scope.spawn(move || {
+                let mut y = vec![0.0_f32; n_out];
+                for _ in 0..iterations {
+                    matmul_q4_0_q8a(shape, q4, activations, &mut y).expect("q4");
+                }
+                std::hint::black_box(&y);
+            });
+        }
+    });
+    let q4_seconds = began.elapsed().as_secs_f64();
+
+    println!("  {label}  [{threads} thread(s)]");
+    println!(
+        "    Q8_0  {:7.2} GB/s   {:8.1} us/call   ({:.1} MB)",
+        q8_bytes * iterations as f64 * threads as f64 / q8_seconds / 1e9,
+        q8_seconds / iterations as f64 * 1e6,
+        q8_bytes / 1e6
+    );
+    println!(
+        "    Q4_0  {:7.2} GB/s   {:8.1} us/call   ({:.1} MB)",
+        q4_bytes * iterations as f64 * threads as f64 / q4_seconds / 1e9,
+        q4_seconds / iterations as f64 * 1e6,
+        q4_bytes / 1e6
+    );
+    println!(
+        "    ---> Q4_0 moves 1.80x fewer bytes and is {:.2}x the speed",
+        q8_seconds / q4_seconds
+    );
+}
+
 fn main() {
     println!();
     println!("  matmul_q8_0 — weight-byte throughput, single core");
@@ -462,6 +544,14 @@ fn main() {
     measure_pool("4096x4096 (attention proj, 18.9 MB)", 4096, 4096);
     println!();
     measure_pool("4096x11008 (ffn up, 50.7 MB)", 4096, 11008);
+
+    println!();
+    println!("  Q4_0 vs Q8_0 — same values, single core");
+    println!();
+    for threads in [1usize, 4, 6] {
+        measure_q4("4096x11008 (50.7 -> 28.2 MB)", 4096, 11008, threads);
+        println!();
+    }
 
     println!();
     println!("  Interpretation:");
