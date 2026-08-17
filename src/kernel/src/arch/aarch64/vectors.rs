@@ -255,7 +255,7 @@ extern "C" {
 /// was in that memory. A recognisable non-zero initialiser puts the array in
 /// `.data`, where the flat image carries it, and makes "never ran" a value you
 /// can read rather than infer.
-const EL1_FAULT_POISON: u64 = 0xE11_FA017_0000_0000;
+const EL1_FAULT_POISON: u64 = 0xE11F_A017_0000_0000;
 
 /// What an EL1 fault recorded: vector index, `ESR_EL1`, `ELR_EL1`, `FAR_EL1`.
 ///

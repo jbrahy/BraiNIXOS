@@ -558,6 +558,7 @@ pub const EL1_PROBE_MAGIC: u64 = 0x4B72_6E6C_4E49_5803; // "Krnl NIX\x03"
 /// | --- | --- | --- |
 /// | 1 | programme EL1's regime, ask `AT S1E1R` what EL1 could reach | no; `AT` cannot fault |
 /// | 2 | drop to EL1, read `CurrentEL`, return via `HVC` | yes; this is the experiment |
+/// | 3 | enable pointer authentication and prove a forged signature is rejected | yes; writes `SCTLR` |
 ///
 /// # Report layout
 ///
@@ -566,11 +567,17 @@ pub const EL1_PROBE_MAGIC: u64 = 0x4B72_6E6C_4E49_5803; // "Krnl NIX\x03"
 /// Stage 2: `[magic, observed EL, HCR before, HCR after, return vector,
 /// EL1 fault index, ESR_EL1, ELR_EL1, FAR_EL1]`.
 ///
+/// Stage 3: `[magic, SCTLR before, SCTLR enabled, SCTLR after, APCTL, signed as
+/// found, signed, recovered, authenticated tampered, plain, vector,
+/// keys installed, verdict]`.
+///
 /// # Safety
 ///
-/// `out` must have room for nine `u64`s. Both stages write EL1's registers and
-/// briefly clear `HCR_EL2.TGE`; stage 2 additionally executes at EL1. Both
-/// restore `HCR_EL2` before returning.
+/// `out` must have room for thirteen `u64`s. Stages 1 and 2 write EL1's
+/// registers and briefly clear `HCR_EL2.TGE`; stage 2 additionally executes at
+/// EL1; stage 3 writes `SCTLR` and the key A registers. All restore what they
+/// changed except the authentication keys, which are not read back before being
+/// written -- see `arch::aarch64::pac`.
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
 pub unsafe extern "C" fn el1_probe(stage: u64, out: *mut u64) -> u64 {
@@ -621,6 +628,34 @@ pub unsafe extern "C" fn el1_probe(stage: u64, out: *mut u64) -> u64 {
             put(6, excursion.el1_fault[1]);
             put(7, excursion.el1_fault[2]);
             put(8, excursion.el1_fault[3]);
+        }
+        3 => {
+            // A value shaped like a pointer this image owns. The signature goes
+            // in the bits above the address, so signing something that is not
+            // pointer-shaped would put it somewhere the hardware does not use
+            // and prove less than it appears to.
+            let plain = el1_probe as *const () as u64;
+            // SAFETY: inside `with_vectors`, which stage 3 requires: it
+            // deliberately authenticates a forged signature, and on a part
+            // implementing FEAT_FPAC that is a synchronous exception rather
+            // than a poisoned pointer.
+            let report = unsafe {
+                brainix_kernel::arch::aarch64::with_vectors(|| {
+                    brainix_kernel::arch::aarch64::pac::enable_and_verify(plain, 0)
+                })
+            };
+            put(1, report.sctlr_before);
+            put(2, report.sctlr_while_enabled);
+            put(3, report.sctlr_after);
+            put(4, report.apctl);
+            put(5, report.signed_as_found);
+            put(6, report.signed);
+            put(7, report.recovered);
+            put(8, report.authenticated_tampered);
+            put(9, report.plain);
+            put(10, report.vector);
+            put(11, u64::from(report.keys_installed) | (u64::from(report.random_present) << 1));
+            put(12, u64::from(report.authentication_works()));
         }
         _ => {}
     }

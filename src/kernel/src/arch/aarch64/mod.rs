@@ -62,6 +62,7 @@ pub mod console;
 pub mod el;
 pub mod halt;
 pub mod mmu;
+pub mod pac;
 pub mod registers;
 pub mod timer;
 pub mod vectors;

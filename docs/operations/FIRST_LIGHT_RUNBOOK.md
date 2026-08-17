@@ -479,6 +479,108 @@ Values measured on the target, for reference:
 16 KiB. Reading it as ordered gives a walker that is wrong on exactly the
 granule Apple Silicon uses.
 
+## 9e. Align the load address, or lose a day to it
+
+**`u.malloc` does not align.** It returns wherever the heap happens to be —
+`0x1000da10240` on the run that exposed this. The payload contains structures
+that are aligned *relative to the start of the image*: two 2 KiB-aligned vector
+tables and a 16 KiB-aligned root page table. They are only aligned in memory if
+the image starts aligned.
+
+Nothing tells you when this is wrong. `VBAR` ignores bits [10:0], so a
+misaligned table is **not rejected** — every exception branches that many bytes
+short of the real table, into the middle of whatever precedes it. The machine
+hangs, with no console and no fault.
+
+It is intermittent in the worst possible way. The alignment depends on the size
+of the allocations before it, which depends on the size of the image, so a
+change that has nothing to do with exceptions can turn a working probe into a
+hang. Adding 2 KiB of vector table did exactly that: a probe that reported forty
+values started reporting none, and nothing in the diff looked like it could.
+
+`bin/as-kernel-probe.sh` rounds the load address up to 16 KiB and refuses to run
+if it cannot. Any new loader needs the same, including `as-probe.sh` the moment
+the boot stub grows anything alignment-sensitive.
+
+## 9f. Dropping to EL1 under m1n1
+
+It works, and the two things that made it look impossible were both ours.
+
+**Install `SPSR_EL2` as well as `ELR_EL2`.** A handler that writes only the
+return address leaves `SPSR_EL2` holding what exception entry put there. That is
+correct exactly when the return resumes at the level the exception came from,
+and silently wrong otherwise — which is every return that changes level. `HVC`
+from EL1 enters with `SPSR_EL2` = EL1h; a redirect asking for EL2h that does not
+write `SPSR_EL2` resumes **at EL1**, and the next EL2-only instruction wedges the
+machine. A `brk` at EL2 will never show this, because there the stale value
+happens to be right.
+
+**EL1 needs more than `TTBR` and `TCR`.** Copying the tables without `MAIR`
+leaves every `AttrIndx` naming Device-nGnRnE, including the one the instruction
+stream is fetched through. And `VBAR_EL1` had never been written on this machine,
+so an EL1 fault branched into whatever was in it — a hang carrying nothing. EL1
+gets a vector table of its own, reading only EL1 registers; pointing it at the
+EL2 table instead is worse than useless, because that table reads `ESR_EL2` and
+faults inside itself forever.
+
+**Ask before you jump.** `AT S1E1R` translates through EL1's regime and
+**cannot fault** — an unreachable address lands in `PAR_EL1.F`. With `TGE` clear
+it answers, for free, the question the drop otherwise answers by hanging. `TGE`
+must be clear first: with it set, `AT S1E1R` uses the EL2&0 regime and tells you
+nothing about EL1.
+
+**One returning call per experiment.** A hang takes m1n1's proxy with it, so
+anything sharing a call with a step that hangs is lost with it — including
+measurements that already succeeded. `el1_probe` takes a stage argument for this
+reason, and the safe measurements run in `kernel_probe` where nothing can hang.
+
+Measured on 2026-08-16:
+
+```
+observed EL      EL1  DROPPED TO EL1
+HCR before       0x0000032488000038
+HCR after        0x0000032488000038  RESTORED
+return vector    8  (lower EL, AArch64, synchronous)
+EL1 fault        none -- EL1 reached its hvc without faulting
+```
+
+## 9g. Pointer authentication: enabled is not the same as working
+
+`SCTLR` bits for features a part does not implement are **RES0** — the write is
+accepted and discarded. So read the register back; a bit that did not stick
+means everything after it measures a feature that was never on.
+
+Measured: `0x30901185` → `0x10f8903185`, with `EnIA`, `EnIB`, `EnDA`, `EnDB` and
+`BT1` all set and all stuck.
+
+That still proves nothing about authentication. With PAC disabled, signing
+returns the pointer unchanged and authenticating it matches — every round-trip
+test passes while the mitigation is absent. **Tamper with the signature.** Only
+rejection distinguishes a working PAC from a disabled one:
+
+```
+plain            0x000001000d328138
+signed as found  0x000001000d328138  unchanged -- a NOP beforehand, as expected
+signed           0x024e01000d328138  signature present
+recovered        0x000001000d328138  matches plain
+tampered auth    0x02ce01000d328138  REJECTED
+exception        vector 4 -- FEAT_FPAC faulted on the forged signature
+```
+
+Write `PACIA1716`/`AUTIA1716` as `hint #8`/`hint #12`. They are in the HINT
+space precisely so a part without the feature NOPs them, and the raw form
+assembles without the target enabling `pauth` — which it must not, because
+whether the feature exists is a run-time question.
+
+Two Apple specifics. `ID_AA64ISAR1_EL1.APA` (QARMA) is **0** and `API`
+(implementation defined) is **4**: check only `APA` and you conclude PAC is
+absent on hardware that has it, with `FEAT_FPAC` on top. And
+`ID_AA64ISAR0_EL1 = 0x0221100110212120` — the `RNDR` field is **zero**, so
+**this part has no hardware RNG**. Key installation needs entropy, so PAC here
+still runs on the key firmware loaded. It differs per boot, which beats a
+constant, but it is not a key this kernel chose, and closing that depends on
+finding another entropy source.
+
 ## 10. Driving the machine when you are not next to it
 
 Recovery work needs a keyboard on the target and eyes on its screen. Both can be

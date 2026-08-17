@@ -190,6 +190,15 @@ print("  CurrentEL        EL%d" % r(1))
 print("  console base     0x%-16x  from ADT: %d" % (r(2), r(3)))
 print("  MIDR             0x%x" % r(4))
 print("  MPIDR            0x%x" % r(5))
+cf = r(44)
+print("  ID_AA64ISAR0     0x%016x  RNDR field [63:60] = 0x%x" % (r(40), (r(40) >> 60) & 0xF))
+print("  ID_AA64ISAR1     0x%016x  APA 0x%x API 0x%x GPA 0x%x GPI 0x%x"
+      % (r(41), (r(41) >> 4) & 0xF, (r(41) >> 8) & 0xF, (r(41) >> 24) & 0xF, (r(41) >> 28) & 0xF))
+print("  ID_AA64PFR1      0x%016x  BT [3:0] = 0x%x" % (r(42), r(42) & 0xF))
+print("  FEAT_RNG         %d   RNDR draws 0x%x 0x%x  both valid: %d"
+      % (r(43), r(45), r(46), r(47)))
+print("  PAC/BTI          APA=%d API=%d GPA=%d GPI=%d BTI=%d"
+      % (cf & 1, (cf >> 1) & 1, (cf >> 2) & 1, (cf >> 3) & 1, (cf >> 4) & 1))
 
 print()
 print("  -- exception level bisect (item 7) -------------------------------")
@@ -245,13 +254,74 @@ else:
     print("    ELR_EL1        0x%016x" % fault[2])
     print("    FAR_EL1        0x%016x" % fault[3])
 
+el1_ok = (observed == 1 and vec == 8 and hcr_before == hcr_after
+          and all(v == EL1_FAULT_POISON for v in fault))
 print()
-ok = (observed == 1 and vec == 8 and hcr_before == hcr_after
-      and all(v == EL1_FAULT_POISON for v in fault))
-if ok:
+if el1_ok:
     print("  OK: dropped to EL1, came back through the HVC, HCR_EL2 restored intact.")
 else:
     print("  NOT YET. The lines above say which half is wrong.")
+
+print()
+print("  -- stage 3: enabling pointer authentication -----------------------")
+if p.call(code + DROP_OFF, 3, dout) != DROP_MAGIC:
+    print("  stage 3 did not return the magic")
+    raise SystemExit(1)
+sctlr_before, sctlr_on, sctlr_after, apctl = d(1), d(2), d(3), d(4)
+as_found, signed, recovered, tampered_auth = d(5), d(6), d(7), d(8)
+plain, pac_vec, keys, verdict = d(9), d(10), d(11), d(12)
+
+# A bit that does not stick is the whole failure mode: SCTLR bits for features
+# the part does not implement are RES0, so the write is accepted and discarded
+# and everything after it measures a feature that was never on.
+def bit(name, value, n):
+    return "%s=%d" % (name, (value >> n) & 1)
+
+print("  SCTLR before     0x%016x  %s" % (sctlr_before, " ".join(
+    [bit("EnIA", sctlr_before, 31), bit("EnIB", sctlr_before, 30),
+     bit("EnDA", sctlr_before, 27), bit("EnDB", sctlr_before, 13),
+     bit("BT1", sctlr_before, 36)])))
+print("  SCTLR enabled    0x%016x  %s" % (sctlr_on, " ".join(
+    [bit("EnIA", sctlr_on, 31), bit("EnIB", sctlr_on, 30),
+     bit("EnDA", sctlr_on, 27), bit("EnDB", sctlr_on, 13),
+     bit("BT1", sctlr_on, 36)])))
+print("  SCTLR after      0x%016x  %s" % (sctlr_after,
+      "RESTORED" if sctlr_after == sctlr_before else "NOT RESTORED"))
+print("  APCTL_EL1        0x%016x%s" % (apctl, "  (read trapped)" if apctl == 0xDEAD0000DEAD0000 else ""))
+if keys & 1:
+    print("  keys from RNDR   installed")
+elif keys & 2:
+    print("  keys from RNDR   NOT installed -- FEAT_RNG present but declined to")
+    print("                   supply a number. PAC below runs on whatever key was")
+    print("                   already loaded, which is not this kernel's to trust.")
+else:
+    print("  keys from RNDR   NOT installed -- FEAT_RNG absent on this part")
+print()
+print("  plain            0x%016x" % plain)
+print("  signed as found  0x%016x  %s" % (as_found,
+      "unchanged: PAC was a NOP beforehand, as expected" if as_found == plain
+      else "ALREADY CHANGED: PAC was on before we touched it"))
+print("  signed           0x%016x  %s" % (signed,
+      "signature present" if signed != plain else "UNCHANGED -- still a NOP"))
+print("  recovered        0x%016x  %s" % (recovered,
+      "matches plain" if recovered == plain else "DOES NOT MATCH PLAIN"))
+print("  tampered auth    0x%016x  %s" % (tampered_auth,
+      "REJECTED (does not match plain)" if tampered_auth != plain
+      else "ACCEPTED A FORGERY"))
+print("  exception        %s" % ("none" if pac_vec == (1 << 64) - 1 else
+      "vector %d -- FEAT_FPAC faulted on the forged signature" % pac_vec))
+
+print()
+if verdict:
+    print("  OK: signing changes the pointer, authentication reverses it, and a")
+    print("      forged signature is rejected. Pointer authentication is live.")
+else:
+    print("  PAC NOT PROVEN. All three conditions must hold; see the lines above.")
+
+print()
+if el1_ok and verdict:
+    print("  ITEMS 6 AND 7 COMPLETE.")
+else:
     raise SystemExit(1)
 PYEOF
 
