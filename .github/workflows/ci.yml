@@ -16,6 +16,17 @@ jobs:
   style:
     name: Style Check
     runs-on: ubuntu-latest
+    # Draft pull requests do NOT stop workflows on their own.
+    #
+    # Converting a PR to a draft is the obvious way to say "stop running CI on
+    # this", and it does not work by itself: GitHub still fires `opened`,
+    # `synchronize` and `reopened` for drafts, so every push to the branch
+    # re-runs the whole pipeline. The only thing that reads as intent is this
+    # condition.
+    #
+    # `github.event.pull_request` is null on a `push` event, so `null != true`
+    # is true and pushes to main and dev are unaffected. Only draft PRs skip.
+    if: github.event.pull_request.draft != true
     steps:
       - uses: actions/checkout@v4
 
@@ -303,6 +314,17 @@ jobs:
   kani:
     name: Kani Verification (${{ matrix.name }})
     runs-on: ubuntu-latest
+    # Draft pull requests do NOT stop workflows on their own.
+    #
+    # Converting a PR to a draft is the obvious way to say "stop running CI on
+    # this", and it does not work by itself: GitHub still fires `opened`,
+    # `synchronize` and `reopened` for drafts, so every push to the branch
+    # re-runs the whole pipeline. The only thing that reads as intent is this
+    # condition.
+    #
+    # `github.event.pull_request` is null on a `push` event, so `null != true`
+    # is true and pushes to main and dev are unaffected. Only draft PRs skip.
+    if: github.event.pull_request.draft != true
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -635,6 +657,17 @@ jobs:
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
+    # Draft pull requests do NOT stop workflows on their own.
+    #
+    # Converting a PR to a draft is the obvious way to say "stop running CI on
+    # this", and it does not work by itself: GitHub still fires `opened`,
+    # `synchronize` and `reopened` for drafts, so every push to the branch
+    # re-runs the whole pipeline. The only thing that reads as intent is this
+    # condition.
+    #
+    # `github.event.pull_request` is null on a `push` event, so `null != true`
+    # is true and pushes to main and dev are unaffected. Only draft PRs skip.
+    if: github.event.pull_request.draft != true
     permissions:
       # `contents: read` is REQUIRED here and its absence is why this job failed
       # with "fatal: repository 'https://github.com/jbrahy/BraiNIX/' not found".
