@@ -195,25 +195,40 @@ out (section 9), and the SBU serial path on this rig delivers zero bytes
 (section 9a). Once m1n1 is gone, the machine has no way to tell you anything
 except by rebooting.
 
-So `_start` arms the watchdog for five seconds and parks. A working install is a
-machine that power-cycles about every five seconds plus boot time, forever:
+So `_start` climbs a ladder, re-arming the watchdog four seconds longer at each
+rung, and parks. **The interval between reboots is the report.** A fully working
+install cycles about every 26 seconds plus boot time, forever:
 
 ```sh
 while :; do ls /dev/cu.usbmodem* >/dev/null 2>&1 && echo up || echo down; sleep 1; done
 ```
 
-Measured on 2026-08-17 by chainload, and the reason it is believable is that the
-interval moves with the constant:
+Time from power-on to the device leaving the bus, and read it off:
 
-| `LIVENESS_SECONDS` | reset observed at |
+| interval | how far it got |
 | --- | --- |
-| 5 | +7s |
-| 15 | +16s |
+| ~5s | device tree parsed, `/arm-io/wdt` found and armed |
+| ~9s | cpu topology read out of the tree |
+| ~13s | `/arm-io/pmgr` translated, cpu-start base derived |
+| ~17s | a second cpu released, which reported its own MPIDR |
+| ~21s | its own page tables built, from firmware's geometry |
+| ~26s | **MMU and caches on**, fetching through those tables |
+| never | it did not reach the first rung |
 
-A payload that crashed into `VBAR_EL2 = 0` and reset the machine on its own
-would not move when a Rust constant changes, and neither would a firmware
-watchdog. That table is what makes the heartbeat evidence rather than a guess,
-and it also settles the watchdog's tick rate: it counts at the system counter's.
+Arming before each attempt is what makes the ladder safe: the watchdog is the
+hang recovery as well as the signal, so a rung that wedges does not take the
+report with it. What arrives is "it got this far and then stopped".
+
+Rungs are four seconds apart because two was not enough. Overhead between arming
+and the device leaving the bus runs one to three seconds, so 13s and 15s arms
+both landed on +16 and three identical runs decoded as two different rungs. That
+read as a flaky kernel and was a flaky ruler.
+
+Measured by chainload on 2026-08-17, three consecutive runs at +26, +27, +26s.
+The reason the reading is believable at all is that the interval tracks the
+constant: an earlier 5-second arm reset at +7s and a 15-second arm at +16s. A
+payload that crashed into `VBAR_EL2 = 0` and reset the machine on its own would
+not move when a Rust constant changes, and neither would a firmware watchdog.
 
 ### Getting back
 

@@ -239,15 +239,23 @@ to a custom boot object is a dummy that is never scanned out, and the SBU
 serial path on this rig delivers zero bytes -- measured, with m1n1's own
 output too. So do not watch the display.
 
-Watch the USB device instead. The kernel arms the watchdog for five seconds
-before parking, so a working install is a machine that power-cycles about
-every five seconds plus boot time, forever. From the workstation:
+Watch the USB device instead. _start climbs a ladder and re-arms the watchdog
+four seconds longer at each rung, so THE INTERVAL BETWEEN REBOOTS IS THE
+REPORT. From the workstation:
 
     while :; do ls /dev/cu.usbmodem* >/dev/null 2>&1 && echo up || echo down; sleep 1; done
 
-A steady heartbeat means it booted, established a stack, zeroed .bss, parsed
-boot_args, walked the device tree to /arm-io/wdt and armed it. A machine that
-sits there doing nothing means it did not get that far, and it cannot say
+Time from power-on to the device leaving the bus:
+
+    ~5s    device tree parsed, /arm-io/wdt found and armed
+    ~9s    cpu topology read
+    ~13s   /arm-io/pmgr translated
+    ~17s   a second cpu released, reported its own MPIDR
+    ~21s   its own page tables built
+    ~26s   MMU AND CACHES ON -- the whole ladder, which is the good outcome
+    never  it did not reach the first rung
+
+A machine that sits there doing nothing did not get that far, and it cannot say
 which part failed -- that is exactly why the reboot is the signal.
 
 To stop the loop, hold the power button for One True Recovery and install a

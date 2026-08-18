@@ -25,16 +25,23 @@
 # So the kernel arms the watchdog before parking, and this script times the
 # reset. The USB device disappearing is the signal:
 #
-#   reset ~LIVENESS_SECONDS after handover  -> the kernel ran, reached the end
-#                                              of _start, parsed the device
-#                                              tree, found the watchdog, and
-#                                              armed it
-#   no reset at all                         -> it did not get that far
-#   reset much sooner                       -> it faulted into something that
-#                                              reset the machine on its own
+# _start climbs a ladder and re-arms the watchdog four seconds longer at each
+# rung, so the interval decodes to how far it got:
 #
-# One bit, plus a duration. That is more than silence, which is the only other
-# thing on offer.
+#   ~5s    device tree parsed, /arm-io/wdt found and armed
+#   ~9s    cpu topology read
+#   ~13s   /arm-io/pmgr translated
+#   ~17s   a second cpu released, reported its own MPIDR
+#   ~21s   its own page tables built, from firmware's geometry
+#   ~26s   MMU and caches on -- the whole ladder
+#   never  it did not reach the first rung
+#
+# Arming before each attempt is what makes the ladder safe to climb: a rung that
+# wedges does not take the report with it, because the previous rung's alarm is
+# already counting.
+#
+# A duration rather than one bit. That is a great deal more than silence, which
+# is the only other thing this machine has on offer.
 #
 # RECOVERY
 #
@@ -61,9 +68,8 @@ TOOLCHAIN_BIN="${HOME}/.rustup/toolchains/${TOOLCHAIN}-aarch64-apple-darwin/bin"
 ELF="${REPO}/target/${TARGET}/release/brainix"
 BIN="${SCRATCH}/brainix-kernel-boot.bin"
 
-# What the kernel's `_start` arms the watchdog for. Kept in step with
-# LIVENESS_SECONDS in src/kernel/src/main.rs by this comment and nothing else,
-# so if that constant moves, move this one.
+# The top rung's interval, from `Progress::seconds` in src/kernel/src/main.rs.
+# Kept in step by this comment and nothing else, so if those move, move this.
 EXPECT_SECONDS=25
 
 die() { printf 'FAILED: %s\n' "$*" >&2; exit 1; }
