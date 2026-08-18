@@ -213,7 +213,11 @@ pub const MAX_SLOTS: usize = 32;
 pub const fn slot_for_mpidr(mpidr: u64) -> usize {
     let aff0 = (mpidr & 0b111) as usize;
     let aff1 = ((mpidr >> 8) & 0b11) as usize;
-    aff0 + (aff1 << 3)
+    // `|`, not `+`. The two fields are masked to disjoint bits, so the result is
+    // identical -- but an addition here is an arithmetic operation the crate's
+    // lints reject, and rightly: `+` invites the reader to wonder what happens
+    // when the halves overlap, and `|` says they cannot.
+    aff0 | (aff1 << 3)
 }
 
 /// Which slot the tree says a core will use, before it has ever run.
@@ -222,7 +226,7 @@ pub const fn slot_for_mpidr(mpidr: u64) -> usize {
 /// `MPIDR` reports as `aff1` and `aff0`. That they agree is checked rather than
 /// assumed.
 pub const fn slot_for_cpu(cluster: u32, core: u32) -> usize {
-    ((core as usize) & 0b111) + (((cluster as usize) & 0b11) << 3)
+    ((core as usize) & 0b111) | (((cluster as usize) & 0b11) << 3)
 }
 
 #[cfg(test)]
@@ -235,6 +239,10 @@ mod slot_tests {
     fn stub_arithmetic(mpidr: u64) -> usize {
         let aff0 = mpidr & 0b111;
         let aff1 = (mpidr >> 8) & 0b11;
+        // Deliberately `+` where the function under test uses `|`. The stub
+        // adds; the function ors; the fields are disjoint so the two agree, and
+        // the exhaustive case below is what proves it rather than asserts it.
+        // Do not "fix" this to match.
         (aff0 + (aff1 << 3)) as usize
     }
 
