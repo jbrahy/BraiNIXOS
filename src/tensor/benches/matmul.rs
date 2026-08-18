@@ -48,7 +48,7 @@
 
 use brainix_tensor::{
     matmul_q4_0_q8a, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations,
-    quantize_q4_0, MatMulShape, Q4Weights, Q8Weights, Q8_0_BLOCK,
+    quantize_q4_0, rope, MatMulShape, Q4Weights, Q8Weights, RopePairing, RopeParams, Q8_0_BLOCK,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Barrier;
@@ -505,6 +505,53 @@ fn measure_q4(label: &str, n_in: usize, n_out: usize, threads: usize) {
     );
 }
 
+/// Times `rope` at the shape a decode actually calls it with.
+///
+/// # Why this exists
+///
+/// It did not, and that is why nobody noticed what the rotation loop does. RoPE
+/// runs once per layer per token for the query heads and again for the key
+/// heads, and inside its per-pair loop it calls `powf` and `sin_cos` -- both
+/// hand-written polynomial routines, because `core` has no libm.
+///
+/// `powf`'s argument depends only on `pair_index`. It is the same value for
+/// every token, every layer and every head, recomputed every single call.
+fn measure_rope(label: &str, heads: usize, d_head: usize, calls: usize) {
+    let params = RopeParams {
+        d_head,
+        rope_dim: d_head,
+        base: 10_000.0,
+        pairing: RopePairing::HalfSplit,
+        position: 1,
+    };
+    let x: Vec<f32> = (0..heads * d_head)
+        .map(|i| ((i % 97) as f32 - 48.0) / 48.0)
+        .collect();
+    let mut out = vec![0.0_f32; x.len()];
+
+    rope(&x, &params, &mut out).expect("warm up");
+
+    let start = Instant::now();
+    for call in 0..calls {
+        let stepped = RopeParams {
+            position: (call % 2048) as u32,
+            ..params
+        };
+        rope(&x, &stepped, &mut out).expect("rope");
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+
+    // Rotations per second is the figure that matters: a decode does
+    // layers x (query heads + key heads) of these per token.
+    let rotations = (calls * heads * (d_head / 2)) as f64;
+    println!(
+        "  {label:<32} {:>8.2} M rot/s   ({:.2} us per call, {calls} calls)",
+        rotations / elapsed / 1e6,
+        elapsed / calls as f64 * 1e6,
+    );
+    std::hint::black_box(&out);
+}
+
 fn main() {
     println!();
     println!("  matmul_q8_0 — weight-byte throughput, single core");
@@ -585,5 +632,12 @@ fn main() {
     println!("    absolute GB/s far below        -> compute-bound");
     println!("    8-token row ~= 1-token row     -> bandwidth-bound (weights read once, dominate)");
     println!("    8-token row ~= 1/8 of 1-token  -> compute-bound (time tracks FLOPs, not bytes)");
+    println!();
+
+    println!();
+    println!("  RoPE — the rotation loop, never benchmarked until now");
+    println!();
+    measure_rope("12 heads x 64, 2000 calls", 12, 64, 2000);
+    measure_rope("32 heads x 128, 500 calls", 32, 128, 500);
     println!();
 }

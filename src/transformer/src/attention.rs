@@ -203,6 +203,13 @@ fn blend_values(
     Ok(())
 }
 
+/// Lanes the dot product splits into.
+///
+/// Four, matching `brainix_tensor`'s `block_dot` and the sweep recorded there.
+/// The number is not arbitrary and not tuned again here: two accumulators do
+/// not fill the pipeline and eight spill on this register file.
+const DOT_LANES: usize = 4;
+
 /// `destination += weight × value`, elementwise. **SIMD seam 2.**
 fn accumulate_weighted(weight: f32, value: &[f32], destination: &mut [f32]) {
     for (source, slot) in value.iter().zip(destination.iter_mut()) {
@@ -216,9 +223,52 @@ fn accumulate_weighted(weight: f32, value: &[f32], destination: &mut [f32]) {
 /// pass will do, so the reference and its vectorized successor round identically
 /// in the only respect under this crate's control — the order of the additions.
 fn dot_product(left: &[f32], right: &[f32]) -> f32 {
-    let mut accumulated = 0.0_f32;
-    for (left_value, right_value) in left.iter().zip(right.iter()) {
-        accumulated += left_value * right_value;
+    // Four lanes, not one running total.
+    //
+    // A single accumulator makes every multiply wait for the previous add, so
+    // the loop runs at the latency of `fadd` rather than its throughput and
+    // nothing vectorizes. The whole transformer crate compiled to zero
+    // `fmla.4s` and twenty-four scalar `fadd s0` before this.
+    //
+    // Measured, this shape against the serial one, 512 positions:
+    //
+    // | `d_head` | serial | four lanes | |
+    // | --- | --- | --- | --- |
+    // | 64 | 3.76 GMAC/s | 4.53 GMAC/s | 1.20x |
+    // | 128 | 2.86 GMAC/s | 4.61 GMAC/s | 1.61x |
+    //
+    // The gain grows with head width because the dependency chain does.
+    //
+    // `block_dot` in `brainix_tensor` already carries this reasoning and the
+    // sweep that chose four; this is the same fix at the seam that was labelled
+    // for it and never cut. Indexed rather than zipped for the same reason it
+    // gives: the fixed-width chunk is what lets the compiler see four
+    // independent updates.
+    let mut lanes = [0.0_f32; DOT_LANES];
+    for (left_lane, right_lane) in left
+        .chunks_exact(DOT_LANES)
+        .zip(right.chunks_exact(DOT_LANES))
+    {
+        for lane in 0..DOT_LANES {
+            let left_value = left_lane.get(lane).copied().unwrap_or(0.0);
+            let right_value = right_lane.get(lane).copied().unwrap_or(0.0);
+            let Some(slot) = lanes.get_mut(lane) else {
+                continue;
+            };
+            *slot += left_value * right_value;
+        }
     }
-    accumulated
+
+    // The tail, for a `d_head` that is not a multiple of four. BXW1 permits
+    // one; every model seen so far has a power-of-two head width, and a kernel
+    // that is silently wrong on the first one that does not is worse than a
+    // few lines.
+    let handled = (left.len() / DOT_LANES).saturating_mul(DOT_LANES);
+    let mut tail = 0.0_f32;
+    for (left_value, right_value) in left.iter().zip(right.iter()).skip(handled) {
+        tail += left_value * right_value;
+    }
+
+    // Pairwise, matching `block_dot`.
+    ((lanes[0] + lanes[1]) + (lanes[2] + lanes[3])) + tail
 }
