@@ -28,9 +28,24 @@ set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LOG="${HERE}/install-$(date +%Y%m%d-%H%M%S).log"
-PAYLOAD="${HERE}/brainix-boot-stub-apple.bin"
 CRED="${HERE}/.admin"
-EXPECT_SHA="8829d562069985bbe41a714a84a9f02e"   # first 32 of the sha256
+MANIFEST="${HERE}/payloads.tsv"
+
+# WHICH payload, by name, from the manifest -- not by a filename and a hash
+# pasted into this script.
+#
+#   sh as-install-boot-object.sh                  # the kernel
+#   sh as-install-boot-object.sh brainix-stub     # the first-light stub
+#   sh as-install-boot-object.sh brainix-kernel <volume-group-uuid>
+#
+# It used to carry `brainix-boot-stub-apple.bin` and the first 32 hex of its
+# hash as constants. That was correct for exactly one payload, and the moment
+# there was a second one the choice would have been made by editing this file
+# under recoveryOS with a camera pointed at the screen. payloads.tsv already
+# exists to be the single source of truth for what gets installed and at what
+# entry point; this reads it.
+PAYLOAD_NAME="${1:-brainix-kernel}"
+[ $# -ge 1 ] && shift
 
 # Log to a file AND to the screen, without process substitution.
 #
@@ -69,11 +84,41 @@ printf 'admin user: %s\n' "$ADMIN_USER"
 # ---------------------------------------------------------------------------
 say "2. payload"
 # ---------------------------------------------------------------------------
+[ -r "$MANIFEST" ] || die "no payloads.tsv beside this script at $MANIFEST"
+
+# Tab-separated: name file bytes sha256 entry_point lowest_virtual_address ...
+ROW="$(awk -F'\t' -v want="$PAYLOAD_NAME" '$1 == want { print; exit }' "$MANIFEST")"
+[ -n "$ROW" ] || die "payloads.tsv has no payload named '$PAYLOAD_NAME'
+  known: $(awk -F'\t' 'NR>1 && $1 !~ /^#/ && $1 != "name" && $1 != "" { printf "%s ", $1 }' "$MANIFEST")"
+
+PAYLOAD_FILE="$(printf '%s' "$ROW" | cut -f2)"
+EXPECT_SIZE="$(printf '%s' "$ROW" | cut -f3)"
+EXPECT_SHA="$(printf '%s' "$ROW" | cut -f4)"
+ENTRY_POINT="$(printf '%s' "$ROW" | cut -f5)"
+LOWEST_VA="$(printf '%s' "$ROW" | cut -f6)"
+PAYLOAD="${HERE}/${PAYLOAD_FILE}"
+
+printf 'name:   %s\npath:   %s\nentry:  %s\nlow VA: %s\n' \
+  "$PAYLOAD_NAME" "$PAYLOAD" "$ENTRY_POINT" "$LOWEST_VA"
 [ -f "$PAYLOAD" ] || die "payload not found at $PAYLOAD"
+
 SIZE="$(stat -f%z "$PAYLOAD")"
-SHA="$(shasum -a 256 "$PAYLOAD" | cut -c1-32)"
-printf 'path:  %s\npbytes: %s\nsha256: %s\n' "$PAYLOAD" "$SIZE" "$SHA"
-[ "$SHA" = "$EXPECT_SHA" ] || die "payload hash is $SHA, expected $EXPECT_SHA -- this is the wrong build"
+printf 'bytes:  %s (manifest says %s)\n' "$SIZE" "$EXPECT_SIZE"
+[ "$SIZE" = "$EXPECT_SIZE" ] || die "payload is $SIZE bytes, manifest says $EXPECT_SIZE -- this is the wrong build"
+
+# recoveryOS has no shasum, no openssl and no Perl Digest::SHA -- all three were
+# tried on the real machine. So the hash is checked when it can be, and the size
+# above is what stands in when it cannot. Saying which one actually ran matters:
+# "verified" meaning two different things depending on the environment is how a
+# wrong build gets installed with a clean-looking log.
+if command -v shasum >/dev/null 2>&1; then
+  SHA="$(shasum -a 256 "$PAYLOAD" | cut -d" " -f1)"
+  printf 'sha256: %s\n' "$SHA"
+  [ "$SHA" = "$EXPECT_SHA" ] || die "payload hash is $SHA, manifest says $EXPECT_SHA -- this is the wrong build"
+  printf 'hash VERIFIED against the manifest\n'
+else
+  printf 'sha256: NOT CHECKED -- no shasum here. Size above is the only check.\n'
+fi
 
 # ---------------------------------------------------------------------------
 say "3. volume group UUID"
@@ -130,24 +175,56 @@ if [ -n "$TARGET_VG" ] && [ "$TARGET_VG" != "$VG" ]; then
   die "target $TARGET belongs to volume group $TARGET_VG, not $VG -- refusing to install onto the wrong install"
 fi
 
+# Entry point and lowest virtual address come from the manifest, per payload.
+# Getting this wrong is the most expensive mistake this project has made: m1n1
+# was installed at 0 when its entry is 2048, so it never ran, was judged
+# useless, and was abandoned -- which removed the only debugging instrument
+# available. Ours is 0. The two must never be copied from one another, and
+# neither is typed here.
 kmutil configure-boot \
   -c "$PAYLOAD" \
-  --raw --entry-point 0 --lowest-virtual-address 0 \
+  --raw --entry-point "$ENTRY_POINT" --lowest-virtual-address "$LOWEST_VA" \
   -v "$TARGET" || die "kmutil configure-boot failed -- see the log, and do NOT retry blindly"
 
 # ---------------------------------------------------------------------------
 say "7. result"
 # ---------------------------------------------------------------------------
 bputil -d -v "$VG" 2>&1 | grep -E "coih|Security Mode:" || true
-cat <<'DONE'
+printf '\nINSTALL COMPLETE: %s is now the boot object.\n\n' "$PAYLOAD_NAME"
+case "$PAYLOAD_NAME" in
+  brainix-kernel)
+    cat <<'DONE'
+Reboot and choose BraiNIX at the startup picker.
 
-INSTALL COMPLETE.
+WHAT SUCCESS LOOKS LIKE, AND IT IS NOT ON THE SCREEN. The framebuffer handed
+to a custom boot object is a dummy that is never scanned out, and the SBU
+serial path on this rig delivers zero bytes -- measured, with m1n1's own
+output too. So do not watch the display.
 
+Watch the USB device instead. The kernel arms the watchdog for five seconds
+before parking, so a working install is a machine that power-cycles about
+every five seconds plus boot time, forever. From the workstation:
+
+    while :; do ls /dev/cu.usbmodem* >/dev/null 2>&1 && echo up || echo down; sleep 1; done
+
+A steady heartbeat means it booted, established a stack, zeroed .bss, parsed
+boot_args, walked the device tree to /arm-io/wdt and armed it. A machine that
+sits there doing nothing means it did not get that far, and it cannot say
+which part failed -- that is exactly why the reboot is the signal.
+
+To stop the loop, hold the power button for One True Recovery and install a
+different boot object.
+DONE
+    ;;
+  *)
+    cat <<'DONE'
 Reboot and choose BraiNIX at the startup picker. Expect horizontal stripes at
 the top of the screen: white, then cyan, then green. The last stripe turns red
 if that stage denied. A dark screen means it did not run, which is a result
 too -- the log above says how far this script got.
 DONE
+    ;;
+esac
 printf 'log saved: %s\n' "$LOG"
 # Let the tee drain before the shell exits, or the tail of the log is lost.
 exec >/dev/tty 2>&1 || true
