@@ -19,4 +19,4 @@
 name	file	bytes	sha256	entry_point	lowest_virtual_address	source
 brainix-stub	brainix-boot-stub-apple.bin	24897	8829d562069985bbe41a714a84a9f02e5c47bbe091f03517beb7cbb8db949a30	0	0	built from src/boot-stub-apple; entry 0 is ours and is correct
 m1n1	m1n1.bin	1097728	05137464cdacb23d8aed9be1d0ddd4fda757fb57d2b1a769ff3d88409afaafa0	2048	0	m1n1 v1.6.1 stage2; entry 2048 per m1n1 README and asahi-installer step2.sh:125
-brainix-kernel	brainix-kernel-aarch64.bin	192529	f8cdf96096c1f4d93bc65d9ee83cd203897d990bfd1df69a9e8a2094612bccc3	0	0	built from src/kernel with --features kernel-binary; entry 0 is the assembly shim in main.rs that sets sp before Rust runs
+brainix-kernel	brainix-kernel-aarch64.bin	192657	f1dc79ea26b0b0b4857ae023ce04ebb2f6743d7dbe6931e23566f7e346497a2f	0	0	built from src/kernel with --features kernel-binary; entry 0 is the assembly shim in main.rs that sets sp before Rust runs

@@ -230,9 +230,11 @@ pub unsafe extern "C" fn brainix_kernel_main(boot_args: *const u8) -> ! {
     console.write_line(match reached {
         Progress::Silent => "     signal       NONE -- no watchdog, this boot is unobservable",
         Progress::Watchdog => "     signal       watchdog armed, 5s",
-        Progress::Cpus => "     signal       cpu topology read, 7s",
-        Progress::Pmgr => "     signal       pmgr located, 9s",
-        Progress::Smp => "     signal       second cpu released, 11s",
+        Progress::Cpus => "     signal       cpu topology read, 9s",
+        Progress::Pmgr => "     signal       pmgr located, 13s",
+        Progress::Smp => "     signal       second cpu released, 17s",
+        Progress::TablesBuilt => "     signal       own page tables built, 21s",
+        Progress::Translating => "     signal       MMU AND CACHES ON, 25s",
     });
 
     brainix_kernel::arch::aarch64::park()
@@ -263,23 +265,45 @@ enum Progress {
     Pmgr,
     /// A second CPU taken out of reset, which reported its own MPIDR back. 11s.
     Smp,
+    /// Our own translation tables built, cold, into a `.bss` arena. 13s.
+    ///
+    /// Pure computation over a host-tested builder, so this rung failing would
+    /// mean the geometry read out of `ID_AA64MMFR0_EL1` is one this builder
+    /// refuses -- not that the hardware disagreed with us.
+    TablesBuilt,
+    /// The MMU and caches ON, under tables this kernel wrote. 15s.
+    ///
+    /// **This is the rung that makes a cold boot worth anything.** Measured
+    /// earlier on this machine: a core reading memory with its caches off
+    /// manages 0.09 GB/s against 11.4 GB/s with them on. A kernel that boots
+    /// standalone and stays untranslated is 131x too slow to serve anything.
+    Translating,
 }
 
 #[cfg(target_arch = "aarch64")]
 impl Progress {
     /// Seconds this stage arms the watchdog for.
     ///
-    /// Five, then two per stage. Two is comfortably larger than the spread
-    /// observed on the measured runs -- a 5-second arm produced a reset at +7s
-    /// and a 15-second arm at +16s, so the handover overhead is a second or so
-    /// and never close to two.
+    /// Five, then **four** per rung.
+    ///
+    /// It was two, and two is not enough. Measured overhead between arming and
+    /// the device leaving the bus ran from one second to three across runs, so
+    /// a 13-second arm and a 15-second arm both produce a reset at +16 and the
+    /// reading is ambiguous exactly where it matters most. Three consecutive
+    /// runs decoded as two different rungs, which looked like a flaky kernel
+    /// and was a flaky ruler.
+    ///
+    /// Four seconds is wider than any spread observed, so each rung owns a band
+    /// nothing else can land in.
     const fn seconds(self) -> u64 {
         match self {
             Progress::Silent => 0,
             Progress::Watchdog => 5,
-            Progress::Cpus => 7,
-            Progress::Pmgr => 9,
-            Progress::Smp => 11,
+            Progress::Cpus => 9,
+            Progress::Pmgr => 13,
+            Progress::Smp => 17,
+            Progress::TablesBuilt => 21,
+            Progress::Translating => 25,
         }
     }
 }
@@ -381,7 +405,297 @@ unsafe fn signal_progress(boot_args: *const u8) -> Progress {
     reached = Progress::Smp;
     // SAFETY: as above.
     unsafe { rearm(base, reached) };
+
+    // Stage 4: our own translation, built and installed on a cold machine.
+    //
+    // Every other MMU path in this kernel reads `TCR_EL2` and `TTBR0_EL2` to
+    // learn the geometry it should match, because under m1n1 there is already a
+    // regime installed to match. Here there is not: those registers hold reset
+    // values, and the configuration has to come from what the hardware says it
+    // supports rather than from what firmware happened to choose.
+    let model = brainix_kernel::arch::aarch64::memory_model();
+    // 16 KiB, which is what this part prefers and what m1n1 itself uses. The
+    // builder rejects 13 and 15, so a part that only offered those would fail
+    // at the next line rather than silently building something unusable.
+    let granule_bits = if model.granule_16k { 14 } else { 12 };
+    // 48-bit input, which is what firmware itself configures.
+    //
+    // m1n1's live `TCR_EL2` on this machine reads 0x37510b510: T0SZ 16, so a
+    // 48-bit VA; TG0 2, so a 16 KiB granule; IPS 3, so a 42-bit output. The
+    // first version of this used the *physical* width for the input too, which
+    // is a different number and produced a T0SZ the tables were not built for.
+    // The output width still comes from `ID_AA64MMFR0_EL1`, because that is
+    // what bounds a physical address.
+    const INPUT_BITS: u32 = 48;
+    let Some(pa_bits) = model.physical_address_bits else {
+        return reached;
+    };
+    let input_bits = INPUT_BITS;
+
+    // SAFETY: `_start` runs once, nothing else has a reference to the arena,
+    // and the secondary released above does not touch it.
+    let arena = unsafe { &mut *core::ptr::addr_of_mut!(TABLE_ARENA) };
+
+    // **Align at run time. `#[repr(align)]` on the static is not enough.**
+    //
+    // That attribute aligns the arena within the image; it says nothing about
+    // where the image itself lands. m1n1's `chainload.py` allocates with a bare
+    // `u.malloc(image_size)` and iBoot promises nothing either, so `.bss` --
+    // and the arena in it -- starts wherever the loader felt like. A root table
+    // that is not granule-aligned is rejected by the builder, which is correct
+    // and which presented here as the tables rung simply never arriving.
+    //
+    // `bin/as-kernel-probe.sh` already carries this scar: it aligns its load
+    // address by hand because `u.malloc` does not. Depending on the loader for
+    // it once was enough.
+    let granule = 1u64 << granule_bits;
+    let raw = arena.0.as_mut_ptr() as u64;
+    let aligned = raw.next_multiple_of(granule);
+    let skip_words = (aligned.saturating_sub(raw) / 8) as usize;
+    let Some(cells) = arena.0.get_mut(skip_words..) else {
+        return reached;
+    };
+    let Ok(mut builder) =
+        brainix_kernel::aarch64_tables::TableBuilder::new(cells, aligned, granule_bits, input_bits)
+    else {
+        return reached;
+    };
+
+    // Identity-map what firmware says is there, rather than what this code
+    // guessed. `boot_args` carries `phys_base` at 0x10 and `mem_size` at 0x18,
+    // and the first version of this hardcoded 0x10_0000_0000 -- which is a real
+    // Apple DRAM base and is not this machine's. Everything below the DRAM base
+    // is MMIO on this architecture, so the split needs no second constant.
+    let phys_base = read_u64(header, 0x10);
+    let mem_size = read_u64(header, 0x18);
+    if phys_base == 0 || mem_size == 0 {
+        return reached;
+    }
+
+    let block = builder.block_size();
+
+    // MMIO: a fixed low window, NOT everything below DRAM.
+    //
+    // Measured on this machine, `phys_base` is 0x10001020000 -- DRAM starts a
+    // little past **one terabyte**. Mapping all of [0, phys_base) as Device is
+    // 32768 block descriptors, which at 2048 blocks per table is sixteen leaf
+    // tables, and it quietly exhausted the arena. Everything this kernel
+    // actually touches is far lower: `/arm-io/pmgr` resolved to 0x28e080000,
+    // about 11 GiB. Sixteen covers it with room and costs one table.
+    const MMIO_WINDOW: u64 = 16 << 30;
+    // Device rather than merely uncached: Device ordering is what keeps the
+    // watchdog's three register writes in the order `arm_reset` issues them,
+    // and a reordering that put the control write first would arm the alarm
+    // against whatever the alarm register happened to hold.
+    if builder.map_blocks(0, 0, MMIO_WINDOW, MMIO_ATTRS).is_err() {
+        return reached;
+    }
+
+    // DRAM, rounded OUT to block boundaries at both ends.
+    //
+    // `phys_base` is not block-aligned on this machine -- it sits 0x1020000
+    // above a 32 MiB boundary -- and `map_blocks` rejects a misaligned range
+    // rather than silently rounding, which is the right call and means the
+    // rounding has to happen here.
+    let dram_start = phys_base & !block.wrapping_sub(1);
+    let dram_end = phys_base.saturating_add(mem_size).next_multiple_of(block);
+    let dram_len = dram_end.saturating_sub(dram_start);
+    if dram_start < MMIO_WINDOW
+        || builder
+            .map_blocks(dram_start, dram_start, dram_len, DRAM_ATTRS)
+            .is_err()
+    {
+        return reached;
+    }
+    let root = builder.root();
+
+    // Push the tables out to memory before anything walks them.
+    //
+    // They were written with the caches OFF, so the stores went straight to
+    // DRAM. The walker, once enabled, reads them with the *cacheable*
+    // attributes `TCR_EL2.IRGN0`/`ORGN0` select -- and m1n1 ran with its caches
+    // on over this same memory moments ago. A stale line surviving that is a
+    // walk that reads a descriptor nobody wrote.
+    //
+    // This is the third appearance of the same bug in this file's history: the
+    // secondary's report buffer and its stack both needed exactly this, and
+    // both presented as something else entirely.
+    let table_bytes = (builder.tables_used() as u64).saturating_mul(granule);
+    // SAFETY: the arena is in this image and `table_bytes` covers only what the
+    // builder actually used.
+    unsafe { clean_range(aligned, table_bytes) };
+
+    reached = Progress::TablesBuilt;
+    // SAFETY: as above.
+    unsafe { rearm(base, reached) };
+
+    // SAFETY: `root` is a table this code just built, identity-mapping the DRAM
+    // this image and its stack live in and the MMIO the watchdog lives in. If
+    // any of that is wrong the core faults on its next fetch -- and the alarm
+    // armed one line above is already counting, so the machine still reports
+    // that it got exactly this far.
+    unsafe { enable_translation(root, granule_bits, input_bits, pa_bits) };
+
+    // Reached only if the core is still executing after the `isb`, which means
+    // it fetched this instruction through tables this kernel wrote.
+    reached = Progress::Translating;
+    // SAFETY: as above. The watchdog block is mapped Device in those tables.
+    unsafe { rearm(base, reached) };
     reached
+}
+
+/// Clean a range to the point of coherency, so a walker reading it cacheably
+/// sees what was written to it non-cacheably.
+///
+/// # Safety
+///
+/// `start` must be mapped and `len` must not run past it.
+#[cfg(target_arch = "aarch64")]
+unsafe fn clean_range(start: u64, len: u64) {
+    // 64-byte lines on this part. A smaller step is wasteful and safe; a larger
+    // one skips lines, which is not.
+    let mut address = start & !63;
+    let end = start.saturating_add(len);
+    while address < end {
+        // SAFETY: cache maintenance by virtual address. Reads and writes
+        // nothing, and cannot fault on a mapped address.
+        unsafe {
+            core::arch::asm!("dc civac, {addr}", addr = in(reg) address, options(nostack));
+        }
+        address = address.saturating_add(64);
+    }
+    // SAFETY: ordering the maintenance against the enable that follows.
+    unsafe { core::arch::asm!("dsb sy", "isb", options(nostack)) };
+}
+
+/// Read a little-endian `u64` out of the `boot_args` prefix.
+///
+/// Returns 0 rather than panicking on a short buffer: this runs on a machine
+/// with no output device, where a panic is silence and a zero is a value the
+/// caller can test.
+#[cfg(target_arch = "aarch64")]
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    let Some(window) = bytes.get(offset..offset.saturating_add(8)) else {
+        return 0;
+    };
+    let mut buffer = [0u8; 8];
+    buffer.copy_from_slice(window);
+    u64::from_le_bytes(buffer)
+}
+
+/// Normal, inner-shareable, accessed. `AttrIndx = 0`.
+///
+/// Bit 10 is the access flag: without it the first touch takes an access-flag
+/// fault, and on a core with no vector table that is indistinguishable from a
+/// hang. Bits 9:8 are inner-shareable, which is what makes the second CPU's
+/// view of this memory coherent with ours.
+#[cfg(target_arch = "aarch64")]
+const DRAM_ATTRS: u64 = (1 << 10) | (0b11 << 8);
+
+/// Device-nGnRnE, accessed. `AttrIndx = 1`.
+///
+/// Not merely uncached: Device ordering is what keeps the watchdog's three
+/// register writes in the order `arm_reset` issues them. Normal-uncacheable
+/// would permit reordering the control write ahead of the alarm write, which
+/// arms the watchdog against whatever the alarm register happened to hold.
+#[cfg(target_arch = "aarch64")]
+const MMIO_ATTRS: u64 = (1 << 10) | (1 << 2);
+
+/// Arena the cold page tables are built in.
+///
+/// `.bss`. Sized with slack, not to the count.
+///
+/// The first attempt was 64 KiB, which at a 16 KiB granule is exactly four
+/// tables -- and the arithmetic said four were needed: a root, one at the next
+/// level, and one each for the level that holds DRAM's blocks and MMIO's. It
+/// stopped one rung short of building them. Sizing an arena to the exact count
+/// a hand calculation predicts means any error in that calculation presents as
+/// a silent allocation failure, and on a machine with no output device that is
+/// a rung that simply never arrives. 256 KiB is sixteen tables and costs
+/// nothing that is not `.bss`.
+#[cfg(target_arch = "aarch64")]
+#[repr(align(16384))]
+struct TableArena([u64; 32768]);
+
+#[cfg(target_arch = "aarch64")]
+static mut TABLE_ARENA: TableArena = TableArena([0; 32768]);
+
+/// Install `root` and turn the MMU and caches on.
+///
+/// # Safety
+///
+/// `root` must identity-map this code, its stack, and any MMIO reached
+/// afterwards. Getting that wrong faults on the next instruction fetch with no
+/// vector table to catch it.
+#[cfg(target_arch = "aarch64")]
+unsafe fn enable_translation(root: u64, granule_bits: u32, input_bits: u32, pa_bits: u8) {
+    // TG0 encoding is neither the granule size nor its log: 4 KiB is 0, 16 KiB
+    // is 2, 64 KiB is 1. Ordered that way in the architecture, and writing the
+    // obvious thing instead configures a granule the tables were not built for.
+    let tg0: u64 = match granule_bits {
+        14 => 0b10,
+        16 => 0b01,
+        _ => 0b00,
+    };
+    let t0sz = u64::from(64u32.saturating_sub(input_bits));
+    // IPS is the *output* width and must not exceed what the part implements.
+    // An earlier version pinned 0b101 (48-bit) on a part that reports 42, which
+    // the architecture leaves CONSTRAINED UNPREDICTABLE.
+    let ips: u64 = match pa_bits {
+        32 => 0b000,
+        36 => 0b001,
+        40 => 0b010,
+        42 => 0b011,
+        44 => 0b100,
+        52 => 0b110,
+        _ => 0b101,
+    };
+
+    // **EL1 layout, because `HCR_EL2.E2H` stays set.**
+    //
+    // With E2H set, `TCR_EL2` takes the TCR_EL1 shape: IPS moves to bits 34:32,
+    // and 18:16 become part of T1SZ. An earlier attempt cleared E2H so the
+    // classic one-TTBR layout would apply. That is a bigger change than it
+    // looks -- it moves the whole EL2 regime out from under firmware's
+    // configuration -- and it did not work. Matching what is already there is
+    // both smaller and closer to the state iBoot hands a boot object.
+    //
+    // EPD1 disables TTBR1 walks. Nothing here sets TTBR1, and leaving walks
+    // enabled against whatever it holds is a translation of any high address
+    // into a table that does not exist.
+    const EPD1: u64 = 1 << 23;
+    let tcr = t0sz | (0b01 << 8) | (0b01 << 10) | (0b11 << 12) | (tg0 << 14) | EPD1 | (ips << 32);
+    // Attr0 Normal write-back read/write-allocate, Attr1 Device-nGnRnE.
+    let mair: u64 = 0xFF;
+
+    // SAFETY: installs a translation regime and enables it. Sound only under
+    // this function's contract; unrecoverable if that contract is broken, which
+    // is why the caller arms the watchdog first.
+    unsafe {
+        core::arch::asm!(
+            "msr MAIR_EL2,  {mair}",
+            "msr TCR_EL2,   {tcr}",
+            "msr TTBR0_EL2, {root}",
+            "isb",
+            "tlbi alle2",
+            "dsb sy",
+            "isb",
+            // Read-modify-write rather than a constant: SCTLR_EL2 holds bits
+            // firmware set that this code has no business clearing.
+            "mrs {tmp}, SCTLR_EL2",
+            // M (translation), C (data cache), I (instruction cache).
+            "orr {tmp}, {tmp}, #(1 << 0)",
+            "orr {tmp}, {tmp}, #(1 << 2)",
+            "orr {tmp}, {tmp}, #(1 << 12)",
+            "msr SCTLR_EL2, {tmp}",
+            "isb",
+            mair = in(reg) mair,
+            tcr = in(reg) tcr,
+            root = in(reg) root,
+            tmp = out(reg) _,
+            options(nostack)
+        );
+    }
 }
 
 /// Re-arm the watchdog for `stage`'s interval, restarting its count.

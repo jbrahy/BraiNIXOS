@@ -64,7 +64,7 @@ BIN="${SCRATCH}/brainix-kernel-boot.bin"
 # What the kernel's `_start` arms the watchdog for. Kept in step with
 # LIVENESS_SECONDS in src/kernel/src/main.rs by this comment and nothing else,
 # so if that constant moves, move this one.
-EXPECT_SECONDS=5
+EXPECT_SECONDS=25
 
 die() { printf 'FAILED: %s\n' "$*" >&2; exit 1; }
 
@@ -179,10 +179,12 @@ else
   # rung, so the interval IS the report. Handover plus the device leaving the
   # bus costs a second or two on top, measured: a 5s arm reset at +7s and a 15s
   # arm at +16s.
-  if   (( ELAPSED >= 4  && ELAPSED <= 8  )); then STAGE="watchdog armed (5s) -- device tree parsed, /arm-io/wdt found and armed"
-  elif (( ELAPSED >= 9  && ELAPSED <= 10 )); then STAGE="cpu topology read (7s) -- the tree describes more than one core"
-  elif (( ELAPSED >= 11 && ELAPSED <= 12 )); then STAGE="pmgr located (9s) -- /arm-io/pmgr translated, cpu-start base derived"
-  elif (( ELAPSED >= 13 && ELAPSED <= 15 )); then STAGE="SECOND CPU RELEASED (11s) -- a core came out of reset and reported its MPIDR"
+  if   (( ELAPSED >= 5  && ELAPSED <= 8  )); then STAGE="watchdog armed (5s) -- device tree parsed, /arm-io/wdt found and armed"
+  elif (( ELAPSED >= 9  && ELAPSED <= 12 )); then STAGE="cpu topology read (9s) -- the tree describes more than one core"
+  elif (( ELAPSED >= 13 && ELAPSED <= 16 )); then STAGE="pmgr located (13s) -- /arm-io/pmgr translated, cpu-start base derived"
+  elif (( ELAPSED >= 17 && ELAPSED <= 20 )); then STAGE="second cpu released (17s) -- a core came out of reset and reported its MPIDR"
+  elif (( ELAPSED >= 21 && ELAPSED <= 24 )); then STAGE="own page tables built (21s) -- cold, from firmware's own geometry"
+  elif (( ELAPSED >= 25 && ELAPSED <= 29 )); then STAGE="MMU AND CACHES ON (25s) -- fetching through tables this kernel wrote"
   else STAGE=""
   fi
   if [[ -n "${STAGE}" ]]; then
