@@ -53,6 +53,23 @@ use crate::slices::{add_into, copy_into, prefix, prefix_mut, row, span};
 use crate::weights::{LayerWeights, ModelWeights};
 use crate::workspace::Workspace;
 
+/// Where in the sequence one layer call is operating.
+///
+/// The three fields travelled as three positional `usize` parameters through
+/// `run_layer` and `attention_block`, which is how a caller transposes `start`
+/// and `token_count` and gets an answer that is wrong only for multi-token
+/// prefill. Naming them costs nothing at runtime -- the struct is `Copy` and
+/// destructured on entry -- and makes the transposition unspellable.
+#[derive(Debug, Clone, Copy)]
+struct Step {
+    /// Which layer, counting from zero.
+    index: usize,
+    /// Position of the first of these tokens in the sequence so far.
+    start: usize,
+    /// How many tokens this call processes.
+    token_count: usize,
+}
+
 /// A validated model: hyperparameters, borrowed weights, and the one derived
 /// constant the forward pass needs.
 ///
@@ -61,6 +78,7 @@ use crate::workspace::Workspace;
 /// shape §5.3 requires, so nothing inside the forward pass has to re-establish
 /// either.
 #[derive(Debug, Clone, Copy)]
+
 pub struct Model<'a> {
     config: ModelConfig,
     weights: ModelWeights<'a>,
@@ -137,9 +155,11 @@ impl<'a> Model<'a> {
                 workspace,
                 cache,
                 layer,
-                index,
-                start,
-                tokens.len(),
+                Step {
+                    index,
+                    start,
+                    token_count: tokens.len(),
+                },
             )?;
         }
         self.project_logits(dispatch, workspace, tokens.len(), logits)?;
@@ -265,12 +285,10 @@ impl<'a> Model<'a> {
         workspace: &mut Workspace<'_>,
         cache: &mut SessionCache<'_>,
         layer: &LayerWeights<'_>,
-        index: usize,
-        start: usize,
-        token_count: usize,
+        step: Step,
     ) -> Result<(), TransformerError> {
-        self.attention_block(dispatch, workspace, cache, layer, index, start, token_count)?;
-        self.feed_forward_block(dispatch, workspace, layer, token_count)
+        self.attention_block(dispatch, workspace, cache, layer, step)?;
+        self.feed_forward_block(dispatch, workspace, layer, step.token_count)
     }
 
     /// RMSNorm, QKV, RoPE, cache write, attention, `wo`, residual.
@@ -280,10 +298,13 @@ impl<'a> Model<'a> {
         workspace: &mut Workspace<'_>,
         cache: &mut SessionCache<'_>,
         layer: &LayerWeights<'_>,
-        index: usize,
-        start: usize,
-        token_count: usize,
+        step: Step,
     ) -> Result<(), TransformerError> {
+        let Step {
+            index,
+            start,
+            token_count,
+        } = step;
         let span = checked_product(token_count, self.config.model_width)?;
         rmsnorm(
             prefix(workspace.hidden, span)?,

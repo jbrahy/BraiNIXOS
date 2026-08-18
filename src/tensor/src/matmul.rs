@@ -414,48 +414,71 @@ pub fn quantize_activations(
     let (scale_plane, quant_plane) = scratch.split_at_mut(quant_start);
 
     for (index, block) in x.chunks_exact(Q8_0_BLOCK).enumerate() {
-        let mut peak = 0.0_f32;
-        for value in block {
-            let magnitude = if *value < 0.0 { -*value } else { *value };
-            if magnitude > peak {
-                peak = magnitude;
-            }
-        }
-        let scale = peak / 127.0;
-        let usable = peak > 0.0 && scale >= f32::MIN_POSITIVE;
-        let scale_at = index
-            .checked_mul(SCALE_BYTES)
-            .ok_or(TensorError::DimensionOverflow)?;
-        let quant_at = index
-            .checked_mul(Q8_0_BLOCK)
-            .ok_or(TensorError::DimensionOverflow)?;
-
-        let emitted = if usable { scale } else { 0.0 };
-        let Some(scale_slot) = scale_plane.get_mut(scale_at..scale_at + SCALE_BYTES) else {
-            return Err(TensorError::ShapeMismatch);
-        };
-        scale_slot.copy_from_slice(&emitted.to_le_bytes());
-
-        let Some(quant_slot) = quant_plane.get_mut(quant_at..quant_at + Q8_0_BLOCK) else {
-            return Err(TensorError::ShapeMismatch);
-        };
-        for (slot, value) in quant_slot.iter_mut().zip(block.iter()) {
-            *slot = if usable {
-                // Round to nearest; the reciprocal is not used because
-                // `peak / 127` then `value / scale` keeps the endpoints exact.
-                let scaled = *value / scale;
-                let rounded = if scaled >= 0.0 {
-                    scaled + 0.5
-                } else {
-                    scaled - 0.5
-                } as i32;
-                rounded.clamp(-127, 127) as i8 as u8
-            } else {
-                0
-            };
-        }
+        quantize_one_block(index, block, scale_plane, quant_plane)?;
     }
     let _ = scale_bytes;
+    Ok(())
+}
+
+/// Quantizes one `Q8_0` block of activations into the two planes.
+///
+/// Split out of [`quantize_activations`] rather than inlined, because the outer
+/// function is otherwise shape validation and plane arithmetic wrapped around a
+/// numeric kernel, and the two read as one thing only to whoever just wrote
+/// them. Clippy's cognitive-complexity gate is what said so out loud.
+///
+/// # Errors
+///
+/// [`TensorError::ShapeMismatch`] if either plane is too short for `index`,
+/// [`TensorError::DimensionOverflow`] if the offsets do not fit.
+fn quantize_one_block(
+    index: usize,
+    block: &[f32],
+    scale_plane: &mut [u8],
+    quant_plane: &mut [u8],
+) -> Result<(), TensorError> {
+    let mut peak = 0.0_f32;
+    for value in block {
+        let magnitude = if *value < 0.0 { -*value } else { *value };
+        if magnitude > peak {
+            peak = magnitude;
+        }
+    }
+    let scale = peak / 127.0;
+    let usable = peak > 0.0 && scale >= f32::MIN_POSITIVE;
+    let scale_at = index
+        .checked_mul(SCALE_BYTES)
+        .ok_or(TensorError::DimensionOverflow)?;
+    let quant_at = index
+        .checked_mul(Q8_0_BLOCK)
+        .ok_or(TensorError::DimensionOverflow)?;
+
+    let emitted = if usable { scale } else { 0.0 };
+    let Some(scale_slot) = scale_plane.get_mut(scale_at..scale_at.saturating_add(SCALE_BYTES))
+    else {
+        return Err(TensorError::ShapeMismatch);
+    };
+    scale_slot.copy_from_slice(&emitted.to_le_bytes());
+
+    let Some(quant_slot) = quant_plane.get_mut(quant_at..quant_at.saturating_add(Q8_0_BLOCK))
+    else {
+        return Err(TensorError::ShapeMismatch);
+    };
+    for (slot, value) in quant_slot.iter_mut().zip(block.iter()) {
+        *slot = if usable {
+            // Round to nearest; the reciprocal is not used because
+            // `peak / 127` then `value / scale` keeps the endpoints exact.
+            let scaled = *value / scale;
+            let rounded = if scaled >= 0.0 {
+                scaled + 0.5
+            } else {
+                scaled - 0.5
+            } as i32;
+            rounded.clamp(-127, 127) as i8 as u8
+        } else {
+            0
+        };
+    }
     Ok(())
 }
 
@@ -510,7 +533,7 @@ pub fn matmul_q8_0_q8a(
                 .checked_mul(shape.n_out)
                 .ok_or(TensorError::DimensionOverflow)?;
             let slot = y
-                .get_mut(row_start + out_index)
+                .get_mut(row_start.saturating_add(out_index))
                 .ok_or(TensorError::ShapeMismatch)?;
             *slot = acc;
         }

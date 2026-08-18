@@ -148,10 +148,10 @@ pub(crate) fn unpack_block(packed: &[u8], out: &mut [u8; Q4_0_BLOCK]) {
         // and back down arithmetically. Cheaper than a branch and constant-time.
         let low = (((byte << 4) as i8) >> 4) as u8;
         let high = ((*byte as i8) >> 4) as u8;
-        if let Some(slot) = out.get_mut(index * 2) {
+        if let Some(slot) = out.get_mut(index.saturating_mul(2)) {
             *slot = low;
         }
-        if let Some(slot) = out.get_mut(index * 2 + 1) {
+        if let Some(slot) = out.get_mut(index.saturating_mul(2).saturating_add(1)) {
             *slot = high;
         }
     }
@@ -201,7 +201,7 @@ pub fn quantize_q4_0(
         let at = index
             .checked_mul(SCALE_BYTES)
             .ok_or(TensorError::DimensionOverflow)?;
-        let Some(slot) = scale_plane.get_mut(at..at + SCALE_BYTES) else {
+        let Some(slot) = scale_plane.get_mut(at..at.saturating_add(SCALE_BYTES)) else {
             return Err(TensorError::ShapeMismatch);
         };
         slot.copy_from_slice(&if usable { scale } else { 0.0 }.to_le_bytes());
@@ -209,7 +209,9 @@ pub fn quantize_q4_0(
         let packed_at = index
             .checked_mul(Q4_0_BLOCK_BYTES)
             .ok_or(TensorError::DimensionOverflow)?;
-        let Some(packed) = quant_plane.get_mut(packed_at..packed_at + Q4_0_BLOCK_BYTES) else {
+        let Some(packed) =
+            quant_plane.get_mut(packed_at..packed_at.saturating_add(Q4_0_BLOCK_BYTES))
+        else {
             return Err(TensorError::ShapeMismatch);
         };
         for (byte_index, byte) in packed.iter_mut().enumerate() {
@@ -217,7 +219,8 @@ pub fn quantize_q4_0(
                 if !usable {
                     return 0;
                 }
-                let Some(value) = block.get(byte_index * 2 + offset) else {
+                let Some(value) = block.get(byte_index.saturating_mul(2).saturating_add(offset))
+                else {
                     return 0;
                 };
                 let scaled = value / scale;

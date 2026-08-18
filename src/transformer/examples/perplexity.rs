@@ -268,26 +268,50 @@ fn cross_entropy(logits: &[f32], target: u32) -> Option<f32> {
     Some((peak + sum.ln()) - target_logit)
 }
 
+/// Every buffer one evaluation borrows, in one place.
+///
+/// Grouped rather than passed loose. Twelve positional parameters of which six
+/// were `&mut` slices is how a call site ends up with two of them swapped and a
+/// result that still looks plausible, and it is what the suppression this file
+/// used to carry was hiding.
+struct Buffers<'a> {
+    workspace_storage: &'a mut [f32],
+    quant_scratch: &'a mut [u8],
+    cache_storage: &'a mut [f32],
+    logits: &'a mut [f32],
+}
+
+/// What is being evaluated, and under how many workers.
+struct Passage<'a> {
+    label: &'a str,
+    tokens: &'a [u32],
+    count: usize,
+    workers: usize,
+}
+
 /// Runs the whole passage under one dispatcher and reports perplexity and rate.
-#[allow(clippy::too_many_arguments)]
 fn evaluate<D: Dispatch>(
-    label: &str,
+    passage: &Passage<'_>,
     model: &Model<'_>,
     config: &ModelConfig,
-    workspace_storage: &mut [f32],
-    quant_scratch: &mut [u8],
-    cache_storage: &mut [f32],
+    buffers: &mut Buffers<'_>,
     geometry: brainix_transformer::CacheGeometry,
-    tokens: &[u32],
-    count: usize,
-    logits: &mut [f32],
     dispatch: &D,
-    workers: usize,
 ) -> Result<(f64, f64), String> {
-    let mut workspace =
-        brainix_transformer::Workspace::new(workspace_storage, quant_scratch, config, 1)
-            .map_err(|error| format!("workspace: {error:?}"))?;
-    let mut arena = brainix_transformer::KeyValueArena::new(cache_storage, geometry)
+    let Passage {
+        label,
+        tokens,
+        count,
+        workers,
+    } = *passage;
+    let mut workspace = brainix_transformer::Workspace::new(
+        buffers.workspace_storage,
+        buffers.quant_scratch,
+        config,
+        1,
+    )
+    .map_err(|error| format!("workspace: {error:?}"))?;
+    let mut arena = brainix_transformer::KeyValueArena::new(buffers.cache_storage, geometry)
         .map_err(|error| format!("arena: {error:?}"))?;
     let mut cache = arena
         .issue_session()
@@ -301,9 +325,15 @@ fn evaluate<D: Dispatch>(
         let token = *tokens.get(position).ok_or("token index")?;
         let target = *tokens.get(position + 1).ok_or("target index")?;
         model
-            .forward(dispatch, &mut workspace, &mut cache, &[token], logits)
+            .forward(
+                dispatch,
+                &mut workspace,
+                &mut cache,
+                &[token],
+                buffers.logits,
+            )
             .map_err(|error| format!("forward at {position}: {error:?}"))?;
-        let nats = cross_entropy(logits, target)
+        let nats = cross_entropy(buffers.logits, target)
             .ok_or_else(|| format!("non-finite logits at {position}"))?;
         total_nats += f64::from(nats);
         predictions = predictions.saturating_add(1);
@@ -577,19 +607,25 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
             } else {
                 format!("pool, split >= {} KB", threshold / 1024)
             };
+            let passage = Passage {
+                label: &label,
+                tokens: &tokens,
+                count,
+                workers,
+            };
+            let mut buffers = Buffers {
+                workspace_storage: &mut workspace_storage,
+                quant_scratch: &mut quant_scratch,
+                cache_storage: &mut cache_storage,
+                logits: &mut logits,
+            };
             outcome = Some(evaluate(
-                &label,
+                &passage,
                 &model,
                 &config,
-                &mut workspace_storage,
-                &mut quant_scratch,
-                &mut cache_storage,
+                &mut buffers,
                 geometry,
-                &tokens,
-                count,
-                &mut logits,
                 &pool,
-                workers,
             ));
             shutting_down.store(true, Ordering::Release);
             start.wait();
