@@ -244,6 +244,10 @@ fn block_dot(quant_block: &[u8], x_block: &[f32]) -> f32 {
         for lane in 0..DOT_LANES {
             let quant = quant_lane.get(lane).copied().unwrap_or(0);
             let activation = x_lane.get(lane).copied().unwrap_or(0.0);
+            // COVERAGE-EXEMPT: `lanes` is `[_; DOT_LANES]` and `lane` runs
+            // `0..DOT_LANES`, so this arm cannot be reached. Indexing instead
+            // would be shorter and would introduce a panic path into the
+            // hottest loop in the crate; the guard stays and the arm is named.
             let slot = match lanes.get_mut(lane) {
                 Some(slot) => slot,
                 None => continue,
@@ -351,6 +355,10 @@ fn block_dot_i8(quant_block: &[u8], x_block: &[u8]) -> i32 {
         for lane in 0..DOT_LANES {
             let weight = quant_lane.get(lane).copied().unwrap_or(0) as i8;
             let activation = x_lane.get(lane).copied().unwrap_or(0) as i8;
+            // COVERAGE-EXEMPT: `lanes` is `[_; DOT_LANES]` and `lane` runs
+            // `0..DOT_LANES`, so this arm cannot be reached. Indexing instead
+            // would be shorter and would introduce a panic path into the
+            // hottest loop in the crate; the guard stays and the arm is named.
             let slot = match lanes.get_mut(lane) {
                 Some(slot) => slot,
                 None => continue,
@@ -454,12 +462,20 @@ fn quantize_one_block(
         .ok_or(TensorError::DimensionOverflow)?;
 
     let emitted = if usable { scale } else { 0.0 };
+    // The planes were split from a payload whose length `quantize_activations`
+    // already checked against `Q8Weights::derived_payload_len`, and `scale_at`
+    // is derived from the same block count, so this range is always in bounds.
     let Some(scale_slot) = scale_plane.get_mut(scale_at..scale_at.saturating_add(SCALE_BYTES))
     else {
+        // COVERAGE-EXEMPT: unreachable behind the entry check one frame up.
+        // Defence in depth: reaching it needs a caller that bypassed those
+        // checks, which is exactly the refactor this guard is here to survive.
         return Err(TensorError::ShapeMismatch);
     };
     scale_slot.copy_from_slice(&emitted.to_le_bytes());
 
+    // COVERAGE-EXEMPT: as the scale plane above -- same derivation, same
+    // already-validated payload length.
     let Some(quant_slot) = quant_plane.get_mut(quant_at..quant_at.saturating_add(Q8_0_BLOCK))
     else {
         return Err(TensorError::ShapeMismatch);

@@ -201,6 +201,10 @@ pub fn quantize_q4_0(
         let at = index
             .checked_mul(SCALE_BYTES)
             .ok_or(TensorError::DimensionOverflow)?;
+        // COVERAGE-EXEMPT: `payload` was checked against
+        // `Q4Weights::derived_payload_len` at entry and `at` is derived from
+        // the same block count, so this range is always in bounds. The guard is
+        // defence in depth behind a check one frame up.
         let Some(slot) = scale_plane.get_mut(at..at.saturating_add(SCALE_BYTES)) else {
             return Err(TensorError::ShapeMismatch);
         };
@@ -209,6 +213,7 @@ pub fn quantize_q4_0(
         let packed_at = index
             .checked_mul(Q4_0_BLOCK_BYTES)
             .ok_or(TensorError::DimensionOverflow)?;
+        // COVERAGE-EXEMPT: as the scale plane above.
         let Some(packed) =
             quant_plane.get_mut(packed_at..packed_at.saturating_add(Q4_0_BLOCK_BYTES))
         else {
@@ -219,6 +224,9 @@ pub fn quantize_q4_0(
                 if !usable {
                     return 0;
                 }
+                // COVERAGE-EXEMPT: `block` is a `chunks_exact(Q4_0_BLOCK)`
+                // item and `byte_index` runs over `Q4_0_BLOCK / 2` bytes, so
+                // both nibble offsets are in range for every block.
                 let Some(value) = block.get(byte_index.saturating_mul(2).saturating_add(offset))
                 else {
                     return 0;
