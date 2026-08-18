@@ -44,8 +44,22 @@ MANIFEST="${HERE}/payloads.tsv"
 # under recoveryOS with a camera pointed at the screen. payloads.tsv already
 # exists to be the single source of truth for what gets installed and at what
 # entry point; this reads it.
+#
+# --dry-run does everything EXCEPT the two irreversible steps, and prints the
+# exact commands it would have run. The install is a one-shot with a camera
+# pointed at the screen and a trip to the machine to retry, so being able to
+# check the payload, the volume group, the target volume and the entry point
+# without committing to any of it is worth the twenty lines it costs. Every
+# failure in BRINGUP_PLAN.md section 2 would have been caught by this.
+DRY_RUN=0
+case "${1:-}" in
+  --dry-run) DRY_RUN=1; shift ;;
+esac
 PAYLOAD_NAME="${1:-brainix-kernel}"
 [ $# -ge 1 ] && shift
+case "${1:-}" in
+  --dry-run) DRY_RUN=1; shift ;;
+esac
 
 # Log to a file AND to the screen, without process substitution.
 #
@@ -143,15 +157,29 @@ say "4. security policy -> Permissive (NO -k)"
 # -k enables third-party kext trust, needs a paired AuxKC this flow never
 # creates, and wedged the policy badly enough to cost a volume group. It buys
 # nothing for booting our own kernel. See BRINGUP_PLAN.md §2 item 3.
-bputil -n -c -v "$VG" -u "$ADMIN_USER" -p "$ADMIN_PASS" || die "bputil could not set Permissive Security"
+if [ "$DRY_RUN" = "1" ]; then
+  printf 'DRY RUN -- would run:\n  bputil -n -c -v %s -u %s -p <password>\n' "$VG" "$ADMIN_USER"
+else
+  bputil -n -c -v "$VG" -u "$ADMIN_USER" -p "$ADMIN_PASS" || die "bputil could not set Permissive Security"
+fi
 
 # ---------------------------------------------------------------------------
 say "5. verify the policy actually changed"
 # ---------------------------------------------------------------------------
 POLICY="$(bputil -d -v "$VG" 2>&1)"
 printf '%s\n' "$POLICY" | grep -E "Security Mode:|smb0|sip2|Volume Group UUID" || true
-printf '%s\n' "$POLICY" | grep -q "Permissive" || die "policy is not Permissive after bputil -- stopping before the boot object"
-printf 'confirmed Permissive\n'
+if printf '%s\n' "$POLICY" | grep -q "Permissive"; then
+  printf 'confirmed Permissive\n'
+elif [ "$DRY_RUN" = "1" ]; then
+  # Expected on a dry run against a group that has not been downgraded yet:
+  # nothing was changed, so nothing should have changed. Said out loud rather
+  # than passed over, because "the dry run was clean" must not come to mean
+  # "the policy is already right".
+  printf 'NOT Permissive, and this is a dry run so nothing set it. The real\n'
+  printf 'run would set it at step 4 and stop here if it did not take.\n'
+else
+  die "policy is not Permissive after bputil -- stopping before the boot object"
+fi
 
 # ---------------------------------------------------------------------------
 say "6. install the boot object (once, last)"
@@ -181,6 +209,16 @@ fi
 # useless, and was abandoned -- which removed the only debugging instrument
 # available. Ours is 0. The two must never be copied from one another, and
 # neither is typed here.
+if [ "$DRY_RUN" = "1" ]; then
+  printf 'DRY RUN -- would run:\n  kmutil configure-boot -c %s --raw --entry-point %s --lowest-virtual-address %s -v %s\n' \
+    "$PAYLOAD" "$ENTRY_POINT" "$LOWEST_VA" "$TARGET"
+  printf '\nDRY RUN COMPLETE. Nothing was changed. Re-run without --dry-run to install.\n'
+  printf 'log saved: %s\n' "$LOG"
+  exec >/dev/tty 2>&1 || true
+  [ -n "${TEE_PID:-}" ] && wait "$TEE_PID" 2>/dev/null
+  rm -f "${LOG}.fifo"
+  exit 0
+fi
 kmutil configure-boot \
   -c "$PAYLOAD" \
   --raw --entry-point "$ENTRY_POINT" --lowest-virtual-address "$LOWEST_VA" \
