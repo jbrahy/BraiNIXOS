@@ -86,6 +86,11 @@ fi
 echo "==> device: ${M1N1DEVICE}"
 
 # --- build -------------------------------------------------------------------
+# `smp-bench` enlarges the SMP memory-rate buffer from 64 KiB to 64 MiB. It is a
+# feature and not the default because that buffer lives in .bss, and the BOOT
+# OBJECT build must not carry it: .bss is zeroed past the load address, and
+# 64 MiB of zeroes would land on firmware's own structures. The probe allocates
+# the whole span up front, so here it is free.
 # Homebrew's cargo shadows rustup's on this workstation and does not understand
 # rust-toolchain.toml, so the pinned toolchain is invoked by absolute path. The
 # crate directory is the working directory because cargo discovers
@@ -94,7 +99,7 @@ echo "==> device: ${M1N1DEVICE}"
 echo "==> building the kernel (release)"
 cd "${REPO}/src/kernel"
 RUSTC="${TOOLCHAIN_BIN}/rustc" RUSTDOC="${TOOLCHAIN_BIN}/rustdoc" \
-  "${TOOLCHAIN_BIN}/cargo" build --target "${TARGET}" --features kernel-binary --release \
+  "${TOOLCHAIN_BIN}/cargo" build --target "${TARGET}" --features kernel-binary,smp-bench --release \
   >/dev/null || die "kernel build failed; run it directly for the reason"
 
 OBJCOPY="$(find "${HOME}/.rustup/toolchains" -name llvm-objcopy 2>/dev/null | head -1)"

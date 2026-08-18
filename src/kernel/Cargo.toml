@@ -18,6 +18,18 @@ kernel-binary = []
 # Build: cargo build --features dev-build (development)
 # Default (no flag): production build
 dev-build = []
+# Enlarges the SMP memory-rate buffer to 64 MiB, which is the size the
+# concurrent-read measurement needs and a size a BOOT OBJECT must not carry.
+#
+# The buffer lives in `.bss`, and `.bss` is not in the flat image: the kernel
+# zeroes it at entry, past whatever address the loader chose. Under m1n1 that
+# was fine because the probe allocated the whole span first. Entered by iBoot
+# nothing has reserved it, so 64 MiB of `.bss` means writing 64 MiB of zeroes
+# over firmware structures -- including the very `boot_args` and device tree the
+# next few lines go on to read.
+#
+# So the boot image gets 64 KiB and the probe asks for the big one.
+smp-bench = []
 
 # Test-only, and deliberately so. `KV_PARTITION_COUNT` must equal
 # `brainix_bsp::MAX_SESSIONS` -- admission handing out more sessions than there

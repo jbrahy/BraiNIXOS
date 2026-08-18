@@ -1079,7 +1079,21 @@ pub fn secondary_enable_mmu_address() -> u64 {
 /// A decode streams roughly 151 MB of weights per token and hits nothing. To
 /// say anything about that, the buffer has to be past the last level that could
 /// hold it: larger than the ~24 MB system cache, not merely larger than an L2.
+///
+/// **The size is gated on a feature, and that gate is a safety property.** This
+/// buffer lives in `.bss`, which is not carried in the flat image -- the kernel
+/// zeroes it at entry, past wherever the loader put the image. Under the m1n1
+/// probe the whole span is allocated first, so 64 MiB is free. Entered by iBoot
+/// as a boot object nothing has reserved it, and zeroing 64 MiB would land on
+/// firmware's own structures, `boot_args` and the device tree among them. The
+/// boot image therefore carries 64 KiB and the probe asks for the real one.
+#[cfg(feature = "smp-bench")]
 pub const BENCH_WORDS: usize = 1 << 23;
+
+/// The boot image's buffer: large enough that the mechanism still works, small
+/// enough that `.bss` is not a hazard. See the note above.
+#[cfg(not(feature = "smp-bench"))]
+pub const BENCH_WORDS: usize = 1 << 13;
 
 /// Buffer for measuring what a core with its MMU off can actually read.
 ///

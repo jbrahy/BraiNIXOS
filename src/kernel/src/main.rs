@@ -136,17 +136,54 @@ fn write_panic_details(
 /// off; entered under m1n1 it is on with an identity mapping over the device
 /// memory this touches (`SCTLR_EL1 = 0x30901185`, measured). See
 /// `arch::aarch64::Console::from_boot_args`.
+/// The real entry point: four instructions of assembly that Rust cannot write.
+///
+/// # Why this exists, and why it did not before
+///
+/// The Rust function below was `_start` and was entered directly. Its compiled
+/// prologue begins `sub sp, sp, #0x40` -- it *uses* the stack before anything
+/// has set one. That was invisible for as long as the only way this kernel ever
+/// ran was under m1n1, which enters payloads with a valid `sp` already
+/// installed. Entered cold by iBoot, `sp` is whatever firmware left in it, and
+/// the first instruction of the kernel writes through it.
+///
+/// So the entry point is assembly, exactly as `src/boot-stub-apple/src/start.S`
+/// is, and for exactly the same reason. It sets `sp` from the linker's
+/// `__stack_top` -- which the linker script has always emitted and nothing has
+/// ever used -- and only then enters Rust.
+///
+/// Every address is PC-relative. The image is linked at 0 and iBoot loads it
+/// wherever it likes, so an absolute reference would resolve to nothing.
+///
+/// Placed in `.text.boot`, which `linker-aarch64.ld` KEEPs first. A raw boot
+/// object is entered at **offset 0** of the flat image, so whatever lands there
+/// is what runs; the linker put a random function there once already.
+#[cfg(target_arch = "aarch64")]
+core::arch::global_asm!(
+    r#"
+.section .text.boot, "ax"
+.globl _start
+_start:
+    // boot_args, into a callee-saved register, before anything can clobber it.
+    mov  x19, x0
+    // The stack the linker script reserves. 16-byte aligned by that script,
+    // which the AArch64 ABI requires and which a misaligned `sp` punishes with
+    // a fault on the first push rather than an obvious error.
+    adrp x1, __stack_top
+    add  x1, x1, :lo12:__stack_top
+    mov  sp, x1
+    mov  x0, x19
+    bl   brainix_kernel_main
+    // `brainix_kernel_main` is `-> !`. Reaching here means it returned anyway,
+    // so spin rather than fall through into whatever bytes follow.
+1:  wfe
+    b 1b
+"#
+);
+
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
-// Placed in `.text.boot`, which linker-aarch64.ld KEEPs first.
-//
-// Without this the linker is free to lay `_start` anywhere in `.text`, and it
-// chose 0x58. A raw boot object is entered at **offset 0** of the flat image,
-// so an image whose first instruction is not `_start` executes whatever
-// function happened to be laid down first -- which on this platform fails with
-// no output at all, and is indistinguishable from never running.
-#[link_section = ".text.boot"]
-pub unsafe extern "C" fn _start(boot_args: *const u8) -> ! {
+pub unsafe extern "C" fn brainix_kernel_main(boot_args: *const u8) -> ! {
     // SAFETY: the caller is firmware, which guarantees the `boot_args`
     // contract; a null pointer is handled inside.
     // SAFETY: first thing at the entry point, before any `static` is read.
@@ -176,7 +213,90 @@ pub unsafe extern "C" fn _start(boot_args: *const u8) -> ! {
         "     console      dockchannel, FALLBACK CONSTANT (adt discovery denied)"
     });
 
+    // Say how far we got in the only language this machine currently speaks.
+    //
+    // Everything above writes to DockChannel, and on this rig DockChannel
+    // delivers zero bytes at the host -- measured, and measured with m1n1's own
+    // output too, so it is the path and not our driver. Parking here therefore
+    // produces exactly one observable: the machine goes quiet, which is what a
+    // crash on the first instruction also produces.
+    //
+    // So before parking, arm the watchdog. The machine then power-cycles on a
+    // cadence *we* chose, which is observable from the workstation as the USB
+    // device disappearing and coming back, and which nothing else on this
+    // machine does. See `arch::aarch64::watchdog`.
+    // SAFETY: the caller's `boot_args` contract; null is handled inside.
+    let reached = unsafe { signal_progress(boot_args) };
+    console.write_line(match reached {
+        Progress::Silent => "     signal       NONE -- no watchdog, this boot is unobservable",
+        Progress::ArmedFromAdt => "     signal       watchdog armed from the adt",
+    });
+
     brainix_kernel::arch::aarch64::park()
+}
+
+/// How far [`signal_progress`] got, which is what the reboot cadence encodes.
+#[cfg(target_arch = "aarch64")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Progress {
+    /// No watchdog could be located, so this boot cannot report anything.
+    Silent,
+    /// Located through the ADT and armed.
+    ArmedFromAdt,
+}
+
+/// Seconds between reboots when the kernel reaches the end of `_start`.
+///
+/// Chosen to be unmistakable rather than convenient. iBoot leaves this machine
+/// running indefinitely when a boot object parks, so *any* periodic reset is
+/// ours; five seconds is long enough to be told apart from a boot loop that
+/// never reaches us and short enough that a watcher sees several cycles.
+#[cfg(target_arch = "aarch64")]
+const LIVENESS_SECONDS: u64 = 5;
+
+/// Locate the watchdog through firmware's tree and arm it.
+///
+/// # Why the counter frequency is used as the tick rate
+///
+/// It is a guess, and it is a *measuring* guess. If the watchdog counts at the
+/// system counter's rate the machine cycles every five seconds; if it counts at
+/// some other rate the period is wrong by exactly that ratio, and the observed
+/// period divided by five is the watchdog's real clock. Either outcome is a
+/// reading. Hardcoding a rate nobody has measured would turn a wrong guess into
+/// a silent one.
+///
+/// # Safety
+///
+/// `boot_args` must be the pointer firmware placed in `x0`, or null. Arms a
+/// hardware reset: the machine must be ours.
+#[cfg(target_arch = "aarch64")]
+unsafe fn signal_progress(boot_args: *const u8) -> Progress {
+    if boot_args.is_null() {
+        return Progress::Silent;
+    }
+    // SAFETY: firmware guarantees the structure; every field access inside is
+    // bounds-checked by `brainix_adt`.
+    let header = unsafe { core::slice::from_raw_parts(boot_args, 0x100) };
+    let Ok(window) = brainix_adt::adt_window(header) else {
+        return Progress::Silent;
+    };
+    // SAFETY: `adt_window` validated the range lies inside the DRAM window
+    // firmware reported, is aligned, and does not overflow.
+    let blob = unsafe {
+        core::slice::from_raw_parts(window.phys_addr as usize as *const u8, window.len as usize)
+    };
+    let Some(base) = brainix_kernel::arch::aarch64::watchdog::locate(blob) else {
+        return Progress::Silent;
+    };
+
+    let ticks = brainix_kernel::arch::aarch64::registers::counter_frequency_hz()
+        .saturating_mul(LIVENESS_SECONDS)
+        .min(u64::from(u32::MAX)) as u32;
+    // SAFETY: `base` is the translated `reg[0]` of `/arm-io/wdt`, resolved by
+    // the same host-tested path the probe checks against this machine's own
+    // tree. This resets the machine, which is the entire point.
+    unsafe { brainix_kernel::arch::aarch64::watchdog::arm_reset(base, ticks) };
+    Progress::ArmedFromAdt
 }
 
 /// Panic handler on Apple Silicon.
