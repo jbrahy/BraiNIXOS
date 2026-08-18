@@ -89,11 +89,15 @@ impl<'arena> TableBuilder<'arena> {
             return Err(BuildError::UnsupportedConfiguration);
         }
         let granule = 1u64 << granule_bits;
-        if base & (granule - 1) != 0 {
+        // Granule-aligned, spelled as the divisibility test it is. The
+        // subtraction form is exact here -- `granule_bits` is checked above --
+        // but `is_multiple_of` says what is being asked rather than how.
+        if !base.is_multiple_of(granule) {
             return Err(BuildError::MisalignedArena);
         }
 
-        let stride = granule_bits - 3;
+        // Cannot underflow: `granule_bits` is 12, 14 or 16 by the check above.
+        let stride = granule_bits.saturating_sub(3);
         let levels = input_bits
             .saturating_sub(granule_bits)
             .div_ceil(stride)
@@ -145,7 +149,7 @@ impl<'arena> TableBuilder<'arena> {
     /// granule: 2 MiB at 4 KiB, 32 MiB at 16 KiB, 512 MiB at 64 KiB. Mapping a
     /// block at any other level is a reserved encoding, not a bigger page.
     pub fn block_size(&self) -> u64 {
-        1u64 << (self.granule_bits + self.stride())
+        1u64 << self.granule_bits.saturating_add(self.stride())
     }
 
     /// Index of the level blocks are written at.
@@ -214,7 +218,10 @@ impl<'arena> TableBuilder<'arena> {
         attributes: u64,
     ) -> Result<(), BuildError> {
         let block = self.block_size();
-        if virtual_address % block != 0 || physical_address % block != 0 || length % block != 0 {
+        if !virtual_address.is_multiple_of(block)
+            || !physical_address.is_multiple_of(block)
+            || !length.is_multiple_of(block)
+        {
             return Err(BuildError::MisalignedRange);
         }
         if self.input_bits < 64 {
@@ -387,7 +394,7 @@ impl<'arena> TableBuilder<'arena> {
 
     /// Output-address mask: granule-aligned, 48 bits wide.
     fn address_mask(&self) -> u64 {
-        ((1u64 << 48) - 1) & !((1u64 << self.granule_bits) - 1)
+        (1u64 << 48).wrapping_sub(1) & !(1u64 << self.granule_bits).wrapping_sub(1)
     }
 
     /// Table index for `virtual_address` at `level`.
@@ -398,6 +405,6 @@ impl<'arena> TableBuilder<'arena> {
         } else {
             self.stride()
         };
-        (virtual_address >> shift) & ((1u64 << bits) - 1)
+        (virtual_address >> shift) & (1u64 << bits).wrapping_sub(1)
     }
 }

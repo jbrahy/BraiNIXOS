@@ -125,7 +125,7 @@ pub fn walk(
     let granule = 1u64 << config.granule_bits;
     // Output-address field: granule-aligned, and 48 bits wide on every
     // configuration this targets.
-    let address_mask = ((1u64 << 48) - 1) & !(granule - 1);
+    let address_mask = (1u64 << 48).wrapping_sub(1) & !granule.wrapping_sub(1);
 
     let mut table = root & address_mask;
 
@@ -140,7 +140,7 @@ pub fn walk(
         } else {
             stride
         };
-        let index = (virtual_address >> shift) & ((1u64 << bits_here) - 1);
+        let index = (virtual_address >> shift) & (1u64 << bits_here).wrapping_sub(1);
 
         let entry_address = table.saturating_add(index.saturating_mul(8));
         let descriptor = read_descriptor(entry_address);
@@ -151,7 +151,7 @@ pub fn walk(
             0b11 => {
                 if is_last {
                     let page_base = descriptor & address_mask;
-                    let offset = virtual_address & (granule - 1);
+                    let offset = virtual_address & granule.wrapping_sub(1);
                     return Ok(Translation {
                         physical_address: page_base | offset,
                         descriptor,
@@ -168,8 +168,8 @@ pub fn walk(
                     return Err(WalkError::BlockAtIllegalLevel { level: step });
                 }
                 let block_size = 1u64 << shift;
-                let block_base = descriptor & address_mask & !(block_size - 1);
-                let offset = virtual_address & (block_size - 1);
+                let block_base = descriptor & address_mask & !block_size.wrapping_sub(1);
+                let offset = virtual_address & block_size.wrapping_sub(1);
                 return Ok(Translation {
                     physical_address: block_base | offset,
                     descriptor,
