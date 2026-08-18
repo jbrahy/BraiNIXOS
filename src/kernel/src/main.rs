@@ -229,30 +229,60 @@ pub unsafe extern "C" fn brainix_kernel_main(boot_args: *const u8) -> ! {
     let reached = unsafe { signal_progress(boot_args) };
     console.write_line(match reached {
         Progress::Silent => "     signal       NONE -- no watchdog, this boot is unobservable",
-        Progress::ArmedFromAdt => "     signal       watchdog armed from the adt",
+        Progress::Watchdog => "     signal       watchdog armed, 5s",
+        Progress::Cpus => "     signal       cpu topology read, 7s",
+        Progress::Pmgr => "     signal       pmgr located, 9s",
+        Progress::Smp => "     signal       second cpu released, 11s",
     });
 
     brainix_kernel::arch::aarch64::park()
 }
 
 /// How far [`signal_progress`] got, which is what the reboot cadence encodes.
+///
+/// Each stage re-arms the watchdog for two seconds longer than the last, so the
+/// interval between resets *is* the report. Reading it needs a stopwatch and
+/// nothing else, which matters because on this machine there is nothing else.
 #[cfg(target_arch = "aarch64")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Progress {
-    /// No watchdog could be located, so this boot cannot report anything.
+    /// No watchdog could be located, so this boot cannot report anything. The
+    /// machine sits there, and sitting there is also what a kernel that faulted
+    /// on its first instruction does.
     Silent,
-    /// Located through the ADT and armed.
-    ArmedFromAdt,
+    /// Device tree parsed and the watchdog found and armed. 5s.
+    Watchdog,
+    /// The CPU topology read out of the tree: more than one core described. 7s.
+    Cpus,
+    /// The PMGR block located and its CPU-start register base derived. 9s.
+    ///
+    /// Split from [`Progress::Smp`] because the first run of this ladder
+    /// stopped at `Cpus` and two different failures produced that one interval:
+    /// the PMGR lookup failing, and the core failing to start. One interval that
+    /// means two things is the failure mode this whole scheme exists to avoid.
+    Pmgr,
+    /// A second CPU taken out of reset, which reported its own MPIDR back. 11s.
+    Smp,
 }
 
-/// Seconds between reboots when the kernel reaches the end of `_start`.
-///
-/// Chosen to be unmistakable rather than convenient. iBoot leaves this machine
-/// running indefinitely when a boot object parks, so *any* periodic reset is
-/// ours; five seconds is long enough to be told apart from a boot loop that
-/// never reaches us and short enough that a watcher sees several cycles.
 #[cfg(target_arch = "aarch64")]
-const LIVENESS_SECONDS: u64 = 5;
+impl Progress {
+    /// Seconds this stage arms the watchdog for.
+    ///
+    /// Five, then two per stage. Two is comfortably larger than the spread
+    /// observed on the measured runs -- a 5-second arm produced a reset at +7s
+    /// and a 15-second arm at +16s, so the handover overhead is a second or so
+    /// and never close to two.
+    const fn seconds(self) -> u64 {
+        match self {
+            Progress::Silent => 0,
+            Progress::Watchdog => 5,
+            Progress::Cpus => 7,
+            Progress::Pmgr => 9,
+            Progress::Smp => 11,
+        }
+    }
+}
 
 /// Locate the watchdog through firmware's tree and arm it.
 ///
@@ -289,14 +319,91 @@ unsafe fn signal_progress(boot_args: *const u8) -> Progress {
         return Progress::Silent;
     };
 
-    let ticks = brainix_kernel::arch::aarch64::registers::counter_frequency_hz()
-        .saturating_mul(LIVENESS_SECONDS)
-        .min(u64::from(u32::MAX)) as u32;
+    // Arm before attempting anything, and re-arm after each stage succeeds.
+    //
+    // **The watchdog is the hang recovery as well as the signal, and that is
+    // what makes this ladder safe to climb on a cold machine.** A stage that
+    // wedges does not take the report with it: the previous stage's alarm is
+    // already counting, so the machine still resets and still resets on that
+    // stage's interval. What arrives is "it got this far and then stopped",
+    // which is exactly the thing a payload with no output device otherwise
+    // cannot say.
+    let mut reached = Progress::Watchdog;
     // SAFETY: `base` is the translated `reg[0]` of `/arm-io/wdt`, resolved by
     // the same host-tested path the probe checks against this machine's own
     // tree. This resets the machine, which is the entire point.
+    unsafe { rearm(base, reached) };
+
+    // Stage 2: the CPU topology, which is pure parsing over the same blob and
+    // touches no hardware at all.
+    let mut cpus = [brainix_kernel::aarch64_cpus::Cpu::default(); 16];
+    let found = brainix_kernel::aarch64_cpus::cpus(blob, &mut cpus);
+    if found < 2 {
+        return reached;
+    }
+    reached = Progress::Cpus;
+    // SAFETY: as above.
+    unsafe { rearm(base, reached) };
+
+    // Stage 3: take a second core out of reset.
+    //
+    // This works on a cold machine for the reason it is interesting: the
+    // secondary runs with its MMU off, which is the state it arrives in anyway,
+    // so nothing here depends on a translation regime the boot core has not
+    // built yet.
+    let Some(pmgr) = brainix_kernel::aarch64_devices::translated_reg(blob, b"/arm-io/pmgr", 0)
+    else {
+        return reached;
+    };
+    let start_base = pmgr.wrapping_add(brainix_kernel::aarch64_cpus::CPU_START_OFFSET_T6020);
+    reached = Progress::Pmgr;
+    // SAFETY: as above.
+    unsafe { rearm(base, reached) };
+
+    let Some(target) =
+        brainix_kernel::aarch64_cpus::first_waiting_cpu(cpus.get(..found).unwrap_or(&[]))
+    else {
+        return reached;
+    };
+    // A second of ticks. Bounded, because a core that never reports must not
+    // take this one with it -- and here "taking it with it" would mean losing
+    // the stage-2 reading that has already been armed.
+    let timeout = brainix_kernel::arch::aarch64::registers::counter_frequency_hz();
+    // SAFETY: `target` is a core the tree says is waiting, `start_base` came
+    // from the ADT with its translation checked, and this core is running
+    // under firmware's identity mapping so the secondary resolves the same
+    // addresses with its MMU off.
+    let released =
+        unsafe { brainix_kernel::arch::aarch64::smp::release(&target, start_base, timeout) };
+    if !released.started {
+        return reached;
+    }
+    reached = Progress::Smp;
+    // SAFETY: as above.
+    unsafe { rearm(base, reached) };
+    reached
+}
+
+/// Re-arm the watchdog for `stage`'s interval, restarting its count.
+///
+/// # Why the counter frequency is used as the tick rate
+///
+/// It was a guess, and it was a *measuring* guess: a 5-second constant produced
+/// a reset at +7s and a 15-second constant at +16s, so a ten-second change moved
+/// the reset by ten seconds and the watchdog does count at the system counter's
+/// rate. Measured by chainload on 2026-08-17.
+///
+/// # Safety
+///
+/// `base` must be the watchdog's translated register base. Resets the machine.
+#[cfg(target_arch = "aarch64")]
+unsafe fn rearm(base: u64, stage: Progress) {
+    let ticks = brainix_kernel::arch::aarch64::registers::counter_frequency_hz()
+        .saturating_mul(stage.seconds())
+        .min(u64::from(u32::MAX)) as u32;
+    // SAFETY: delegated to this function's contract. `arm_reset` writes the
+    // alarm, then zeroes the count, so each call measures from now.
     unsafe { brainix_kernel::arch::aarch64::watchdog::arm_reset(base, ticks) };
-    Progress::ArmedFromAdt
 }
 
 /// Panic handler on Apple Silicon.

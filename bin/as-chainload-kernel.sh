@@ -167,23 +167,35 @@ echo "=============================== VERDICT ==============================="
 if [[ -z "${GONE_AT}" ]]; then
   echo "  NO RESET. The machine never left the bus."
   echo
-  echo "  The kernel either was not entered, or did not reach the end of"
-  echo "  _start. It cannot say which, because it has no output device --"
-  echo "  that is the whole reason the watchdog is the signal."
+  echo "  The kernel either was not entered, or did not reach the point in"
+  echo "  _start where the watchdog is first armed. It cannot say which,"
+  echo "  because it has no output device -- that is the whole reason the"
+  echo "  reboot is the signal."
 else
   ELAPSED=$((GONE_AT - HANDOVER_EPOCH))
-  echo "  RESET at +${ELAPSED}s after handover (expected about ${EXPECT_SECONDS}s)."
+  echo "  RESET at +${ELAPSED}s after handover."
   echo
-  if (( ELAPSED >= EXPECT_SECONDS - 3 && ELAPSED <= EXPECT_SECONDS + 8 )); then
-    echo "  THE KERNEL RAN WITH M1N1 GONE. To reset on that cadence it had to"
-    echo "  be entered at offset 0, establish a stack, zero .bss, parse the"
-    echo "  boot_args firmware handed it, walk the device tree to /arm-io/wdt,"
-    echo "  translate its reg through /arm-io's ranges, and write the alarm."
+  # _start climbs a ladder and re-arms the watchdog two seconds longer at each
+  # rung, so the interval IS the report. Handover plus the device leaving the
+  # bus costs a second or two on top, measured: a 5s arm reset at +7s and a 15s
+  # arm at +16s.
+  if   (( ELAPSED >= 4  && ELAPSED <= 8  )); then STAGE="watchdog armed (5s) -- device tree parsed, /arm-io/wdt found and armed"
+  elif (( ELAPSED >= 9  && ELAPSED <= 10 )); then STAGE="cpu topology read (7s) -- the tree describes more than one core"
+  elif (( ELAPSED >= 11 && ELAPSED <= 12 )); then STAGE="pmgr located (9s) -- /arm-io/pmgr translated, cpu-start base derived"
+  elif (( ELAPSED >= 13 && ELAPSED <= 15 )); then STAGE="SECOND CPU RELEASED (11s) -- a core came out of reset and reported its MPIDR"
+  else STAGE=""
+  fi
+  if [[ -n "${STAGE}" ]]; then
+    echo "  Decoded stage: ${STAGE}"
+    echo
+    echo "  THE KERNEL RAN WITH M1N1 GONE. To reset on that cadence it had to be"
+    echo "  entered at offset 0, establish a stack from __stack_top, zero .bss,"
+    echo "  parse the boot_args firmware handed it, walk the device tree, and"
+    echo "  write the watchdog alarm -- with nothing else running on the machine."
   else
-    echo "  Reset, but not on our cadence. Either the watchdog counts at a"
-    echo "  different rate than the system counter -- in which case"
-    echo "  ${ELAPSED}/${EXPECT_SECONDS} is the ratio and that is a"
-    echo "  measurement -- or something else reset the machine."
+    echo "  Not a cadence this kernel arms. Either something else reset the"
+    echo "  machine, or a stage wedged between arming and re-arming and the"
+    echo "  previous alarm fired at a time the ladder does not predict."
   fi
 fi
 echo "======================================================================="
