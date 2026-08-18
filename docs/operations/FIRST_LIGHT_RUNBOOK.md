@@ -166,6 +166,62 @@ was kmutil sitting at an invisible prompt.
 If you see nothing after answering `y`, type the username anyway. If it echoes,
 the prompt was there all along.
 
+## 5a. Install the kernel, and take m1n1 out of the loop
+
+Everything above installs m1n1, which is the debugging instrument. This installs
+BraiNIX itself, which is the point.
+
+```sh
+sh /Volumes/Data/Users/Shared/brainix-boot/as-install-boot-object.sh brainix-kernel
+```
+
+The payload name is the only argument, and the script reads
+[`payloads.tsv`](../../bin/payloads.tsv) for the file, size, hash and **entry
+point**. The kernel's entry is 0 and m1n1's is 2048; the two must never be
+copied from one another, and neither is typed at the prompt.
+
+### Rehearse it over the wire first, because you can
+
+`bin/as-chainload-kernel.sh` runs the same image on the same machine without
+touching the boot object at all. m1n1 shuts its own MMU down and jumps to the
+payload at EL2, MMU off, `x0` holding boot_args -- the entry state iBoot gives a
+custom boot object. If the kernel is going to fail on install, it fails here
+first, and here costs a reboot instead of a trip to the machine.
+
+### There is no screen and there is no serial. Watch the USB bus.
+
+The framebuffer handed to a custom boot object is a dummy that is never scanned
+out (section 9), and the SBU serial path on this rig delivers zero bytes
+(section 9a). Once m1n1 is gone, the machine has no way to tell you anything
+except by rebooting.
+
+So `_start` arms the watchdog for five seconds and parks. A working install is a
+machine that power-cycles about every five seconds plus boot time, forever:
+
+```sh
+while :; do ls /dev/cu.usbmodem* >/dev/null 2>&1 && echo up || echo down; sleep 1; done
+```
+
+Measured on 2026-08-17 by chainload, and the reason it is believable is that the
+interval moves with the constant:
+
+| `LIVENESS_SECONDS` | reset observed at |
+| --- | --- |
+| 5 | +7s |
+| 15 | +16s |
+
+A payload that crashed into `VBAR_EL2 = 0` and reset the machine on its own
+would not move when a Rust constant changes, and neither would a firmware
+watchdog. That table is what makes the heartbeat evidence rather than a guess,
+and it also settles the watchdog's tick rate: it counts at the system counter's.
+
+### Getting back
+
+The heartbeat is a permanent reboot loop, which is the intended signal and also
+means the machine will not sit still for anything else. Hold the power button
+for One True Recovery and install a different boot object. `macvdmtool reboot`
+will not help: it reboots into whatever the boot object is, which is the loop.
+
 ## 6. Record what you installed
 
 ```sh
