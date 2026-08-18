@@ -78,7 +78,6 @@ pub const fn quantized_activation_bytes(
     }
 }
 
-
 /// Floats a caller must reserve for a workspace admitting up to
 /// `maximum_batch_tokens` tokens per call.
 ///

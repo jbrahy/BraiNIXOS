@@ -580,11 +580,8 @@ pub fn matmul_q8_0_q8a_rows(
         return Err(TensorError::ShapeMismatch);
     }
 
-    for (local_index, (weight_scales, weight_quants)) in weights
-        .rows()
-        .skip(row_start)
-        .take(row_count)
-        .enumerate()
+    for (local_index, (weight_scales, weight_quants)) in
+        weights.rows().skip(row_start).take(row_count).enumerate()
     {
         for (token_index, (x_scales, x_quants)) in activations.rows().enumerate() {
             let mut acc = 0.0_f32;

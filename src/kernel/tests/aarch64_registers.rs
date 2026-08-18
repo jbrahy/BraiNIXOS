@@ -10,8 +10,6 @@
 //! identical comparisons and a `TCR_EL1` that selects a granule the silicon
 //! does not implement, which on this hardware is unrecoverable and silent.
 
-
-
 use brainix_kernel::aarch64_ident::MemoryModel;
 
 /// Read from the target, 2026-08-16.

@@ -60,5 +60,4 @@ impl MemoryModel {
             granule_16k: tgran16 != 0b0000,
         }
     }
-
 }

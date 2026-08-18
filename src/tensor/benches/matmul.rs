@@ -50,10 +50,10 @@ use brainix_tensor::{
     matmul_q4_0_q8a, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations,
     quantize_q4_0, MatMulShape, Q4Weights, Q8Weights, Q8_0_BLOCK,
 };
-use std::time::Instant;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Barrier;
 use std::thread;
+use std::time::Instant;
 
 /// Bytes a `Q8_0` weight element costs: one quant byte plus 4/32 of a scale.
 const BYTES_PER_WEIGHT_ELEMENT: f64 = 1.125;
@@ -146,7 +146,11 @@ fn measure(label: &str, n_tokens: usize, n_in: usize, n_out: usize) {
 fn measure_sdot(label: &str, n_tokens: usize, n_in: usize, n_out: usize) {
     let payload = synthetic_payload(n_out, n_in);
     let weights = Q8Weights::new(&payload, n_out, n_in).expect("payload is well formed");
-    let shape = MatMulShape { n_tokens, n_in, n_out };
+    let shape = MatMulShape {
+        n_tokens,
+        n_in,
+        n_out,
+    };
     let x = vec![0.5_f32; n_tokens * n_in];
     let mut y = vec![0.0_f32; n_tokens * n_out];
     let mut scratch =
@@ -197,7 +201,11 @@ fn measure_sdot(label: &str, n_tokens: usize, n_in: usize, n_out: usize) {
 fn measure_scaling(n_tokens: usize, n_in: usize, n_out: usize) {
     let payload = synthetic_payload(n_out, n_in);
     let weights = Q8Weights::new(&payload, n_out, n_in).expect("payload is well formed");
-    let shape = MatMulShape { n_tokens, n_in, n_out };
+    let shape = MatMulShape {
+        n_tokens,
+        n_in,
+        n_out,
+    };
     let x = vec![0.5_f32; n_tokens * n_in];
     let weight_bytes = n_out as f64 * n_in as f64 * BYTES_PER_WEIGHT_ELEMENT;
     let iterations = (1_000_000_000.0 / weight_bytes).max(3.0) as usize;
@@ -216,8 +224,7 @@ fn measure_scaling(n_tokens: usize, n_in: usize, n_out: usize) {
                     ];
                     for _ in 0..iterations {
                         quantize_activations(n_tokens, n_in, &x, &mut scratch).expect("quantize");
-                        let view =
-                            Q8Weights::new(&scratch, n_tokens, n_in).expect("view");
+                        let view = Q8Weights::new(&scratch, n_tokens, n_in).expect("view");
                         matmul_q8_0_q8a(shape, &weights, &view, &mut y).expect("matmul");
                     }
                     std::hint::black_box(&y);
@@ -255,7 +262,11 @@ fn measure_scaling(n_tokens: usize, n_in: usize, n_out: usize) {
 fn measure_row_split(label: &str, n_in: usize, n_out: usize) {
     let payload = synthetic_payload(n_out, n_in);
     let weights = Q8Weights::new(&payload, n_out, n_in).expect("payload is well formed");
-    let shape = MatMulShape { n_tokens: 1, n_in, n_out };
+    let shape = MatMulShape {
+        n_tokens: 1,
+        n_in,
+        n_out,
+    };
     let x = vec![0.5_f32; n_in];
     let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, n_in).expect("len")];
     quantize_activations(1, n_in, &x, &mut scratch).expect("quantize");
@@ -277,7 +288,12 @@ fn measure_row_split(label: &str, n_in: usize, n_out: usize) {
                     let quantized = &quantized;
                     scope.spawn(move || {
                         matmul_q8_0_q8a_rows(
-                            shape, weights, quantized, index * per, chunk.len(), chunk,
+                            shape,
+                            weights,
+                            quantized,
+                            index * per,
+                            chunk.len(),
+                            chunk,
                         )
                         .expect("range matmul");
                     });
@@ -325,7 +341,11 @@ fn measure_row_split(label: &str, n_in: usize, n_out: usize) {
 fn measure_pool(label: &str, n_in: usize, n_out: usize) {
     let payload = synthetic_payload(n_out, n_in);
     let weights = Q8Weights::new(&payload, n_out, n_in).expect("payload is well formed");
-    let shape = MatMulShape { n_tokens: 1, n_in, n_out };
+    let shape = MatMulShape {
+        n_tokens: 1,
+        n_in,
+        n_out,
+    };
     let x = vec![0.5_f32; n_in];
     let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, n_in).expect("len")];
     quantize_activations(1, n_in, &x, &mut scratch).expect("quantize");
@@ -420,7 +440,11 @@ fn measure_q4(label: &str, n_in: usize, n_out: usize, threads: usize) {
     quantize_q4_0(n_out, n_in, &dense, &mut q4_payload).expect("quantize q4");
     let q4 = Q4Weights::new(&q4_payload, n_out, n_in).expect("q4");
 
-    let shape = MatMulShape { n_tokens: 1, n_in, n_out };
+    let shape = MatMulShape {
+        n_tokens: 1,
+        n_in,
+        n_out,
+    };
     let x = vec![0.5_f32; n_in];
     let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, n_in).expect("len")];
     quantize_activations(1, n_in, &x, &mut scratch).expect("quantize");
@@ -484,7 +508,9 @@ fn measure_q4(label: &str, n_in: usize, n_out: usize, threads: usize) {
 fn main() {
     println!();
     println!("  matmul_q8_0 — weight-byte throughput, single core");
-    println!("  reference bus: {REFERENCE_BANDWIDTH_GB_S:.0} GB/s (M2 Pro, vendor figure, not measured)");
+    println!(
+        "  reference bus: {REFERENCE_BANDWIDTH_GB_S:.0} GB/s (M2 Pro, vendor figure, not measured)"
+    );
     println!();
 
     // Single-stream decode is n_tokens = 1 and is the case the north star's

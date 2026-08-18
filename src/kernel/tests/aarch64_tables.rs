@@ -38,7 +38,11 @@ fn an_identity_map_resolves_every_address_to_itself() {
     let root = builder.root();
     let levels = builder.levels();
     let config = WalkConfig::from_tcr((0b10 << 14) | u64::from(64 - INPUT_BITS)).unwrap();
-    assert_eq!(config.levels(), levels, "builder and walker must agree on depth");
+    assert_eq!(
+        config.levels(),
+        levels,
+        "builder and walker must agree on depth"
+    );
 
     // Read descriptors back out of the arena the builder wrote.
     let read = |physical: u64| -> u64 {
@@ -61,13 +65,16 @@ fn an_identity_map_resolves_every_address_to_itself() {
 #[test]
 fn a_misaligned_range_denies_rather_than_rounding() {
     let mut memory = arena(8);
-    let mut builder = TableBuilder::new(&mut memory, 0x4000_0000, GRANULE_BITS, INPUT_BITS).unwrap();
+    let mut builder =
+        TableBuilder::new(&mut memory, 0x4000_0000, GRANULE_BITS, INPUT_BITS).unwrap();
     let block = builder.block_size();
 
     // Rounding a misaligned request is how a mapping ends up covering memory
     // the caller did not ask for.
     assert_eq!(
-        builder.map_blocks(block + 0x1000, 0, block, ATTRS).unwrap_err(),
+        builder
+            .map_blocks(block + 0x1000, 0, block, ATTRS)
+            .unwrap_err(),
         BuildError::MisalignedRange
     );
     assert_eq!(
@@ -79,7 +86,8 @@ fn a_misaligned_range_denies_rather_than_rounding() {
 #[test]
 fn remapping_an_existing_block_denies() {
     let mut memory = arena(8);
-    let mut builder = TableBuilder::new(&mut memory, 0x4000_0000, GRANULE_BITS, INPUT_BITS).unwrap();
+    let mut builder =
+        TableBuilder::new(&mut memory, 0x4000_0000, GRANULE_BITS, INPUT_BITS).unwrap();
     let block = builder.block_size();
 
     builder.map_blocks(0, 0, block, ATTRS).expect("first map");
@@ -95,7 +103,8 @@ fn remapping_an_existing_block_denies() {
 fn an_exhausted_arena_denies_instead_of_running_past_the_end() {
     // One table is the root; mapping anything needs more.
     let mut memory = arena(1);
-    let mut builder = TableBuilder::new(&mut memory, 0x4000_0000, GRANULE_BITS, INPUT_BITS).unwrap();
+    let mut builder =
+        TableBuilder::new(&mut memory, 0x4000_0000, GRANULE_BITS, INPUT_BITS).unwrap();
     let block = builder.block_size();
     assert_eq!(
         builder.map_blocks(0, 0, block, ATTRS).unwrap_err(),
@@ -119,7 +128,8 @@ fn a_misaligned_arena_denies() {
 fn the_block_size_matches_the_architecture_for_each_granule() {
     for (granule_bits, expected) in [(12u32, 2 << 20), (14, 32 << 20), (16u32, 512 << 20)] {
         let mut memory = vec![0u64; 4 * (1usize << (granule_bits - 3))];
-        let builder = TableBuilder::new(&mut memory, 0x4000_0000, granule_bits, INPUT_BITS).unwrap();
+        let builder =
+            TableBuilder::new(&mut memory, 0x4000_0000, granule_bits, INPUT_BITS).unwrap();
         assert_eq!(
             builder.block_size(),
             expected,

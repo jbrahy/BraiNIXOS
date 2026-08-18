@@ -58,7 +58,8 @@ fn run_batches(fixture: &Fixture, batches: &[&[u32]]) -> Vec<f32> {
     let model = Model::new(config, weights).unwrap();
 
     let mut workspace_storage = vec![0.0_f32; workspace_floats(&config, MAXIMUM_BATCH).unwrap()];
-    let mut workspace = Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
+    let mut workspace =
+        Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
     let mut cache_storage = vec![0.0_f32; session_cache_floats(&config, 1).unwrap()];
     let mut arena = KeyValueArena::new(
         &mut cache_storage,
@@ -70,7 +71,13 @@ fn run_batches(fixture: &Fixture, batches: &[&[u32]]) -> Vec<f32> {
     let mut logits = vec![0.0_f32; config.vocabulary_size];
     for batch in batches {
         model
-            .forward(&brainix_transformer::Serial, &mut workspace, &mut session, batch, &mut logits)
+            .forward(
+                &brainix_transformer::Serial,
+                &mut workspace,
+                &mut session,
+                batch,
+                &mut logits,
+            )
             .unwrap();
     }
     logits
@@ -245,7 +252,8 @@ fn interleaved_sessions_are_indistinguishable_from_isolated_ones() {
     let model = Model::new(config, weights).unwrap();
 
     let mut workspace_storage = vec![0.0_f32; workspace_floats(&config, MAXIMUM_BATCH).unwrap()];
-    let mut workspace = Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
+    let mut workspace =
+        Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
     let mut cache_storage = vec![0.0_f32; session_cache_floats(&config, 2).unwrap()];
     let mut arena = KeyValueArena::new(
         &mut cache_storage,
@@ -304,7 +312,8 @@ fn a_reset_session_decodes_as_a_fresh_one() {
     let weights = fixture.weights(&layers);
     let model = Model::new(config, weights).unwrap();
     let mut workspace_storage = vec![0.0_f32; workspace_floats(&config, MAXIMUM_BATCH).unwrap()];
-    let mut workspace = Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
+    let mut workspace =
+        Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
     let mut cache_storage = vec![0.0_f32; session_cache_floats(&config, 1).unwrap()];
     let mut arena = KeyValueArena::new(
         &mut cache_storage,
@@ -315,12 +324,24 @@ fn a_reset_session_decodes_as_a_fresh_one() {
     let mut logits = vec![0.0_f32; config.vocabulary_size];
 
     model
-        .forward(&brainix_transformer::Serial, &mut workspace, &mut session, &[44, 8, 19, 3], &mut logits)
+        .forward(
+            &brainix_transformer::Serial,
+            &mut workspace,
+            &mut session,
+            &[44, 8, 19, 3],
+            &mut logits,
+        )
         .unwrap();
     session.reset();
     assert_eq!(session.position(), 0);
     model
-        .forward(&brainix_transformer::Serial, &mut workspace, &mut session, &prompt, &mut logits)
+        .forward(
+            &brainix_transformer::Serial,
+            &mut workspace,
+            &mut session,
+            &prompt,
+            &mut logits,
+        )
         .unwrap();
 
     assert_eq!(logits, fresh);

@@ -100,7 +100,8 @@ fn quantization_error_never_exceeds_half_a_step() {
 
         let mut recovered = vec![0.0f32; 32];
         for row in 0..2usize {
-            view.dequantize_row_into(row, &mut recovered).expect("dequantize");
+            view.dequantize_row_into(row, &mut recovered)
+                .expect("dequantize");
             for (index, got) in recovered.iter().enumerate() {
                 let want = x[row * 32 + index];
                 let error = (got - want).abs();
@@ -124,7 +125,8 @@ fn an_all_zero_block_emits_a_zero_scale() {
     quantize_activations(1, 32, &x, &mut scratch).expect("quantize");
     let view = Q8Weights::new(&scratch, 1, 32).expect("view");
     let mut recovered = vec![1.0f32; 32];
-    view.dequantize_row_into(0, &mut recovered).expect("dequantize");
+    view.dequantize_row_into(0, &mut recovered)
+        .expect("dequantize");
     assert!(
         recovered.iter().all(|value| *value == 0.0),
         "an all-zero block must dequantize to zeros, got {recovered:?}"
@@ -167,15 +169,8 @@ fn splitting_the_output_rows_reproduces_the_whole() {
         let per = N_OUT / workers;
         let mut split = vec![0.0f32; N_OUT];
         for (index, chunk) in split.chunks_mut(per).enumerate() {
-            matmul_q8_0_q8a_rows(
-                shape,
-                &weights,
-                &quantized,
-                index * per,
-                chunk.len(),
-                chunk,
-            )
-            .expect("range");
+            matmul_q8_0_q8a_rows(shape, &weights, &quantized, index * per, chunk.len(), chunk)
+                .expect("range");
         }
         assert_eq!(split, whole, "{workers} workers disagreed with one call");
     }
@@ -188,7 +183,11 @@ fn a_row_range_past_the_end_denies() {
     let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, 64).expect("len")];
     quantize_activations(1, 64, &values(64, 1), &mut scratch).expect("quantize");
     let quantized = Q8Weights::new(&scratch, 1, 64).expect("view");
-    let shape = MatMulShape { n_tokens: 1, n_in: 64, n_out: 64 };
+    let shape = MatMulShape {
+        n_tokens: 1,
+        n_in: 64,
+        n_out: 64,
+    };
     let mut y = vec![0.0f32; 8];
     // Starts inside, ends outside.
     assert!(matmul_q8_0_q8a_rows(shape, &weights, &quantized, 60, 8, &mut y).is_err());

@@ -45,12 +45,12 @@ use brainix_tensor::{rmsnorm, rope, swiglu, MatMulShape, RopeParams};
 use crate::attention::{attend, AttentionShape};
 use crate::cache::{CacheGeometry, SessionCache};
 use crate::config::{checked_product, ModelConfig};
+use crate::dispatch::Dispatch;
 use crate::error::TransformerError;
 use crate::math::attention_scale;
 use crate::sampling::SamplingRequest;
 use crate::slices::{add_into, copy_into, prefix, prefix_mut, row, span};
 use crate::weights::{LayerWeights, ModelWeights};
-use crate::dispatch::Dispatch;
 use crate::workspace::Workspace;
 
 /// A validated model: hyperparameters, borrowed weights, and the one derived
@@ -132,7 +132,15 @@ impl<'a> Model<'a> {
         let start = self.admit(workspace, cache, tokens, logits)?;
         self.embed(workspace, tokens)?;
         for (index, layer) in self.weights.layers.iter().enumerate() {
-            self.run_layer(dispatch, workspace, cache, layer, index, start, tokens.len())?;
+            self.run_layer(
+                dispatch,
+                workspace,
+                cache,
+                layer,
+                index,
+                start,
+                tokens.len(),
+            )?;
         }
         self.project_logits(dispatch, workspace, tokens.len(), logits)?;
         cache.commit(tokens.len())
@@ -325,14 +333,20 @@ impl<'a> Model<'a> {
         )?;
         let shape = self.projection_shape(token_count, self.config.model_width, key_value_width);
         let key_span = checked_product(token_count, key_value_width)?;
-        layer
-            .key_projection
-            .project(
-            shape, normed, workspace.quant_scratch, dispatch, prefix_mut(workspace.key, key_span)?)?;
-        layer
-            .value_projection
-            .project(
-            shape, normed, workspace.quant_scratch, dispatch, prefix_mut(workspace.value, key_span)?)
+        layer.key_projection.project(
+            shape,
+            normed,
+            workspace.quant_scratch,
+            dispatch,
+            prefix_mut(workspace.key, key_span)?,
+        )?;
+        layer.value_projection.project(
+            shape,
+            normed,
+            workspace.quant_scratch,
+            dispatch,
+            prefix_mut(workspace.value, key_span)?,
+        )
     }
 
     /// RoPE over the query and the key of every token in the batch.
@@ -541,10 +555,13 @@ impl<'a> Model<'a> {
             // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
         let shape = self.projection_shape(1, width, self.config.vocabulary_size);
-        self.weights
-            .logit_matrix()
-            .project(
-            shape, prefix(workspace.normed, width)?, workspace.quant_scratch, dispatch, logits)
+        self.weights.logit_matrix().project(
+            shape,
+            prefix(workspace.normed, width)?,
+            workspace.quant_scratch,
+            dispatch,
+            logits,
+        )
     }
 
     const fn projection_shape(

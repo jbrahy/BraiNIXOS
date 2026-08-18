@@ -15,9 +15,7 @@
 mod common;
 
 use brainix_boot_stub_apple::dockchannel::{DockChannel, DockChannelOutcome};
-use brainix_boot_stub_apple::registers::{
-    DOCKCHANNEL_TX_DATA_OFFSET, DOCKCHANNEL_TX_FREE_OFFSET,
-};
+use brainix_boot_stub_apple::registers::{DOCKCHANNEL_TX_DATA_OFFSET, DOCKCHANNEL_TX_FREE_OFFSET};
 use common::{Access, FakeMmio};
 
 /// Any nonzero free-space count means "room for a byte".

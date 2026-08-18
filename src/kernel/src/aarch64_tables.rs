@@ -159,10 +159,10 @@ impl<'arena> TableBuilder<'arena> {
 
     /// Shift for the index at `level`.
     fn shift_for(&self, level: u32) -> u32 {
-        self.granule_bits
-            .saturating_add(self.stride().saturating_mul(
-                self.levels.saturating_sub(level).saturating_sub(1),
-            ))
+        self.granule_bits.saturating_add(
+            self.stride()
+                .saturating_mul(self.levels.saturating_sub(level).saturating_sub(1)),
+        )
     }
 
     /// Take the next unused table, zero it, return its physical address.
@@ -186,9 +186,7 @@ impl<'arena> TableBuilder<'arena> {
         {
             *slot = 0;
         }
-        let address = self
-            .base
-            .saturating_add((start as u64).saturating_mul(8));
+        let address = self.base.saturating_add((start as u64).saturating_mul(8));
         self.tables_used = self.tables_used.saturating_add(1);
         Ok(address)
     }

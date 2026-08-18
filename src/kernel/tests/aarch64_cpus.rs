@@ -81,7 +81,10 @@ fn the_first_waiting_core_is_cpu1() {
     let (list, found) = all();
     let waiting = first_waiting_cpu(&list[..found]).expect("nine cores are waiting");
     assert_eq!(waiting.cpu_id, 1);
-    assert_eq!(waiting.cluster, 0, "an E core, in the same cluster as the boot core");
+    assert_eq!(
+        waiting.cluster, 0,
+        "an E core, in the same cluster as the boot core"
+    );
     assert_eq!(waiting.impl_reg, 0x2_1015_0000);
 }
 

@@ -39,12 +39,19 @@ fn the_translated_address_differs_from_the_raw_one() {
         "returning the raw address is the bug this function exists to prevent: \
          it is a valid-looking physical address pointing at the wrong device"
     );
-    assert_eq!(translated - 0x9E2C_4000, 0x2_0000_0000, "the /arm-io window");
+    assert_eq!(
+        translated - 0x9E2C_4000,
+        0x2_0000_0000,
+        "the /arm-io window"
+    );
 }
 
 #[test]
 fn a_missing_node_denies_rather_than_guessing() {
-    assert_eq!(translated_reg(REAL_ADT, b"/arm-io/not-a-real-device", 0), None);
+    assert_eq!(
+        translated_reg(REAL_ADT, b"/arm-io/not-a-real-device", 0),
+        None
+    );
     assert_eq!(translated_reg(REAL_ADT, b"/nowhere", 0), None);
 }
 

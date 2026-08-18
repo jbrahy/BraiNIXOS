@@ -43,7 +43,11 @@ fn tree() -> DeviceTree<'static> {
 fn the_real_tree_parses() {
     let tree = tree();
     // A tree that "parses" by consuming nothing would satisfy a weaker test.
-    assert!(tree.tree_len() > 0x0007_0000, "tree_len = {}", tree.tree_len());
+    assert!(
+        tree.tree_len() > 0x0007_0000,
+        "tree_len = {}",
+        tree.tree_len()
+    );
     assert!(tree.tree_len() <= MINI_ADT.len());
 }
 
@@ -105,7 +109,10 @@ fn dockchannel_uart_translates_to_the_address_m1n1_reported() {
         translated.address, 0x2_9E52_8000,
         "translated dockchannel base disagrees with what m1n1 printed on the machine"
     );
-    assert_eq!(translated.size, 0x0001_0004, "translation must not alter the size");
+    assert_eq!(
+        translated.size, 0x0001_0004,
+        "translation must not alter the size"
+    );
     assert_ne!(
         translated.address,
         path.reg(0).unwrap().address,

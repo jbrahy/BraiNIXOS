@@ -103,7 +103,9 @@ impl<'a> Q4Weights<'a> {
         let quant_start = scale_len.next_multiple_of(ALIGN);
         let (scales, quants) = payload.split_at(quant_start);
         Ok(Self {
-            scales: scales.get(..scale_len).ok_or(TensorError::PayloadLengthMismatch)?,
+            scales: scales
+                .get(..scale_len)
+                .ok_or(TensorError::PayloadLengthMismatch)?,
             quants,
             n_out,
             n_in,

@@ -40,11 +40,11 @@
 //! Every *projection*, including a tied logit projection through the embedding
 //! table, already takes either dtype: a projection is a matmul, not a lookup.
 
+use crate::dispatch::{chunk_len, Dispatch};
 use brainix_tensor::{
     matmul_f32, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations,
     MatMulShape, Q8Weights,
 };
-use crate::dispatch::{chunk_len, Dispatch};
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::{checked_product, ModelConfig};
@@ -137,11 +137,8 @@ impl WeightMatrix<'_> {
                         // element. Compared against the dispatcher's threshold
                         // so that work smaller than a synchronization stays on
                         // the calling core.
-                        let weight_bytes = shape
-                            .n_out
-                            .saturating_mul(shape.n_in)
-                            .saturating_mul(9)
-                            / 8;
+                        let weight_bytes =
+                            shape.n_out.saturating_mul(shape.n_in).saturating_mul(9) / 8;
                         let worth_splitting = weight_bytes >= dispatch.minimum_split_bytes();
                         if shape.n_tokens == 1 && dispatch.chunks() > 1 && worth_splitting {
                             let width = chunk_len(shape.n_out, dispatch.chunks())?;
@@ -162,7 +159,12 @@ impl WeightMatrix<'_> {
                             dispatch.for_each_chunk(destination, width, |index, chunk| {
                                 let start = index.saturating_mul(width);
                                 if matmul_q8_0_q8a_rows(
-                                    shape, weights, &view, start, chunk.len(), chunk,
+                                    shape,
+                                    weights,
+                                    &view,
+                                    start,
+                                    chunk.len(),
+                                    chunk,
                                 )
                                 .is_err()
                                 {

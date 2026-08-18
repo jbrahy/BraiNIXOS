@@ -177,8 +177,7 @@ pub fn first_waiting_cpu(list: &[Cpu]) -> Option<Cpu> {
 /// per cluster, which is why a five-core cluster would need a different formula
 /// and why this is asserted against the tree rather than assumed.
 pub fn start_enable_bit(cpu: &Cpu) -> u32 {
-    1u32
-        .checked_shl(cpu.cluster.saturating_mul(4).saturating_add(cpu.core))
+    1u32.checked_shl(cpu.cluster.saturating_mul(4).saturating_add(cpu.core))
         .unwrap_or(0)
 }
 

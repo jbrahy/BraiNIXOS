@@ -9,9 +9,7 @@
 mod common;
 
 use brainix_boot_stub_apple::console::{bring_up_console, ConsoleOutcome};
-use brainix_boot_stub_apple::registers::{
-    DOCKCHANNEL_BASE_OBSERVED, DOCKCHANNEL_TX_FREE_OFFSET,
-};
+use brainix_boot_stub_apple::registers::{DOCKCHANNEL_BASE_OBSERVED, DOCKCHANNEL_TX_FREE_OFFSET};
 use common::{tree, FakeFactory, TreeOptions};
 
 /// The device tree of the deployment target.
@@ -84,7 +82,10 @@ fn every_base_driven_on_the_real_machine_came_from_the_adt() {
             "bring-up must not open a window at an address the ADT did not yield"
         );
     }
-    assert!(factory.bases.len() >= 2, "liveness window, then the console");
+    assert!(
+        factory.bases.len() >= 2,
+        "liveness window, then the console"
+    );
 }
 
 #[test]

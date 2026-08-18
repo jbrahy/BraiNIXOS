@@ -29,8 +29,16 @@ fn the_targets_tcr_decodes_to_a_sixteen_kilobyte_granule() {
 fn the_granule_encoding_is_not_in_size_order() {
     let with_tg0 = |tg0: u64| WalkConfig::from_tcr((tg0 << 14) | 16);
     assert_eq!(with_tg0(0b00).unwrap().granule_bits, 12, "0b00 is 4 KiB");
-    assert_eq!(with_tg0(0b01).unwrap().granule_bits, 16, "0b01 is 64 KiB, not 16");
-    assert_eq!(with_tg0(0b10).unwrap().granule_bits, 14, "0b10 is 16 KiB, not 64");
+    assert_eq!(
+        with_tg0(0b01).unwrap().granule_bits,
+        16,
+        "0b01 is 64 KiB, not 16"
+    );
+    assert_eq!(
+        with_tg0(0b10).unwrap().granule_bits,
+        14,
+        "0b10 is 16 KiB, not 64"
+    );
     assert!(with_tg0(0b11).is_none(), "0b11 is reserved and must deny");
 }
 
@@ -69,7 +77,11 @@ fn a_block_encoding_at_the_final_level_denies() {
     let result = walk(0x4000, 0, config, |_| {
         seen.set(seen.get() + 1);
         // Tables all the way down, then 0b01 at the final level.
-        if seen.get() < levels { 0b11 | 0x8000 } else { 0b01 | 0x8000 }
+        if seen.get() < levels {
+            0b11 | 0x8000
+        } else {
+            0b01 | 0x8000
+        }
     });
     match result.unwrap_err() {
         WalkError::BlockAtIllegalLevel { level } => {
@@ -90,7 +102,11 @@ fn a_four_kilobyte_page_resolves_with_its_offset_preserved() {
     let seen = Cell::new(0u32);
     let translation = walk(0x4000, 0xABC, config, |_| {
         seen.set(seen.get() + 1);
-        if seen.get() < levels { 0b11 | 0x9000 } else { 0b11 | PAGE }
+        if seen.get() < levels {
+            0b11 | 0x9000
+        } else {
+            0b11 | PAGE
+        }
     })
     .expect("a well-formed chain must resolve");
 

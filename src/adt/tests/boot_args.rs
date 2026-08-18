@@ -168,7 +168,10 @@ fn an_adt_physical_address_that_wraps_past_the_top_denies() {
 
     let result = brainix_adt::adt_window(&bytes);
 
-    assert!(result.is_err(), "a wrapped address must never yield a window");
+    assert!(
+        result.is_err(),
+        "a wrapped address must never yield a window"
+    );
     assert_eq!(result.unwrap_err(), BootArgsError::AdtPhysMisaligned);
 }
 

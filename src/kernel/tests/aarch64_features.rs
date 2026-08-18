@@ -54,7 +54,10 @@ fn apple_pointer_authentication_is_implementation_defined_not_qarma() {
 #[test]
 fn the_target_supports_branch_target_identification() {
     let support = ControlFlowSupport::from_id_registers(TARGET_ISAR1, TARGET_PFR1);
-    assert!(support.branch_target_identification, "ID_AA64PFR1_EL1.BT = 1");
+    assert!(
+        support.branch_target_identification,
+        "ID_AA64PFR1_EL1.BT = 1"
+    );
 }
 
 #[test]

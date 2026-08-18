@@ -29,12 +29,12 @@
 
 use brainix_bxw1::{Dtype, WeightBlob};
 use brainix_tensor::Q8Weights;
-use brainix_tokenizer::Vocabulary;
 use brainix_tensor::RopePairing;
+use brainix_tokenizer::Vocabulary;
+use brainix_transformer::{Dispatch, Serial};
 use brainix_transformer::{
     LayerWeights, LogitProjection, Model, ModelConfig, ModelWeights, WeightMatrix,
 };
-use brainix_transformer::{Dispatch, Serial};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Barrier, Mutex};
@@ -138,8 +138,13 @@ impl Dispatch for Pool<'_> {
 }
 
 /// The body every parked worker runs.
-fn worker_loop(index: usize, start: &Barrier, finish: &Barrier, job: &Mutex<Option<Job>>,
-               shutting_down: &AtomicBool) {
+fn worker_loop(
+    index: usize,
+    start: &Barrier,
+    finish: &Barrier,
+    job: &Mutex<Option<Job>>,
+    shutting_down: &AtomicBool,
+) {
     loop {
         start.wait();
         if shutting_down.load(Ordering::Acquire) {
@@ -284,7 +289,9 @@ fn evaluate<D: Dispatch>(
             .map_err(|error| format!("workspace: {error:?}"))?;
     let mut arena = brainix_transformer::KeyValueArena::new(cache_storage, geometry)
         .map_err(|error| format!("arena: {error:?}"))?;
-    let mut cache = arena.issue_session().map_err(|e| format!("session: {e:?}"))?;
+    let mut cache = arena
+        .issue_session()
+        .map_err(|e| format!("session: {e:?}"))?;
     println!();
     println!("evaluating {count} tokens -- {label} ({workers} workers)");
     let start = std::time::Instant::now();
@@ -304,7 +311,10 @@ fn evaluate<D: Dispatch>(
     let elapsed = start.elapsed().as_secs_f64();
     let mean = total_nats / predictions as f64;
     println!("  PERPLEXITY  {:.3}", mean.exp());
-    println!("  throughput  {:.2} tok/s  ({elapsed:.1}s)", predictions as f64 / elapsed);
+    println!(
+        "  throughput  {:.2} tok/s  ({elapsed:.1}s)",
+        predictions as f64 / elapsed
+    );
     Ok((mean.exp(), predictions as f64 / elapsed))
 }
 
@@ -347,7 +357,8 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
         header.tied_output
     );
 
-    let vocabulary = Vocabulary::parse(&vocab_bytes).map_err(|error| format!("vocab: {error:?}"))?;
+    let vocabulary =
+        Vocabulary::parse(&vocab_bytes).map_err(|error| format!("vocab: {error:?}"))?;
     let mut tokens = vec![0u32; SAMPLE.len() + 2];
     let mut scratch = vec![0u32; SAMPLE.len() + 2];
     let count = vocabulary
@@ -373,8 +384,7 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
 
     let embeddings_slot = named("tok_embeddings.weight", &mut floats)?
         .ok_or("tok_embeddings.weight must be F32 for this crate")?;
-    let final_norm_slot =
-        named("norm.weight", &mut floats)?.ok_or("norm.weight must be F32")?;
+    let final_norm_slot = named("norm.weight", &mut floats)?.ok_or("norm.weight must be F32")?;
     let output_slot = if header.tied_output {
         None
     } else {
@@ -383,8 +393,11 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
 
     let mut layer_slots = Vec::with_capacity(config.layer_count);
     for layer in 0..config.layer_count {
-        let attention_norm = named(&format!("layers.{layer}.attention_norm.weight"), &mut floats)?
-            .ok_or("attention_norm must be F32")?;
+        let attention_norm = named(
+            &format!("layers.{layer}.attention_norm.weight"),
+            &mut floats,
+        )?
+        .ok_or("attention_norm must be F32")?;
         let feed_forward_norm = named(&format!("layers.{layer}.ffn_norm.weight"), &mut floats)?
             .ok_or("ffn_norm must be F32")?;
         let mut matrices: [(String, Option<usize>); 7] = Default::default();
@@ -447,7 +460,10 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
     };
 
     let weights = ModelWeights {
-        token_embeddings: floats.stored.get(embeddings_slot).ok_or("embeddings slot")?,
+        token_embeddings: floats
+            .stored
+            .get(embeddings_slot)
+            .ok_or("embeddings slot")?,
         layers: &layers,
         final_norm: floats.stored.get(final_norm_slot).ok_or("norm slot")?,
         logit_projection,
@@ -484,8 +500,15 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
         .nth(3)
         .and_then(|value| value.parse().ok())
         .unwrap_or(4);
-    for (label, use_sdot) in [("f32 activations", false), ("Q8_0 activations (SDOT)", true)] {
-        let scratch: &mut [u8] = if use_sdot { &mut quant_scratch } else { &mut [] };
+    for (label, use_sdot) in [
+        ("f32 activations", false),
+        ("Q8_0 activations (SDOT)", true),
+    ] {
+        let scratch: &mut [u8] = if use_sdot {
+            &mut quant_scratch
+        } else {
+            &mut []
+        };
         let mut workspace =
             brainix_transformer::Workspace::new(&mut workspace_storage, scratch, &config, 1)
                 .map_err(|error| format!("workspace: {error:?}"))?;
@@ -515,14 +538,23 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
         let mean = total_nats / predictions as f64;
         println!("  mean CE     {mean:.4} nats");
         println!("  PERPLEXITY  {:.3}", mean.exp());
-        println!("  throughput  {:.2} tok/s  ({elapsed:.1}s)", predictions as f64 / elapsed);
+        println!(
+            "  throughput  {:.2} tok/s  ({elapsed:.1}s)",
+            predictions as f64 / elapsed
+        );
         results.push((label, mean.exp(), predictions as f64 / elapsed));
     }
 
     // Sweep the split threshold. 0 splits everything (the previous behaviour);
     // the larger values progressively exclude the small projections whose work
     // is smaller than a barrier pair.
-    for threshold in [0usize, 512 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024, usize::MAX] {
+    for threshold in [
+        0usize,
+        512 * 1024,
+        2 * 1024 * 1024,
+        4 * 1024 * 1024,
+        usize::MAX,
+    ] {
         let start = Barrier::new(workers + 1);
         let finish = Barrier::new(workers + 1);
         let job: Mutex<Option<Job>> = Mutex::new(None);
@@ -530,12 +562,15 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
         let mut outcome = None;
         thread::scope(|scope| {
             for index in 0..workers {
-                let (start, finish, job, shutting_down) =
-                    (&start, &finish, &job, &shutting_down);
+                let (start, finish, job, shutting_down) = (&start, &finish, &job, &shutting_down);
                 scope.spawn(move || worker_loop(index, start, finish, job, shutting_down));
             }
             let pool = Pool {
-                workers, minimum_bytes: threshold, start: &start, finish: &finish, job: &job,
+                workers,
+                minimum_bytes: threshold,
+                start: &start,
+                finish: &finish,
+                job: &job,
             };
             let label = if threshold == usize::MAX {
                 "pool, split nothing".to_string()
@@ -543,9 +578,18 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
                 format!("pool, split >= {} KB", threshold / 1024)
             };
             outcome = Some(evaluate(
-                &label, &model, &config, &mut workspace_storage,
-                &mut quant_scratch, &mut cache_storage, geometry, &tokens, count,
-                &mut logits, &pool, workers,
+                &label,
+                &model,
+                &config,
+                &mut workspace_storage,
+                &mut quant_scratch,
+                &mut cache_storage,
+                geometry,
+                &tokens,
+                count,
+                &mut logits,
+                &pool,
+                workers,
             ));
             shutting_down.store(true, Ordering::Release);
             start.wait();
@@ -564,13 +608,27 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
 
     if let (Some(base), Some(fast)) = (results.first(), results.get(1)) {
         println!();
-        println!("  QUALITY  {:.3} -> {:.3}  ({:+.2}% perplexity)",
-                 base.1, fast.1, (fast.1 / base.1 - 1.0) * 100.0);
-        println!("  SPEED    {:.2} -> {:.2} tok/s  ({:.2}x)",
-                 base.2, fast.2, fast.2 / base.2);
+        println!(
+            "  QUALITY  {:.3} -> {:.3}  ({:+.2}% perplexity)",
+            base.1,
+            fast.1,
+            (fast.1 / base.1 - 1.0) * 100.0
+        );
+        println!(
+            "  SPEED    {:.2} -> {:.2} tok/s  ({:.2}x)",
+            base.2,
+            fast.2,
+            fast.2 / base.2
+        );
         for entry in results.iter().skip(2) {
-            println!("  {:<8} {:.2} -> {:.2} tok/s  ({:.2}x over 1 core)   PPL {:.3}",
-                     entry.0, fast.2, entry.2, entry.2 / fast.2, entry.1);
+            println!(
+                "  {:<8} {:.2} -> {:.2} tok/s  ({:.2}x over 1 core)   PPL {:.3}",
+                entry.0,
+                fast.2,
+                entry.2,
+                entry.2 / fast.2,
+                entry.1
+            );
         }
     }
 

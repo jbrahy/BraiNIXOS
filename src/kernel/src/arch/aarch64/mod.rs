@@ -71,9 +71,9 @@ pub mod timer;
 pub mod vectors;
 pub mod watchdog;
 
+pub use crate::aarch64_ident::MemoryModel;
 pub use console::Console;
 pub use halt::{current_exception_level, park};
-pub use crate::aarch64_ident::MemoryModel;
 pub use registers::memory_model;
 pub use timer::Timer;
 pub use vectors::{last_exception, with_vectors, LastException, NO_EXCEPTION};

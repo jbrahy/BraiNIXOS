@@ -191,7 +191,8 @@ pub unsafe extern "C" fn _start(boot_args: *const u8) -> ! {
 fn handle_kernel_panic_aarch64(_info: &core::panic::PanicInfo) -> ! {
     // SAFETY: a null `boot_args` selects the observed fallback base and parses
     // nothing.
-    let mut console = unsafe { brainix_kernel::arch::aarch64::Console::from_boot_args(core::ptr::null()) };
+    let mut console =
+        unsafe { brainix_kernel::arch::aarch64::Console::from_boot_args(core::ptr::null()) };
     console.write_line("");
     console.write_line("[PANIC] BraiNIX kernel panic -- system halted");
     brainix_kernel::arch::aarch64::park()
@@ -241,7 +242,8 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
     unsafe { brainix_kernel::arch::aarch64::bss::zero() };
 
     // SAFETY: the caller guarantees `out` has room for four `u64`s.
-    let put = |index: usize, value: u64| unsafe { core::ptr::write_volatile(out.add(index), value) };
+    let put =
+        |index: usize, value: u64| unsafe { core::ptr::write_volatile(out.add(index), value) };
 
     put(0, KERNEL_PROBE_MAGIC);
     put(
@@ -270,7 +272,9 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
     put(9, u64::from(model.physical_address_bits.unwrap_or(0)));
     put(
         10,
-        u64::from(model.granule_4k) | (u64::from(model.granule_16k) << 1) | (u64::from(model.granule_64k) << 2),
+        u64::from(model.granule_4k)
+            | (u64::from(model.granule_16k) << 1)
+            | (u64::from(model.granule_64k) << 2),
     );
     put(11, u64::from(registers::el1_mmu_enabled()));
 
@@ -464,7 +468,9 @@ pub unsafe extern "C" fn kernel_probe(boot_args: *const u8, out: *mut u64) -> u6
     // BISECT step 3: does exception return work at all, without changing level?
     //
     // SAFETY: erets to a label two instructions ahead, at the current level.
-    put(64, unsafe { brainix_kernel::arch::aarch64::el::eret_to_self() });
+    put(64, unsafe {
+        brainix_kernel::arch::aarch64::el::eret_to_self()
+    });
 
     // Everything to do with EL1 now lives in `el1_probe`, deliberately.
     //
@@ -637,7 +643,8 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
     unsafe { brainix_kernel::arch::aarch64::bss::zero() };
 
     // SAFETY: the caller guarantees `out` has room for nine `u64`s.
-    let put = |index: usize, value: u64| unsafe { core::ptr::write_volatile(out.add(index), value) };
+    let put =
+        |index: usize, value: u64| unsafe { core::ptr::write_volatile(out.add(index), value) };
     put(0, EL1_PROBE_MAGIC);
 
     match stage {
@@ -714,7 +721,10 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
             put(8, report.authenticated_tampered);
             put(9, report.plain);
             put(10, report.vector);
-            put(11, u64::from(report.keys_installed) | (u64::from(report.random_present) << 1));
+            put(
+                11,
+                u64::from(report.keys_installed) | (u64::from(report.random_present) << 1),
+            );
             put(12, u64::from(report.authentication_works()));
         }
         5 => {
@@ -743,13 +753,19 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
             let built = unsafe {
                 brainix_kernel::arch::aarch64::mmu::switch_to_built_root(probe_va, &check)
             };
-            put(1, u64::from(built.granule_bits) | (u64::from(built.levels) << 8));
+            put(
+                1,
+                u64::from(built.granule_bits) | (u64::from(built.levels) << 8),
+            );
             put(2, built.block_size);
             put(3, built.live_descriptor);
             put(4, built.attributes);
             put(5, built.built_root);
             put(6, built.tables_used as u64);
-            put(7, (built.checked as u64) | ((built.mismatches as u64) << 32));
+            put(
+                7,
+                (built.checked as u64) | ((built.mismatches as u64) << 32),
+            );
             put(8, u64::from(built.switched));
             put(9, built.probe_value);
             put(10, built.expected_value);
@@ -856,7 +872,8 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
             // untranslated address here is a valid-looking physical address
             // pointing at the wrong block, and what gets written to it starts
             // a CPU.
-            let Some(pmgr) = brainix_kernel::aarch64_devices::translated_reg(blob, b"/arm-io/pmgr", 0)
+            let Some(pmgr) =
+                brainix_kernel::aarch64_devices::translated_reg(blob, b"/arm-io/pmgr", 0)
             else {
                 put(2, u64::MAX);
                 return EL1_PROBE_MAGIC;
@@ -889,9 +906,13 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
             // boot-core problem -- a bad address or a bad index -- not a
             // secondary that misbehaved. Without this the two are
             // indistinguishable, and an hour went into telling them apart.
-            let first_slot = brainix_kernel::aarch64_cpus::slot_for_cpu(target.cluster, target.core);
+            let first_slot =
+                brainix_kernel::aarch64_cpus::slot_for_cpu(target.cluster, target.core);
             let before_release = brainix_kernel::arch::aarch64::smp::report(first_slot);
-            put(43, brainix_kernel::arch::aarch64::smp::report_address(first_slot));
+            put(
+                43,
+                brainix_kernel::arch::aarch64::smp::report_address(first_slot),
+            );
             put(44, before_release[9]);
             put(45, before_release[10]);
             put(46, before_release[12]);
@@ -928,7 +949,10 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
                 };
                 put(15, doorbells);
                 put(16, ticks);
-                put(17, brainix_kernel::arch::aarch64::smp::report(released.slot)[5]);
+                put(
+                    17,
+                    brainix_kernel::arch::aarch64::smp::report(released.slot)[5],
+                );
 
                 // Real work on the other core. `sum(1..=1000)` is 500500, which
                 // the boot core knows without running it -- so a wrong answer is
@@ -938,8 +962,9 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
                 // SAFETY: the target is parked in the dispatch loop, and the
                 // posted function touches no memory, so it is safe to run on a
                 // core with the MMU and caches off.
-                let dispatched =
-                    unsafe { smp::dispatch(released.mpidr, smp::secondary_sum_address(), 1, 1000, hz) };
+                let dispatched = unsafe {
+                    smp::dispatch(released.mpidr, smp::secondary_sum_address(), 1, 1000, hz)
+                };
                 match dispatched {
                     Some((result, ticks)) => {
                         put(18, 1);
@@ -1193,8 +1218,7 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
                     let chunk = smp::BENCH_WORDS / n;
                     let mut requests = [0u64; 16];
 
-                    let sweep_start =
-                        brainix_kernel::arch::aarch64::registers::physical_counter();
+                    let sweep_start = brainix_kernel::arch::aarch64::registers::physical_counter();
 
                     let mut worker = 1usize;
                     while worker < n {
@@ -1229,7 +1253,11 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
                     while worker < n {
                         // SAFETY: the request was posted to this core above.
                         match unsafe {
-                            smp::collect(workers[worker - 1], requests[worker], hz.saturating_mul(8))
+                            smp::collect(
+                                workers[worker - 1],
+                                requests[worker],
+                                hz.saturating_mul(8),
+                            )
                         } {
                             Some(value) => total = total.wrapping_add(value),
                             None => complete = false,
@@ -1270,8 +1298,10 @@ pub unsafe extern "C" fn el1_probe(stage: u64, boot_args: *const u8, out: *mut u
                     let ticks = if w == 0 {
                         let t0 = brainix_kernel::arch::aarch64::registers::physical_counter();
                         // SAFETY: the slice is inside the buffer.
-                        let _ = unsafe { smp::brainix_secondary_checksum(base + offset, PROBE_WORDS) };
-                        brainix_kernel::arch::aarch64::registers::physical_counter().wrapping_sub(t0)
+                        let _ =
+                            unsafe { smp::brainix_secondary_checksum(base + offset, PROBE_WORDS) };
+                        brainix_kernel::arch::aarch64::registers::physical_counter()
+                            .wrapping_sub(t0)
                     } else {
                         // SAFETY: the core is parked with its MMU on and the
                         // slice is inside the buffer.

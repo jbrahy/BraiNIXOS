@@ -295,7 +295,9 @@ pub unsafe fn enable_and_verify(plain: u64, modifier: u64, boot_args: *const u8)
     let random_present =
         crate::aarch64_features::RandomSupport::from_isar0(registers::id_aa64isar0_el1()).present;
     let from_rndr = if random_present {
-        match (unsafe { registers::random() }, unsafe { registers::random() }) {
+        match (unsafe { registers::random() }, unsafe {
+            registers::random()
+        }) {
             (Some(lo), Some(hi)) => Some((lo, hi)),
             _ => None,
         }

@@ -751,7 +751,10 @@ extern "C" fn brainix_handle_exception(
     // The handler is single-threaded and non-reentrant today, so a plain
     // increment is correct. When secondary CPUs land (AS-1b), this needs
     // revisiting *and* the memory attributes need establishing first.
-    COUNT.store(COUNT.load(Ordering::Relaxed).wrapping_add(1), Ordering::Relaxed);
+    COUNT.store(
+        COUNT.load(Ordering::Relaxed).wrapping_add(1),
+        Ordering::Relaxed,
+    );
 
     // A lower-EL synchronous trap with a redirection pending is the way home
     // from EL1. Index 8 is that entry; anything else returns where it came
@@ -760,7 +763,10 @@ extern "C" fn brainix_handle_exception(
     if index == 8 && redirect != 0 {
         let spsr = REDIRECT_SPSR.load(Ordering::Relaxed);
         clear_redirect();
-        return ExceptionReturn { elr: redirect, spsr };
+        return ExceptionReturn {
+            elr: redirect,
+            spsr,
+        };
     }
 
     ExceptionReturn {

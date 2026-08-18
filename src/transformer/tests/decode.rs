@@ -29,7 +29,8 @@ fn generate(fixture: &Fixture, prompt: &[u32], count: usize, sampler: Sampler) -
     let model = Model::new(config, weights).unwrap();
 
     let mut workspace_storage = vec![0.0_f32; workspace_floats(&config, MAXIMUM_BATCH).unwrap()];
-    let mut workspace = Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
+    let mut workspace =
+        Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
     let mut cache_storage = vec![0.0_f32; session_cache_floats(&config, 1).unwrap()];
     let mut arena = KeyValueArena::new(
         &mut cache_storage,
@@ -123,7 +124,8 @@ fn a_prefilled_generation_matches_a_fully_incremental_one() {
     let weights = fixture.weights(&layers);
     let model = Model::new(config, weights).unwrap();
     let mut workspace_storage = vec![0.0_f32; workspace_floats(&config, MAXIMUM_BATCH).unwrap()];
-    let mut workspace = Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
+    let mut workspace =
+        Workspace::new(&mut workspace_storage, &mut [], &config, MAXIMUM_BATCH).unwrap();
     let mut cache_storage = vec![0.0_f32; session_cache_floats(&config, 1).unwrap()];
     let mut arena = KeyValueArena::new(
         &mut cache_storage,

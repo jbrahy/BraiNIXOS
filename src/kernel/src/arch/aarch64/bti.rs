@@ -248,9 +248,11 @@ pub unsafe fn enable_and_verify() -> BtiReport {
     // never switched on" are the same reading.
     // SAFETY: reading descriptors from the table just built, through the
     // identity mapping still in force.
-    if let Ok(built) = crate::aarch64_walk::walk(report.guarded_root, guarded_page, config, |pa| unsafe {
-        core::ptr::read_volatile(pa as usize as *const u64)
-    }) {
+    if let Ok(built) =
+        crate::aarch64_walk::walk(report.guarded_root, guarded_page, config, |pa| unsafe {
+            core::ptr::read_volatile(pa as usize as *const u64)
+        })
+    {
         report.descriptor = built.descriptor;
     }
     if report.descriptor & super::mmu::GP == 0 {

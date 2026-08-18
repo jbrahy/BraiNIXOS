@@ -124,8 +124,8 @@
 #![allow(unsafe_code)]
 
 use crate::aarch64_cpus::{
-    slot_for_cpu, slot_for_mpidr, start_core_bit, start_enable_bit, Cpu, MAX_SLOTS,
-    RVBAR_ADDRESS, RVBAR_LOCK,
+    slot_for_cpu, slot_for_mpidr, start_core_bit, start_enable_bit, Cpu, MAX_SLOTS, RVBAR_ADDRESS,
+    RVBAR_LOCK,
 };
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -842,8 +842,12 @@ pub unsafe fn dispatch(
     let request = unsafe { post(target_mpidr, function, arg0, arg1) };
     let start = super::registers::physical_counter();
     // SAFETY: `request` is the one just posted to this core.
-    unsafe { collect(target_mpidr, request, timeout_ticks) }
-        .map(|result| (result, super::registers::physical_counter().wrapping_sub(start)))
+    unsafe { collect(target_mpidr, request, timeout_ticks) }.map(|result| {
+        (
+            result,
+            super::registers::physical_counter().wrapping_sub(start),
+        )
+    })
 }
 
 /// Posts work to a parked core and returns without waiting for it.
@@ -1175,4 +1179,3 @@ pub extern "C" fn brainix_secondary_sum(start: u64, count: u64) -> u64 {
 pub fn secondary_sum_address() -> u64 {
     brainix_secondary_sum as *const () as u64
 }
-
