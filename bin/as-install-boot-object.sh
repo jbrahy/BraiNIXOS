@@ -89,11 +89,20 @@ say "1. environment"
 # ---------------------------------------------------------------------------
 sw_vers 2>/dev/null || true
 printf 'booted volume: %s\n' "$(diskutil info / 2>/dev/null | awk -F': *' '/Volume Name/{print $2}')"
-[ -r "$CRED" ] || die "missing credential file $CRED (write it from the other volume: user on line 1, password on line 2)"
-ADMIN_USER="$(sed -n 1p "$CRED")"
-ADMIN_PASS="$(sed -n 2p "$CRED")"
-[ -n "$ADMIN_USER" ] && [ -n "$ADMIN_PASS" ] || die "credential file must hold username on line 1 and password on line 2"
-printf 'admin user: %s\n' "$ADMIN_USER"
+# Optional, not required. It is needed only to DOWNGRADE the policy, and a
+# group that is already Permissive needs no downgrade -- see step 4. Demanding
+# it up front meant putting an admin password on the machine to perform a no-op.
+if [ -r "$CRED" ]; then
+  ADMIN_USER="$(sed -n 1p "$CRED")"
+  ADMIN_PASS="$(sed -n 2p "$CRED")"
+  [ -n "$ADMIN_USER" ] && [ -n "$ADMIN_PASS" ] \
+    || die "credential file must hold username on line 1 and password on line 2"
+  printf 'admin user: %s\n' "$ADMIN_USER"
+else
+  ADMIN_USER=""
+  ADMIN_PASS=""
+  printf 'no credential file; fine unless the policy needs downgrading\n'
+fi
 
 # ---------------------------------------------------------------------------
 say "2. payload"
@@ -152,21 +161,52 @@ fi
 printf 'BraiNIX volume group: %s\n' "$VG"
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# bputil and kmutil both refuse to run as a normal user, and the refusal is a
+# line of text rather than a distinctive exit code. as-preflight.sh already
+# carries the scar: an unread "The tool requires running as root" made its grep
+# match nothing, and it announced "not Permissive" -- a finding manufactured
+# from an error. This script did exactly the same thing on its first dry run
+# over ssh. So escalate the same way preflight does, once, here.
+if [ "$(id -u)" -eq 0 ]; then
+  SUDO=""
+elif sudo -n true 2>/dev/null; then
+  SUDO="sudo -n"
+else
+  SUDO=""
+  printf 'WARNING: not root and no passwordless sudo. bputil and kmutil will refuse.\n'
+fi
+
 say "4. security policy -> Permissive (NO -k)"
 # ---------------------------------------------------------------------------
 # -k enables third-party kext trust, needs a paired AuxKC this flow never
 # creates, and wedged the policy badly enough to cost a volume group. It buys
 # nothing for booting our own kernel. See BRINGUP_PLAN.md §2 item 3.
-if [ "$DRY_RUN" = "1" ]; then
-  printf 'DRY RUN -- would run:\n  bputil -n -c -v %s -u %s -p <password>\n' "$VG" "$ADMIN_USER"
+# Skip it entirely if the policy is ALREADY Permissive.
+#
+# `bputil -n -c` is the only step that needs an admin password, and on a volume
+# group that has already been downgraded it is a no-op that asks for one anyway.
+# Not asking is better than asking: it means no credential file has to exist on
+# the machine, and a password that is never written down cannot leak from it.
+#
+# The verification below is unchanged and still authoritative -- this decides
+# whether to *act*, and that decides whether we were right to.
+CURRENT="$($SUDO bputil -d -v "$VG" 2>&1 || true)"
+if printf '%s\n' "$CURRENT" | grep -q "Permissive"; then
+  printf 'already Permissive; skipping bputil and the credential it would need\n'
+elif [ "$DRY_RUN" = "1" ]; then
+  printf 'DRY RUN -- would run:\n  bputil -n -c -v %s -u %s -p <password>\n' "$VG" "${ADMIN_USER:-<from .admin>}"
 else
-  bputil -n -c -v "$VG" -u "$ADMIN_USER" -p "$ADMIN_PASS" || die "bputil could not set Permissive Security"
+  [ -n "${ADMIN_USER:-}" ] && [ -n "${ADMIN_PASS:-}" ] \
+    || die "policy is not Permissive and there is no credential file at $CRED
+  Write it on THIS machine: admin username on line 1, password on line 2."
+  $SUDO bputil -n -c -v "$VG" -u "$ADMIN_USER" -p "$ADMIN_PASS" || die "bputil could not set Permissive Security"
 fi
 
 # ---------------------------------------------------------------------------
 say "5. verify the policy actually changed"
 # ---------------------------------------------------------------------------
-POLICY="$(bputil -d -v "$VG" 2>&1)"
+POLICY="$($SUDO bputil -d -v "$VG" 2>&1)"
 printf '%s\n' "$POLICY" | grep -E "Security Mode:|smb0|sip2|Volume Group UUID" || true
 if printf '%s\n' "$POLICY" | grep -q "Permissive"; then
   printf 'confirmed Permissive\n'
@@ -219,7 +259,7 @@ if [ "$DRY_RUN" = "1" ]; then
   rm -f "${LOG}.fifo"
   exit 0
 fi
-kmutil configure-boot \
+$SUDO kmutil configure-boot \
   -c "$PAYLOAD" \
   --raw --entry-point "$ENTRY_POINT" --lowest-virtual-address "$LOWEST_VA" \
   -v "$TARGET" || die "kmutil configure-boot failed -- see the log, and do NOT retry blindly"
@@ -227,7 +267,7 @@ kmutil configure-boot \
 # ---------------------------------------------------------------------------
 say "7. result"
 # ---------------------------------------------------------------------------
-bputil -d -v "$VG" 2>&1 | grep -E "coih|Security Mode:" || true
+$SUDO bputil -d -v "$VG" 2>&1 | grep -E "coih|Security Mode:" || true
 printf '\nINSTALL COMPLETE: %s is now the boot object.\n\n' "$PAYLOAD_NAME"
 case "$PAYLOAD_NAME" in
   brainix-kernel)

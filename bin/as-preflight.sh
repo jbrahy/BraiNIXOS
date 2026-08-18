@@ -234,8 +234,18 @@ say "7. entry points agree with the manifest"
 # ---------------------------------------------------------------------------
 # A second copy of the entry point in an install script is exactly how the m1n1
 # value got lost the first time. Cross-check instead of hoping.
+#
+# An installer that takes BOTH its payload and its entry point from the manifest
+# has no second copy to disagree, which is strictly better than this check and
+# makes it inapplicable. Say that, rather than warning about a `$PAYLOAD_FILE`
+# that is a variable name and not a filename -- a warning nobody can act on
+# trains people to skip warnings.
 for script in "${HERE}"/as-install-*.sh; do
   [ -f "$script" ] || continue
+  if grep -q 'cut -f5' "$script" 2>/dev/null; then
+    ok "$(basename "$script"): reads payload and entry point from the manifest, nothing to disagree"
+    continue
+  fi
   declared="$(grep -E '^ENTRY_POINT=' "$script" 2>/dev/null | head -1 | cut -d= -f2)"
   payload="$(grep -E '^PAYLOAD=' "$script" 2>/dev/null | head -1 | sed 's|.*/||; s|"$||')"
   [ -n "$declared" ] || continue
