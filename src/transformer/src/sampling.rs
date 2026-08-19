@@ -374,9 +374,7 @@ fn total_mass(selected: &[Candidate]) -> f32 {
 }
 
 /// The last selected candidate's token identifier.
-// COVERAGE-EXEMPT: see the arm below.
 fn last_index(selected: &[Candidate]) -> Result<usize, TransformerError> {
-    // COVERAGE-EXEMPT: last_index is reached only from the sampling loop below, which returns before falling through whenever `selected` is non-empty -- and it is non-empty because top_k is validated to be at least 1.
     let last = selected.last().ok_or(TransformerError::InvalidTopK)?;
     Ok(last.index)
 }
@@ -384,4 +382,65 @@ fn last_index(selected: &[Candidate]) -> Result<usize, TransformerError> {
 /// Narrows a vocabulary index to the `u32` a token identifier is.
 fn identifier(index: usize) -> Result<u32, TransformerError> {
     u32::try_from(index).map_err(|_| TransformerError::TokenOutOfRange)
+}
+
+/// The sampler's residual paths, reached directly rather than through a draw.
+///
+/// # Why these were exempt
+///
+/// `last_index` is reached only when the accumulation loop falls through, and
+/// that loop returns for any distribution with positive mass -- which the
+/// caller guarantees. So it had never run, and neither had the error it
+/// carries.
+///
+/// The guarantee is real and the function is still a function. It is private,
+/// takes a plain slice, and returns an error for the empty case that the rest
+/// of the file relies on never happening; presenting it that slice costs one
+/// line and turns "cannot happen" into "does the right thing when it does".
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::{identifier, last_index, Candidate};
+    use crate::error::TransformerError;
+
+    fn candidate(probability: f32, index: usize) -> Candidate {
+        Candidate { probability, index }
+    }
+
+    #[test]
+    fn the_last_candidate_is_the_residual_choice() {
+        // The loop falls through only when floating-point mass rounds below
+        // the target, and the honest answer then is the last survivor rather
+        // than a panic or token 0. Token 0 is a real token in every vocabulary
+        // this crate accepts, so silently returning it would be a sampler that
+        // occasionally emits a specific wrong word.
+        let selected = [candidate(0.5, 11), candidate(0.3, 22), candidate(0.2, 33)];
+        assert_eq!(last_index(&selected), Ok(33));
+
+        // One candidate is still the last one.
+        assert_eq!(last_index(&[candidate(1.0, 7)]), Ok(7));
+    }
+
+    #[test]
+    fn an_empty_selection_is_refused_as_a_top_k_error() {
+        // `top_k` is validated to be at least 1, so this cannot arrive from
+        // the public API. If it ever does, the error names the parameter that
+        // would have to be wrong -- which is the difference between a bug
+        // report that says InvalidTopK and one that says "it panicked".
+        assert_eq!(last_index(&[]), Err(TransformerError::InvalidTopK));
+    }
+
+    #[test]
+    fn an_index_past_u32_is_refused_rather_than_truncated() {
+        // Token identifiers are u32 on the wire. On a 64-bit host a `usize`
+        // index can exceed that, and truncating would name a different token
+        // rather than fail.
+        assert_eq!(identifier(0), Ok(0));
+        assert_eq!(identifier(u32::MAX as usize), Ok(u32::MAX));
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            identifier(u32::MAX as usize + 1),
+            Err(TransformerError::TokenOutOfRange)
+        );
+    }
 }
