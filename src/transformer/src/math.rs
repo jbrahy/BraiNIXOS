@@ -48,8 +48,54 @@ pub(crate) fn attention_scale(
         return Err(TransformerError::UnspecifiedAttentionScale);
     }
     if head_width == 0 {
-        // COVERAGE-EXEMPT: every caller passes a slice sized from the validated ModelConfig, so the zero case cannot arise. Kept so the helper is total.
         return Err(TransformerError::ZeroDimension);
     }
     Ok(rsqrt(head_width as f64) as f32)
+}
+
+/// `attention_scale` at the shape its callers cannot present.
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::{attention_scale, ARCH_DECODER_ROPE_GQA_SWIGLU};
+    use crate::error::TransformerError;
+
+    #[test]
+    fn a_zero_head_width_is_refused_rather_than_returning_infinity() {
+        // `1/sqrt(0)` is `+inf`, and an infinite scale turns every attention
+        // score into `inf` or `NaN`, which softmax then refuses -- so the
+        // failure would surface three layers away from its cause. Refusing
+        // here names it where it happened.
+        assert_eq!(
+            attention_scale(ARCH_DECODER_ROPE_GQA_SWIGLU, 0),
+            Err(TransformerError::ZeroDimension)
+        );
+    }
+
+    #[test]
+    fn only_the_one_architecture_has_a_defined_scale() {
+        // BXW1 §5.6 assigns the scale per `arch_id`. An unknown architecture
+        // has no assignment, and guessing `1/sqrt(d_head)` for it would run a
+        // model whose scores are silently wrong rather than refusing to run it.
+        for unknown in [0u32, 2, 7, u32::MAX] {
+            assert_eq!(
+                attention_scale(unknown, 64),
+                Err(TransformerError::UnspecifiedAttentionScale),
+                "arch_id {unknown} has no assigned scale"
+            );
+        }
+    }
+
+    #[test]
+    fn the_defined_scale_is_the_reciprocal_square_root_of_the_head_width() {
+        // Exact for powers of two, which every real head width is.
+        for (width, expected) in [(64usize, 0.125_f32), (16, 0.25), (256, 0.0625)] {
+            let scale = attention_scale(ARCH_DECODER_ROPE_GQA_SWIGLU, width)
+                .expect("the defined architecture");
+            assert!(
+                (scale - expected).abs() < 1e-6,
+                "d_head {width} should scale by {expected}, got {scale}"
+            );
+        }
+    }
 }

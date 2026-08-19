@@ -70,11 +70,52 @@ pub(crate) fn copy_into(source: &[f32], destination: &mut [f32]) {
 /// residual can never be added over part of the stream.
 pub(crate) fn add_into(source: &[f32], destination: &mut [f32]) -> Result<(), TransformerError> {
     if source.len() != destination.len() {
-        // COVERAGE-EXEMPT: add_into is pub(crate) and every caller passes two slices taken from the same validated workspace geometry, so the lengths agree by construction. Kept so a future caller cannot add a residual over part of the stream.
         return Err(TransformerError::WorkspaceTooSmall);
     }
     for (value, slot) in source.iter().zip(destination.iter_mut()) {
         *slot += value;
     }
     Ok(())
+}
+
+/// `add_into` at the disagreement its callers cannot produce.
+#[cfg(test)]
+mod tests {
+    use super::add_into;
+    use crate::error::TransformerError;
+
+    #[test]
+    fn adding_over_a_shorter_destination_is_refused_not_truncated() {
+        // The residual connection. `zip` would silently add over the prefix and
+        // leave the tail untouched, which is a model that runs and is wrong --
+        // the worst failure mode available here, because nothing downstream can
+        // tell a half-added residual from a badly trained one.
+        let source = [1.0_f32, 2.0, 3.0];
+        let mut short = [0.0_f32; 2];
+        assert_eq!(
+            add_into(&source, &mut short),
+            Err(TransformerError::WorkspaceTooSmall)
+        );
+        assert_eq!(short, [0.0, 0.0], "nothing is written on refusal");
+
+        // And in the other direction, which `zip` would also accept.
+        let mut long = [0.0_f32; 4];
+        assert_eq!(
+            add_into(&source, &mut long),
+            Err(TransformerError::WorkspaceTooSmall)
+        );
+        assert_eq!(long, [0.0; 4]);
+    }
+
+    #[test]
+    fn equal_lengths_accumulate_in_place() {
+        let source = [1.0_f32, 2.0, 3.0];
+        let mut destination = [10.0_f32, 20.0, 30.0];
+        assert_eq!(add_into(&source, &mut destination), Ok(()));
+        assert_eq!(destination, [11.0, 22.0, 33.0]);
+
+        // Empty and empty agree, so a zero-width stream is a no-op rather than
+        // an error -- the boundary a `!=` check gets right and a `<` gets wrong.
+        assert_eq!(add_into(&[], &mut []), Ok(()));
+    }
 }
