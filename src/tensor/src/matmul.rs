@@ -532,6 +532,23 @@ pub fn matmul_q8_0_q8a(
 
     for (out_index, (weight_scales, weight_quants)) in weights.rows().enumerate() {
         for (token_index, (x_scales, x_quants)) in activations.rows().enumerate() {
+            // Two blocks per iteration: same kernel, half the loop overhead.
+            //
+            // **Worth 1.30x here, and measured to help nowhere else.** The same
+            // unroll on `matmul_q8_0` (f32 activations) is consistently SLOWER
+            // -- 5.76 to 5.11 GB/s across three interleaved rounds -- and on
+            // `matmul_q4_0_q8a` it does nothing, 21.31 against 21.11.
+            //
+            // The reason is the ratio between the per-block body and the
+            // per-block overhead. This kernel does two `sdot`s per block, so
+            // the scale reads, bounds checks and loop arithmetic around them
+            // are a large fraction of the work and halving them shows.
+            // `block_dot` widens and converts every element; `unpack_block`
+            // un-nibbles a whole block. In those two the body dwarfs the
+            // overhead and there is nothing to amortize, so unrolling only
+            // costs registers.
+            //
+            // Do not "finish the job" by unrolling the other two. It was tried.
             let mut acc = 0.0_f32;
             let mut wsp = weight_scales.chunks_exact(SCALE_BYTES * 2);
             let mut wqp = weight_quants.chunks_exact(Q8_0_BLOCK * 2);
