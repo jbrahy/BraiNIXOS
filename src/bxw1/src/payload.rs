@@ -147,13 +147,15 @@ fn verify_content(record: &Record<'_>, payload: &[u8]) -> Result<(), Bxw1Error> 
     }
 }
 
-/// Reads a little-endian `u32` bit pattern from exactly four bytes.
+/// Reads a little-endian `u32` bit pattern from **exactly** four bytes.
+///
+/// `try_from` rather than a slice pattern with an unreachable arm, and rather
+/// than `first_chunk`: `try_from` requires the length to be exactly four, while
+/// `first_chunk` would silently take the first four of a longer slice. Callers
+/// pass `chunks_exact(4)` items today, and "exactly four" is the contract the
+/// name states, so it is the one the code should enforce.
 fn le_bits(bytes: &[u8]) -> Option<u32> {
-    match bytes {
-        [b0, b1, b2, b3] => Some(u32::from_le_bytes([*b0, *b1, *b2, *b3])),
-        // COVERAGE-EXEMPT: le_bits is only ever called with a chunks_exact(4) slice, so the pattern always matches. Kept so the function is total rather than indexing.
-        _ => None,
-    }
+    <[u8; 4]>::try_from(bytes).ok().map(u32::from_le_bytes)
 }
 
 /// Finalizes a hasher into an owned 32-byte array without indexing and
@@ -165,4 +167,31 @@ fn finish(hasher: Sha256) -> [u8; DIGEST_LEN] {
         *slot = *byte;
     }
     digest
+}
+
+#[cfg(test)]
+mod tests {
+    use super::le_bits;
+
+    #[test]
+    fn exactly_four_bytes_decode_little_endian() {
+        assert_eq!(le_bits(&[0x01, 0x02, 0x03, 0x04]), Some(0x0403_0201));
+        assert_eq!(le_bits(&[0, 0, 0, 0]), Some(0));
+        assert_eq!(le_bits(&[0xff; 4]), Some(u32::MAX));
+    }
+
+    #[test]
+    fn any_other_length_reads_nothing() {
+        // The arm that used to be unreachable. It is reachable now because
+        // `try_from` refuses on length rather than the caller guaranteeing it,
+        // and three of these are lengths a truncated payload plane produces.
+        assert_eq!(le_bits(&[]), None);
+        assert_eq!(le_bits(&[1]), None);
+        assert_eq!(le_bits(&[1, 2, 3]), None);
+
+        // Five is refused too, which `first_chunk` would have accepted by
+        // taking the first four -- a scale plane one byte long would then
+        // decode as a valid scale instead of being caught.
+        assert_eq!(le_bits(&[1, 2, 3, 4, 5]), None);
+    }
 }
