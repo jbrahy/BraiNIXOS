@@ -36,6 +36,7 @@ members = [
 exclude = [
     "tools/proof-coverage",
     "tools/bxw1-convert",
+    "tools/bxw1-synth",
     "tools/bxw1-run",
     # AS-1a first-light boot stub. Excluded rather than a member because it
     # builds for aarch64 while this workspace's default target is the frozen

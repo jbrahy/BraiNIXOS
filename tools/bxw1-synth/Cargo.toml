@@ -1,0 +1,15 @@
+[package]
+name = "bxw1-synth"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Emits a deterministic synthetic BXW1 model, so the perplexity gate can run without a real checkpoint"
+
+[[bin]]
+name = "bxw1-synth"
+path = "src/main.rs"
+
+# Reuses bxw1-convert's writer via #[path] rather than depending on it: that
+# crate is a binary, and turning it into a library to share three modules with
+# a test-support tool is a larger change than the sharing is worth.
+[dependencies]
