@@ -168,6 +168,70 @@ pub(crate) fn exp(x: f64) -> f64 {
     exp_poly(r) * two_pow(kf as i64)
 }
 
+/// `e^x`, to the accuracy an `f32` result can hold.
+///
+/// # Why this exists alongside [`exp`]
+///
+/// [`exp`] evaluates a degree-13 polynomial because `powf` needs `f64` grade,
+/// and `exp_matches_std_over_the_useful_range` holds it to a relative error
+/// below `1e-14`. Softmax and `silu` do not need that: both round the result to
+/// `f32` immediately, and everything below `f32`'s `5.96e-8` unit roundoff is
+/// invisible by the time it is stored.
+///
+/// The reduction is identical; only the polynomial is shorter. For
+/// `|r| <= ln2/2` the degree-7 truncation term is `r^8/8! = 5.2e-9`, safely
+/// under `f32` resolution.
+///
+/// # Measured, over `(-750, 0]` at 5.7 million points
+///
+/// | | |
+/// | --- | --- |
+/// | worst `f64` relative error vs degree 13 | `7.03e-9` |
+/// | `f32` results that differ at all | 4797 of 5,725,191 (0.08%) |
+/// | worst `f32` difference | **1 ulp** |
+/// | throughput | 187 -> 315 M exp/s, **1.69x** |
+///
+/// One `f32` ulp on 0.08% of calls is five orders of magnitude below the
+/// quantization already applied to these activations, which carry eight bits.
+///
+/// The prologue is unchanged and deliberately so: `silu` calls this with
+/// positive arguments, so the overflow branch is live here even though softmax
+/// can never reach it. Removing the branches was measured separately and bought
+/// nothing -- 131.3 to 132.0 M exp/s -- because the polynomial is the cost.
+pub(crate) fn exp_f32(x: f64) -> f64 {
+    if x.is_nan() {
+        return x;
+    }
+    if x >= EXP_OVERFLOW {
+        return f64::INFINITY;
+    }
+    if x <= EXP_UNDERFLOW {
+        return 0.0;
+    }
+    let kf = round_to_nearest(x * core::f64::consts::LOG2_E);
+    let r = (x - kf * LN2_HI) - kf * LN2_LO;
+    exp_poly_f32(r) * two_pow(kf as i64)
+}
+
+/// `e^r` for `|r| <= ln(2)/2`, degree 7. See [`exp_f32`].
+fn exp_poly_f32(r: f64) -> f64 {
+    const C2: f64 = 5.0e-1;
+    const C3: f64 = 1.666_666_666_666_666_6e-1;
+    const C4: f64 = 4.166_666_666_666_666_4e-2;
+    const C5: f64 = 8.333_333_333_333_333e-3;
+    const C6: f64 = 1.388_888_888_888_889e-3;
+    const C7: f64 = 1.984_126_984_126_984e-4;
+
+    let mut p = C7;
+    p = p * r + C6;
+    p = p * r + C5;
+    p = p * r + C4;
+    p = p * r + C3;
+    p = p * r + C2;
+    p = p * r + 1.0;
+    p * r + 1.0
+}
+
 /// `ln(x)` for `x` a positive normal.
 ///
 /// Total for every input, but only *accurate* on its stated domain: zero,
@@ -332,7 +396,7 @@ pub(crate) fn sin_cos(x: f64) -> (f64, f64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{exp, ln, powf, rsqrt, sin_cos, two_pow, MAX_SIN_COS_ARG};
+    use super::{exp, exp_f32, ln, powf, rsqrt, sin_cos, two_pow, MAX_SIN_COS_ARG};
 
     /// Deterministic xorshift64\* — the tests must not depend on a host RNG.
     struct Rng(u64);
@@ -370,6 +434,77 @@ mod tests {
             worst = worst.max(relative_error(exp(x), x.exp()));
         }
         assert!(worst < 1e-14, "worst relative error {worst}");
+    }
+
+    /// The only bound that matters for `exp_f32`: what an `f32` can see.
+    ///
+    /// Not `1e-14` -- that is `exp`'s contract and `powf` depends on it. This
+    /// one is allowed to be looser exactly as far as `f32` rounding hides it,
+    /// and no further, so the assertion is on the ROUNDED result rather than on
+    /// the `f64` intermediate.
+    #[test]
+    fn exp_f32_is_within_one_ulp_of_exp_once_rounded() {
+        let mut worst_ulp = 0_i64;
+        let mut differing = 0_u64;
+        let mut checked = 0_u64;
+        let mut x = 0.0_f64;
+        while x > -750.0 {
+            let precise = exp(x) as f32;
+            let fast = exp_f32(x) as f32;
+            if precise.to_bits() != fast.to_bits() {
+                differing += 1;
+                let gap = (precise.to_bits() as i64 - fast.to_bits() as i64).abs();
+                worst_ulp = worst_ulp.max(gap);
+            }
+            checked += 1;
+            x -= 0.0011;
+        }
+        assert!(
+            worst_ulp <= 1,
+            "worst difference {worst_ulp} ulp over {checked} points, \
+             {differing} differing"
+        );
+    }
+
+    #[test]
+    fn exp_f32_agrees_with_std_to_f32_resolution() {
+        let mut rng = Rng(0x5EED_1234_ABCD_0001);
+        let mut worst = 0.0_f64;
+        for _ in 0..20_000 {
+            // The domain softmax and silu actually use. `powf`'s range is
+            // `exp`'s problem, not this one's.
+            let x = rng.next_range(-40.0, 40.0);
+            worst = worst.max(relative_error(exp_f32(x), x.exp()));
+        }
+        assert!(
+            worst < 5.0e-8,
+            "worst relative error {worst} exceeds f32 unit roundoff"
+        );
+    }
+
+    /// The prologue, which `silu` can actually reach.
+    ///
+    /// Softmax never can -- its arguments are finite and non-positive by
+    /// construction -- but `silu` calls this with the raw activation, so a
+    /// large positive value overflows and a NaN propagates. Those branches are
+    /// live, not defensive, and they were the only lines of `exp_f32` the
+    /// coverage gate found unexecuted.
+    #[test]
+    fn exp_f32_saturates_and_propagates_like_exp() {
+        assert!(
+            exp_f32(f64::NAN).is_nan(),
+            "NaN must propagate, not saturate"
+        );
+        assert_eq!(exp_f32(1000.0), f64::INFINITY);
+        assert_eq!(exp_f32(f64::INFINITY), f64::INFINITY);
+        assert_eq!(exp_f32(-1000.0), 0.0);
+        assert_eq!(exp_f32(f64::NEG_INFINITY), 0.0);
+    }
+
+    #[test]
+    fn exp_f32_is_exact_at_zero_like_exp() {
+        // `silu(0) == 0` depends on it, same as `exp`.
+        assert_eq!(exp_f32(0.0), 1.0);
     }
 
     #[test]

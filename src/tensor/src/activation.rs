@@ -23,7 +23,7 @@
 //! into another. Validation lives where it is load bearing, and nowhere else.
 
 use crate::error::TensorError;
-use crate::math::exp;
+use crate::math::exp_f32;
 
 /// `σ(v) = 1/(1 + e^−v)`, without an intermediate that can overflow.
 ///
@@ -34,9 +34,9 @@ use crate::math::exp;
 /// no intermediate ever leaves the representable range.
 fn sigmoid(v: f64) -> f64 {
     if v >= 0.0 {
-        1.0 / (1.0 + exp(-v))
+        1.0 / (1.0 + exp_f32(-v))
     } else {
-        let e = exp(v);
+        let e = exp_f32(v);
         e / (1.0 + e)
     }
 }

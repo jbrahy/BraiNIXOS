@@ -18,7 +18,7 @@
 //! knows, which is one more thing to get wrong for no saving.
 
 use crate::error::TensorError;
-use crate::math::exp;
+use crate::math::exp_f32;
 
 /// Softmax of `x` into `out`.
 ///
@@ -68,7 +68,7 @@ pub fn softmax(x: &[f32], out: &mut [f32]) -> Result<(), TensorError> {
     for (value, slot) in x.iter().zip(out.iter_mut()) {
         // Widened before the subtraction: `x[i] − max` can overflow f32 when
         // the row spans the whole exponent range, and f64 has the headroom.
-        let term = exp(f64::from(*value) - max_wide) as f32;
+        let term = exp_f32(f64::from(*value) - max_wide) as f32;
         *slot = term;
         sum += f64::from(term);
     }
