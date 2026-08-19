@@ -57,7 +57,6 @@ impl<'a> Property<'a> {
                 // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 None => self.name_field,
             },
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             None => self.name_field,
         }
     }
@@ -68,7 +67,6 @@ impl<'a> Property<'a> {
     /// termination check already performed — defence in depth (spec §9.5).
     pub fn is_named(&self, wanted: &[u8]) -> bool {
         if wanted.len() > PROPERTY_NAME_LEN {
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             return false;
         }
         self.name() == wanted
@@ -91,9 +89,7 @@ impl<'a> Property<'a> {
     pub fn as_u64(&self) -> Result<u64, AdtError> {
         if self.value.len() != U64_LEN {
             return Err(AdtError::PropertyLengthMismatch);
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
         }
-        // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
         read_u64_le(self.value, 0).ok_or(AdtError::PropertyLengthMismatch)
     }
 
@@ -491,5 +487,86 @@ impl Iterator for RangesIter<'_> {
             parent_address,
             child_size,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 32-byte name field holding `name`, NUL-padded, as the wire format has it.
+    fn field(name: &[u8]) -> [u8; PROPERTY_NAME_LEN] {
+        let mut bytes = [0u8; PROPERTY_NAME_LEN];
+        for (slot, byte) in bytes.iter_mut().zip(name.iter()) {
+            *slot = *byte;
+        }
+        bytes
+    }
+
+    /// `Property::new` is `pub(crate)`, which is what makes these reachable.
+    ///
+    /// Every guard below was exempt from the coverage gate on the grounds that
+    /// `DeviceTree::parse` validates the tree before any cursor exists, so a
+    /// malformed record cannot reach an accessor. That is true of the public
+    /// API -- `DeviceTree`'s fields are private and `parse` is its only
+    /// constructor -- and it is exactly why these paths were never executed.
+    ///
+    /// It also made "fails closed" an assertion rather than a fact. From inside
+    /// the crate the constructor is reachable, so the malformed record can be
+    /// built directly and the guards can be made to run. No public surface is
+    /// added and no encapsulation is weakened; the tests simply stand where a
+    /// future constructor that skips validation would stand.
+    #[test]
+    fn a_name_field_with_no_terminator_yields_the_whole_field() {
+        // Every byte non-NUL: the decoder refuses this at parse time, so only
+        // a constructor that skipped validation could produce it.
+        let unterminated = [b'x'; PROPERTY_NAME_LEN];
+        let property = Property::new(&unterminated, &[]);
+
+        // The whole field, and not one byte more. Reading past it is the bug
+        // this guard exists to prevent.
+        assert_eq!(property.name(), &unterminated[..]);
+        assert_eq!(property.name().len(), PROPERTY_NAME_LEN);
+    }
+
+    #[test]
+    fn a_name_longer_than_the_field_matches_nothing() {
+        let named = field(b"compatible");
+        let property = Property::new(&named, &[]);
+
+        assert!(property.is_named(b"compatible"));
+
+        // Longer than the field can hold, so it cannot be this property's name
+        // whatever the field contains. The comparison is refused before the
+        // name is even decoded.
+        let too_long = [b'a'; PROPERTY_NAME_LEN + 1];
+        assert!(!property.is_named(&too_long));
+
+        // And the boundary itself is not refused: exactly 32 bytes is a legal
+        // question to ask, it simply does not match here.
+        let exactly_full = [b'a'; PROPERTY_NAME_LEN];
+        assert!(!property.is_named(&exactly_full));
+    }
+
+    #[test]
+    fn a_u64_value_decodes_little_endian_and_a_wrong_length_is_refused() {
+        let named = field(b"reg");
+        let value = 0x0123_4567_89ab_cdef_u64.to_le_bytes();
+        let property = Property::new(&named, &value);
+        assert_eq!(property.as_u64(), Ok(0x0123_4567_89ab_cdef));
+
+        // Seven bytes is not eight, and the refusal is by length rather than
+        // by reading what happens to be there.
+        let short = Property::new(&named, &value[..7]);
+        assert_eq!(short.as_u64(), Err(AdtError::PropertyLengthMismatch));
+
+        // Nine is equally wrong. A parser that accepted "at least eight" would
+        // silently ignore a trailing byte the producer meant to be read.
+        let mut long = [0u8; U64_LEN + 1];
+        for (slot, byte) in long.iter_mut().zip(value.iter()) {
+            *slot = *byte;
+        }
+        let over = Property::new(&named, &long);
+        assert_eq!(over.as_u64(), Err(AdtError::PropertyLengthMismatch));
     }
 }
