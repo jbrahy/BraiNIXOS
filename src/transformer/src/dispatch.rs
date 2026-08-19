@@ -52,6 +52,39 @@ pub trait Dispatch {
     /// are ~4.7 MB -- a factor of thirty. A single threshold cleanly separates
     /// them, which is why this is one number rather than a policy.
     ///
+    /// # How to choose it, rather than guess it
+    ///
+    /// Splitting `bytes` across `w` workers saves `(bytes / rate) x (1 - 1/w)`
+    /// and costs one synchronization round trip, so the crossover is
+    ///
+    /// ```text
+    /// minimum_split_bytes ~= round_trip_cost x rate / (1 - 1/w)
+    /// ```
+    ///
+    /// where `rate` is the single-core weight-byte throughput, about 47 GB/s
+    /// for the `Q8_0` kernel on this class of machine.
+    ///
+    /// **The rule is measured, not derived and hoped for.**
+    /// `benches/matmul.rs` sweeps the real crossover and compares:
+    ///
+    /// | workers | round trip | crossover measured | rule predicts |
+    /// | --- | --- | --- | --- |
+    /// | 2 | 6.8 us | 576 KB | 519 KB |
+    /// | 4 | 18.0 us | between 1152 and 2304 KB | 1238 KB |
+    ///
+    /// The sweep doubles, so the 4-worker row brackets rather than pins it, and
+    /// the prediction lands inside the bracket.
+    ///
+    /// # Why this replaces a constant
+    ///
+    /// The perplexity harness carries 4 MB, swept once against a
+    /// `std::sync::Barrier`. A dispatcher with a different round trip needs a
+    /// different number, and the kernel's own is about **2 us** -- measured on
+    /// the target, against roughly 30 us for a host barrier. Putting 2 us
+    /// through the rule at four workers gives about **125 KB**, some thirty
+    /// times smaller than the constant. A dispatcher that inherited 4 MB would
+    /// leave nearly every projection in a decode unsplit.
+    ///
     /// Returning 0 splits everything, which is the old behaviour.
     fn minimum_split_bytes(&self) -> usize {
         0

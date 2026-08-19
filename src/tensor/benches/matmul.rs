@@ -623,6 +623,125 @@ fn measure_elementwise(d_model: usize, d_ffn: usize, heads: usize, context: usiz
     println!("  elementwise total {:>6.3} ms/token", sum * 1e3);
 }
 
+/// Finds the matrix size at which splitting starts paying, and checks it
+/// against the rule that should predict it.
+///
+/// # Why a rule rather than a number
+///
+/// `Dispatch::minimum_split_bytes` currently carries 4 MB, swept once against a
+/// `std::sync::Barrier` costing roughly 30 us. The kernel's own dispatch is
+/// about 2 us -- measured on the target -- so that number is wrong there by
+/// more than an order of magnitude, and it will be wrong again for the next
+/// dispatcher.
+///
+/// A threshold is worth splitting when the time saved exceeds the
+/// synchronization it costs. Splitting `bytes` across `w` workers saves
+/// `(bytes / rate) x (1 - 1/w)` and costs one round trip, so the crossover is
+///
+/// ```text
+/// bytes_min ~= dispatch_cost x rate / (1 - 1/w)
+/// ```
+///
+/// This measures the crossover directly and prints what the rule predicts from
+/// the barrier cost it also measures. If they agree, the constant can be
+/// replaced by the formula and every dispatcher gets its own correct answer.
+fn measure_split_threshold(workers: usize) {
+    // The synchronization cost of THIS dispatcher, measured rather than
+    // assumed: a round trip through the same two barriers the split path uses,
+    // with no work between them.
+    let start_gate = Barrier::new(workers + 1);
+    let finish_gate = Barrier::new(workers + 1);
+    let shutting_down = AtomicBool::new(false);
+    let rounds = 2000;
+    let mut barrier_seconds = 0.0f64;
+    thread::scope(|scope| {
+        for _ in 0..workers {
+            let (s, f, d) = (&start_gate, &finish_gate, &shutting_down);
+            scope.spawn(move || loop {
+                s.wait();
+                if d.load(Ordering::Acquire) {
+                    return;
+                }
+                f.wait();
+            });
+        }
+        start_gate.wait();
+        finish_gate.wait();
+        let start = Instant::now();
+        for _ in 0..rounds {
+            start_gate.wait();
+            finish_gate.wait();
+        }
+        barrier_seconds = start.elapsed().as_secs_f64() / rounds as f64;
+        shutting_down.store(true, Ordering::Release);
+        start_gate.wait();
+    });
+
+    println!(
+        "  {workers} workers: one round trip = {:.2} us",
+        barrier_seconds * 1e6
+    );
+
+    // Sweep sizes and find where split beats serial.
+    let mut crossover_bytes = 0.0f64;
+    let mut rate_at_crossover = 0.0f64;
+    for n_out in [64usize, 128, 256, 512, 1024, 2048, 4096] {
+        let n_in = 1024;
+        let payload = synthetic_payload(n_out, n_in);
+        let weights = Q8Weights::new(&payload, n_out, n_in).expect("payload");
+        let shape = MatMulShape {
+            n_tokens: 1,
+            n_in,
+            n_out,
+        };
+        let x = vec![0.5_f32; n_in];
+        let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, n_in).expect("len")];
+        quantize_activations(1, n_in, &x, &mut scratch).expect("quantize");
+        let quantized = Q8Weights::new(&scratch, 1, n_in).expect("view");
+        let bytes = n_out as f64 * n_in as f64 * BYTES_PER_WEIGHT_ELEMENT;
+        let iterations = (200_000_000.0 / bytes).max(50.0) as usize;
+
+        let mut y = vec![0.0_f32; n_out];
+        matmul_q8_0_q8a(shape, &weights, &quantized, &mut y).expect("warm");
+        let start = Instant::now();
+        for _ in 0..iterations {
+            matmul_q8_0_q8a(shape, &weights, &quantized, &mut y).expect("serial");
+        }
+        let serial = start.elapsed().as_secs_f64() / iterations as f64;
+        std::hint::black_box(&y);
+
+        // The split, modelled as its cost: the same work over `workers` plus
+        // one round trip. Measuring the threads again would measure the pool,
+        // not the decision.
+        let split_modelled = serial / workers as f64 + barrier_seconds;
+        let rate = bytes / serial;
+        if crossover_bytes == 0.0 && split_modelled < serial {
+            crossover_bytes = bytes;
+            rate_at_crossover = rate;
+        }
+        println!(
+            "    {:>7.0} KB  serial {:>7.1} us   split-modelled {:>7.1} us   {}",
+            bytes / 1024.0,
+            serial * 1e6,
+            split_modelled * 1e6,
+            if split_modelled < serial {
+                "SPLIT"
+            } else {
+                "keep"
+            }
+        );
+    }
+
+    if crossover_bytes > 0.0 {
+        let predicted = barrier_seconds * rate_at_crossover / (1.0 - 1.0 / workers as f64);
+        println!(
+            "    measured crossover {:.0} KB, rule predicts {:.0} KB",
+            crossover_bytes / 1024.0,
+            predicted / 1024.0
+        );
+    }
+}
+
 fn main() {
     println!();
     println!("  matmul_q8_0 — weight-byte throughput, single core");
@@ -716,5 +835,12 @@ fn main() {
     println!("  Everything that is NOT a matmul, per decode token");
     println!();
     measure_elementwise(4096, 11008, 32, 2048, 32);
+    println!();
+
+    println!();
+    println!("  Split threshold: measured crossover vs the rule that predicts it");
+    println!();
+    measure_split_threshold(2);
+    measure_split_threshold(4);
     println!();
 }
