@@ -39,9 +39,11 @@ use brainix_tensor::softmax;
 
 use crate::cache::SessionCache;
 use crate::config::checked_product;
+use crate::dispatch::Dispatch;
 use crate::error::TransformerError;
 use crate::slices::{prefix, prefix_mut};
 use crate::workspace::Workspace;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// The extents one attention call is shaped by, gathered so the per-head
 /// helpers take a shape rather than five loose integers.
@@ -60,6 +62,9 @@ pub(crate) struct AttentionShape {
     /// The score scale BXW1 §5.6 assigns to the model's `arch_id`; `1/√d_head`
     /// for `arch_id = 1`.
     pub(crate) scale: f32,
+    /// `max_seq_len` — the stride between one head's score row and the next in
+    /// `workspace.scores` and `workspace.probabilities`.
+    pub(crate) score_stride: usize,
 }
 
 impl AttentionShape {
@@ -68,6 +73,16 @@ impl AttentionShape {
         query_head
             .checked_div(self.query_heads_per_group)
             .ok_or(TransformerError::InvalidKeyValueHeadCount)
+    }
+
+    /// The `[start, end)` range of head `head`'s live scores, within the
+    /// `[n_heads, max_seq_len]` score board.
+    fn score_range(&self, head: usize, context: usize) -> Result<(usize, usize), TransformerError> {
+        let start = checked_product(head, self.score_stride)?;
+        let end = start
+            .checked_add(context)
+            .ok_or(TransformerError::DimensionOverflow)?;
+        Ok((start, end))
     }
 
     /// The `[start, end)` element range of one head within a row of `width`
@@ -89,7 +104,8 @@ impl AttentionShape {
 ///
 /// `start` is the absolute position of the batch's first token; the cache
 /// already holds every key and value for positions `0 .. start + token_count`.
-pub(crate) fn attend(
+pub(crate) fn attend<D: Dispatch>(
+    dispatch: &D,
     workspace: &mut Workspace<'_>,
     cache: &SessionCache<'_>,
     layer: usize,
@@ -103,13 +119,33 @@ pub(crate) fn attend(
         let position = start
             .checked_add(token)
             .ok_or(TransformerError::DimensionOverflow)?;
-        attend_one_token(workspace, keys, values, token, position, shape)?;
+        attend_one_token(dispatch, workspace, keys, values, token, position, shape)?;
     }
     Ok(())
 }
 
-/// One token's attention, over every query head.
-fn attend_one_token(
+/// One token's attention, in three phases so the middle one can be shared out.
+///
+/// # Why this is not a loop over heads any more
+///
+/// It was, until 2026-08-19, and each head ran score -> softmax -> blend before
+/// the next one started. That is the natural shape and it has one problem:
+/// `softmax` is the largest serial cost in a decode -- 9.44 ms/token at the
+/// reference shape, 79% of all elementwise work -- and a loop like that cannot
+/// hand any of it to another core, because every head writes the same score row.
+///
+/// Splitting one head's softmax is not the answer either. At `context` 2048 a
+/// single softmax is about 9 us and a dispatch round trip is about 26 us, so
+/// splitting one costs more than it saves. What pays is splitting *all* of
+/// them: 32 heads is ~295 us of work behind one round trip. Measured on this
+/// laptop, four workers turn 285 us into 95 us, **2.99x**, with bit-identical
+/// output.
+///
+/// So the head loop is turned inside out. Every head scores into its own row,
+/// one dispatch softmaxes the whole board, and then every head blends. The
+/// price is the score board itself -- see `workspace::floats_per_call`.
+fn attend_one_token<D: Dispatch>(
+    dispatch: &D,
     workspace: &mut Workspace<'_>,
     keys: &[f32],
     values: &[f32],
@@ -121,17 +157,61 @@ fn attend_one_token(
     let context = position
         .checked_add(1)
         .ok_or(TransformerError::DimensionOverflow)?;
+
+    // Fused unless the softmax is actually going to be shared out.
+    //
+    // The three-phase shape is not free on one core: a head's score row is
+    // written in phase one and not read until phase two, and at 32 heads and
+    // `context` 1500 the board is 192 KB, past this machine's L1. Measured, the
+    // unconditional three-phase version cost the single-core path **0.83x**
+    // while buying the pool 1.07x. That is the wrong trade to make
+    // unconditionally, because the serial path is what runs until there is a
+    // scheduler.
+    //
+    // So the shape is chosen rather than fixed: fused keeps each row hot, and
+    // the phases are only paid for when a dispatch will actually happen.
+    if !worth_splitting(dispatch, context, shape) {
+        for head in 0..shape.query_head_count {
+            score_one_head(workspace, keys, row, head, context, shape)?;
+            softmax_one_head(workspace, head, context, shape)?;
+            blend_one_head(workspace, values, row, head, context, shape)?;
+        }
+        return Ok(());
+    }
+
     for head in 0..shape.query_head_count {
-        attend_one_head(workspace, keys, values, row, head, context, shape)?;
+        score_one_head(workspace, keys, row, head, context, shape)?;
+    }
+    softmax_every_head(dispatch, workspace, context, shape)?;
+    for head in 0..shape.query_head_count {
+        blend_one_head(workspace, values, row, head, context, shape)?;
     }
     Ok(())
 }
 
-/// One query head of one token: score, softmax, weighted sum of values.
-fn attend_one_head(
+/// One head's softmax, in this thread.
+fn softmax_one_head(
+    workspace: &mut Workspace<'_>,
+    head: usize,
+    context: usize,
+    shape: AttentionShape,
+) -> Result<(), TransformerError> {
+    let (start, end) = shape.score_range(head, context)?;
+    let source = workspace
+        .scores
+        .get(start..end)
+        .ok_or(TransformerError::WorkspaceTooSmall)?;
+    let target = workspace
+        .probabilities
+        .get_mut(start..end)
+        .ok_or(TransformerError::WorkspaceTooSmall)?;
+    softmax(source, target).map_err(TransformerError::from)
+}
+
+/// `scores[head] = query[head] · keys / √d_head`, over the live context.
+fn score_one_head(
     workspace: &mut Workspace<'_>,
     keys: &[f32],
-    values: &[f32],
     row: usize,
     head: usize,
     context: usize,
@@ -143,22 +223,116 @@ fn attend_one_head(
         .query_rotated
         .get(query_start..query_end)
         .ok_or(TransformerError::WorkspaceTooSmall)?;
-    let scores = prefix_mut(workspace.scores, context)?;
-    score_against_keys(query, keys, group, context, shape, scores)?;
-    let probabilities = prefix_mut(workspace.probabilities, context)?;
-    softmax(prefix(workspace.scores, context)?, probabilities)?;
+    let (score_start, score_end) = shape.score_range(head, context)?;
+    let scores = workspace
+        .scores
+        .get_mut(score_start..score_end)
+        .ok_or(TransformerError::WorkspaceTooSmall)?;
+    score_against_keys(query, keys, group, context, shape, scores)
+}
+
+/// `destination[head] = Σ_p probabilities[head][p] · value[p, group]`.
+fn blend_one_head(
+    workspace: &mut Workspace<'_>,
+    values: &[f32],
+    row: usize,
+    head: usize,
+    context: usize,
+    shape: AttentionShape,
+) -> Result<(), TransformerError> {
+    let group = shape.group_of(head)?;
+    let (score_start, score_end) = shape.score_range(head, context)?;
+    let probabilities = workspace
+        .probabilities
+        .get(score_start..score_end)
+        .ok_or(TransformerError::WorkspaceTooSmall)?;
     let (out_start, out_end) = shape.head_range(row, head)?;
     let destination = workspace
         .attention
         .get_mut(out_start..out_end)
         .ok_or(TransformerError::WorkspaceTooSmall)?;
-    blend_values(
-        values,
-        prefix(workspace.probabilities, context)?,
-        group,
-        shape,
-        destination,
-    )
+    blend_values(values, probabilities, group, shape, destination)
+}
+
+/// How many weight bytes one softmax element is worth, for the split decision.
+///
+/// [`Dispatch::minimum_split_bytes`] is denominated in weight bytes, because
+/// every other caller is a matmul. Softmax moves almost no memory and is
+/// entirely `exp`, so the comparison has to be made in a common currency: time.
+///
+/// `benches/matmul.rs` measures the `Q8_0` kernel at ~47 GB/s of weight bytes on
+/// one core, and `softmax` at ~236 M elements/s. One softmax element therefore
+/// occupies a core for as long as `47e9 / 236e6 ~= 199` weight bytes do. The
+/// constant is rounded to 200 because it is a ratio of two measurements, not a
+/// definition, and a third significant figure would be a lie.
+const WEIGHT_BYTES_PER_SOFTMAX_ELEMENT: usize = 200;
+
+/// Softmaxes every head's score row, splitting the board across workers when
+/// there is enough of it to be worth a round trip.
+fn worth_splitting<D: Dispatch>(dispatch: &D, context: usize, shape: AttentionShape) -> bool {
+    let equivalent_bytes = shape
+        .query_head_count
+        .saturating_mul(context)
+        .saturating_mul(WEIGHT_BYTES_PER_SOFTMAX_ELEMENT);
+    dispatch.chunks() > 1 && equivalent_bytes >= dispatch.minimum_split_bytes()
+}
+
+fn softmax_every_head<D: Dispatch>(
+    dispatch: &D,
+    workspace: &mut Workspace<'_>,
+    context: usize,
+    shape: AttentionShape,
+) -> Result<(), TransformerError> {
+    let heads = shape.query_head_count;
+    {
+        let per_worker = heads.div_ceil(dispatch.chunks());
+        let width = checked_product(per_worker, shape.score_stride)?;
+        let board = checked_product(heads, shape.score_stride)?;
+        let scores = prefix(workspace.scores, board)?;
+        let destination = prefix_mut(workspace.probabilities, board)?;
+        // Chunks run on other threads, so the closure is `Fn + Sync` and cannot
+        // carry a `Result` out. Mirrors `weights.rs`: an atomic flag is the most
+        // a shared closure can set without allocation or a lock, and every
+        // argument below is derived from shapes already validated, so a refusal
+        // is a bug in this arithmetic rather than a runtime condition.
+        let failed = AtomicBool::new(false);
+        dispatch.for_each_chunk(destination, width, |index, chunk| {
+            let base = index.saturating_mul(per_worker);
+            for (local, row) in chunk.chunks_mut(shape.score_stride).enumerate() {
+                // No bound check on `head` here: `per_worker` is
+                // `heads.div_ceil(chunks)`, so `chunks_mut` yields at most
+                // `heads` rows in total and the last chunk is simply short. If
+                // that arithmetic ever stops holding, the `get` below returns
+                // `None` and the flag fires, which is the honest failure.
+                let head = base.saturating_add(local);
+                let start = head.saturating_mul(shape.score_stride);
+                let end = start.saturating_add(context);
+                match (scores.get(start..end), row.get_mut(..context)) {
+                    (Some(source), Some(target)) => {
+                        if softmax(source, target).is_err() {
+                            // COVERAGE-EXEMPT: softmax refuses only on an empty
+                            // row, a length mismatch or non-finite input.
+                            // `context >= 1`, the two slices are both `context`
+                            // long by construction, and non-finite scores are a
+                            // model defect the serial path reports identically.
+                            failed.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    // COVERAGE-EXEMPT: both slices are `context` long by the
+                    // arithmetic directly above, which is why the flag rather
+                    // than a panic: a refactor that breaks that agreement is
+                    // caught loudly instead of half-writing the board.
+                    _ => failed.store(true, Ordering::Relaxed),
+                }
+            }
+        });
+        if failed.load(Ordering::Relaxed) {
+            // COVERAGE-EXEMPT: as above. The specific kernel error is lost
+            // because a `Fn` closure cannot carry one out.
+            return Err(TransformerError::WorkspaceTooSmall);
+        }
+        Ok(())
+    }
 }
 
 /// `scores[p] = (query · key[p, group]) / √d_head` for `p in 0 .. context`.

@@ -41,11 +41,29 @@ const fn floats_per_token(config: &ModelConfig) -> Result<usize, TransformerErro
     extend(extend(residual, query), extend(key_value, feed_forward))
 }
 
-/// Scratch that does not scale with the batch: the attention score row and its
-/// softmax, both `max_seq_len` wide because a query may attend to the whole
-/// context.
+/// Scratch that does not scale with the batch: the attention scores and their
+/// softmax, `max_seq_len` wide because a query may attend to the whole context,
+/// and one such row **per query head**.
+///
+/// # Why per head, when one row would do
+///
+/// A single row is enough if the heads are processed one at a time, which is
+/// what this did until 2026-08-19. It also makes them impossible to process any
+/// other way: two heads cannot share one score row.
+///
+/// `softmax` is the largest serial cost in a decode -- 9.44 ms/token at the
+/// reference shape, 79% of all elementwise work -- and it does not shrink when
+/// the matmuls are split across workers, because it is not a matmul. Giving
+/// every head its own row lets one dispatch cover all of them, which measured
+/// **2.99x on four workers** with bit-identical output.
+///
+/// The cost is `(n_heads - 1) x max_seq_len x 2` floats: at the reference shape,
+/// 16 KB becomes 512 KB. That is a real charge against `INV-MEM`, it is stated
+/// at build time like every other extent here, and it buys the only remaining
+/// multiple in the forward pass.
 const fn floats_per_call(config: &ModelConfig) -> Result<usize, TransformerError> {
-    checked_product(config.maximum_sequence_length, 2)
+    let per_head = checked_product(config.maximum_sequence_length, 2);
+    scale(per_head, config.query_head_count)
 }
 /// Bytes of `Q8_0` activation scratch the `SDOT` path needs.
 ///
@@ -109,7 +127,7 @@ pub const fn quantized_activation_bytes(
 ///     Err(_) => 0,
 /// };
 /// let mut scratch = [0.0_f32; FLOATS];
-/// assert_eq!(FLOATS, 8 * (4 * 32 + 3 * 32 + 3 * 16 + 3 * 64) + 2 * 16);
+/// assert_eq!(FLOATS, 8 * (4 * 32 + 3 * 32 + 3 * 16 + 3 * 64) + 4 * 2 * 16);
 /// ```
 ///
 /// # Errors
@@ -169,9 +187,13 @@ pub struct Workspace<'a> {
     pub(crate) activated: &'a mut [f32],
     /// `w2 · activated`, `[batch, d_model]`.
     pub(crate) feed_forward: &'a mut [f32],
-    /// One query's attention scores over the context, `[max_seq_len]`.
+    /// Attention scores, `[n_heads, max_seq_len]`, row-major.
+    ///
+    /// Head `h` occupies `h * max_seq_len .. h * max_seq_len + context`; the
+    /// remainder of each row is untouched. Every head has its own row so that
+    /// all of them can be softmaxed in one dispatch -- see [`floats_per_call`].
     pub(crate) scores: &'a mut [f32],
-    /// The softmax of `scores`, `[max_seq_len]`.
+    /// The softmax of `scores`, same shape and same row stride.
     pub(crate) probabilities: &'a mut [f32],
     /// The batch ceiling this workspace was cut for.
     pub(crate) maximum_batch_tokens: usize,
@@ -207,7 +229,7 @@ impl<'a> Workspace<'a> {
             query: checked_product(config.query_width()?, maximum_batch_tokens)?,
             key_value: checked_product(config.key_value_width()?, maximum_batch_tokens)?,
             feed_forward: checked_product(config.feed_forward_width, maximum_batch_tokens)?,
-            context: config.maximum_sequence_length,
+            context: checked_product(config.maximum_sequence_length, config.query_head_count)?,
         };
         let mut workspace = cut.apply(&mut remaining, *config, maximum_batch_tokens)?;
         workspace.quant_scratch = quant_scratch;
@@ -222,6 +244,7 @@ struct Cut {
     query: usize,
     key_value: usize,
     feed_forward: usize,
+    /// `max_seq_len x n_heads`: one score row per query head.
     context: usize,
 }
 

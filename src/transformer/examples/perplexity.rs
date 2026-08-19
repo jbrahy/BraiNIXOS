@@ -358,7 +358,7 @@ fn evaluate<D: Dispatch>(
     Ok((mean.exp(), predictions as f64 / elapsed))
 }
 
-fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
+fn run(model_path: &str, vocab_path: &str, sample_path: Option<&str>) -> Result<(), String> {
     let blob_bytes = std::fs::read(model_path).map_err(|e| format!("{model_path}: {e}"))?;
     let vocab_bytes = std::fs::read(vocab_path).map_err(|e| format!("{vocab_path}: {e}"))?;
     println!("model  {model_path}  ({} bytes)", blob_bytes.len());
@@ -399,13 +399,24 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
 
     let vocabulary =
         Vocabulary::parse(&vocab_bytes).map_err(|error| format!("vocab: {error:?}"))?;
-    let mut tokens = vec![0u32; SAMPLE.len() + 2];
-    let mut scratch = vec![0u32; SAMPLE.len() + 2];
+    // An optional sample file, because the built-in passage is 386 tokens and
+    // some costs only become visible at long context. `softmax` is quadratic in
+    // context while every projection is flat in it, so its share of a decode at
+    // 2048 tokens is nothing like its share at 386, and a change aimed at
+    // `softmax` measured on the short passage reads as noise.
+    let text = match sample_path {
+        Some(path) => {
+            std::fs::read_to_string(path).map_err(|error| format!("sample {path}: {error}"))?
+        }
+        None => SAMPLE.to_string(),
+    };
+    let mut tokens = vec![0u32; text.len() + 2];
+    let mut scratch = vec![0u32; text.len() + 2];
     let count = vocabulary
-        .encode(SAMPLE.as_bytes(), &mut scratch, &mut tokens)
+        .encode(text.as_bytes(), &mut scratch, &mut tokens)
         .map_err(|error| format!("encode: {error:?}"))?;
     tokens.truncate(count);
-    println!("sample {} bytes -> {} tokens", SAMPLE.len(), count);
+    println!("sample {} bytes -> {} tokens", text.len(), count);
     if count < 2 {
         return Err("sample produced fewer than two tokens".to_string());
     }
@@ -683,10 +694,10 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let (Some(model), Some(vocab)) = (args.get(1), args.get(2)) else {
-        eprintln!("usage: perplexity <model.bxw1> <vocab.bxv1>");
+        eprintln!("usage: perplexity <model.bxw1> <vocab.bxv1> [sample.txt]");
         return ExitCode::FAILURE;
     };
-    match run(model, vocab) {
+    match run(model, vocab, args.get(3).map(String::as_str)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             eprintln!("perplexity: {message}");

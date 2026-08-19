@@ -427,8 +427,11 @@ fn a_zero_batch_ceiling_is_refused() {
 #[test]
 fn the_workspace_size_is_the_documented_sum() {
     let config = fixture_config(RopePairing::Interleaved);
-    // batch × (4·d_model + 3·q_width + 3·kv_width + 3·d_ffn) + 2·max_seq_len
-    let expected = MAXIMUM_BATCH * (4 * 32 + 3 * 32 + 3 * 16 + 3 * 64) + 2 * 16;
+    // batch × (4·d_model + 3·q_width + 3·kv_width + 3·d_ffn) + n_heads·2·max_seq_len
+    //
+    // The score board is per head, not per call: every query head needs its own
+    // score row so that one dispatch can softmax all of them at once.
+    let expected = MAXIMUM_BATCH * (4 * 32 + 3 * 32 + 3 * 16 + 3 * 64) + 4 * 2 * 16;
     assert_eq!(workspace_floats(&config, MAXIMUM_BATCH).unwrap(), expected);
 }
 

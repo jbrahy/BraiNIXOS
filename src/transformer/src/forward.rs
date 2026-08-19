@@ -322,6 +322,7 @@ impl<'a> Model<'a> {
         self.rotate(workspace, start, token_count)?;
         self.store_batch(workspace, cache, index, start, token_count)?;
         attend(
+            dispatch,
             workspace,
             cache,
             index,
@@ -614,6 +615,7 @@ impl<'a> Model<'a> {
             query_head_count: self.config.query_head_count,
             query_heads_per_group: self.config.query_heads_per_group()?,
             scale: self.scale,
+            score_stride: self.config.maximum_sequence_length,
         })
     }
 }
