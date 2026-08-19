@@ -37,6 +37,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -59,6 +60,7 @@ CRATES = [
     "brainix-bsp-client",
     "brainix-datapath",
     "brainix-sha256",
+    "brainix-chacha20",
     "brainix-perf-baseline",
     "brainix-aarch64-mmu",
     "brainix-platform-select",
@@ -124,10 +126,43 @@ def text_report(crate: str, target: str) -> str:
     return result.stdout
 
 
-def uncovered_lines(report: str) -> list[tuple[str, int]]:
-    """Every (file, line) the tests never executed."""
+def sole_source_file(crate: str, target: str) -> str | None:
+    """The one measured file of a single-file crate, or None.
+
+    `llvm-cov`'s TEXT report omits the `path.rs:` header when a crate has
+    exactly one file, so there is nothing for `SOURCE_HEADER` to match and
+    every uncovered line in that crate is dropped. The JSON export always
+    names its files, so it is the way back to the filename.
+    """
+    result = subprocess.run(
+        ["cargo", "llvm-cov", "report", "--target", target, "--json",
+         "--ignore-filename-regex", IGNORE_REGEX, "-p", crate],
+        capture_output=True, text=True, cwd=REPO_ROOT,
+    )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    names = [
+        entry["filename"]
+        for block in payload.get("data", [])
+        for entry in block.get("files", [])
+    ]
+    return names[0] if len(names) == 1 else None
+
+
+def uncovered_lines(report: str, fallback: str | None = None) -> list[tuple[str, int]]:
+    """Every (file, line) the tests never executed.
+
+    `fallback` names the file to attribute lines to before any header is seen.
+    It exists because a single-file crate's text report has no header at all,
+    which silently turned five crates into blind spots -- `brainix-sha256`,
+    `brainix-chacha20`, `brainix-dart`, `brainix-perf-baseline` and
+    `brainix-pcie-config` reported 0 uncovered while holding 15 uncovered lines
+    between them. A gate that cannot see a crate should not score it zero.
+    """
     found: list[tuple[str, int]] = []
-    current: str | None = None
+    current: str | None = fallback
     for raw in report.splitlines():
         header = SOURCE_HEADER.match(raw)
         if header:
@@ -233,12 +268,12 @@ def main() -> int:
     print("-" * 62)
 
     for crate in CRATES:
-        found = uncovered_lines(text_report(crate, host))
+        found = uncovered_lines(text_report(crate, host), sole_source_file(crate, host))
         if looks_stale(found):
             # Belt and braces. `run_instrumented` should make this unreachable,
             # so reaching it means an assumption about the profile broke.
             run_instrumented(host)
-            found = uncovered_lines(text_report(crate, host))
+            found = uncovered_lines(text_report(crate, host), sole_source_file(crate, host))
         exempt = 0
         bad: list[str] = []
         for path, line_number in found:

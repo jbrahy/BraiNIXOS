@@ -164,9 +164,17 @@ impl Sha256 {
         while offset < input.len() {
             let room = BLOCK_LEN.saturating_sub(self.buffered);
             let take = room.min(input.len().saturating_sub(offset));
+            // COVERAGE-EXEMPT: `take` is `min(room, len - offset)`, so this
+            // range is inside `input` by construction. The `let else` exists
+            // so the crate needs no indexing, which is what lets it hold
+            // `deny(unsafe_code)` and the workspace's `indexing_slicing` lint
+            // at once. `input[a..b]` here would be a panic path in a hash.
             let Some(chunk) = input.get(offset..offset.saturating_add(take)) else {
                 return;
             };
+            // COVERAGE-EXEMPT: `take` is bounded by `room`, which is
+            // `BLOCK_LEN - buffered`, so this range is inside the fixed-size
+            // buffer. Same reason as the `chunk` guard above.
             let Some(slot) = self
                 .buffer
                 .get_mut(self.buffered..self.buffered.saturating_add(take))
@@ -204,6 +212,8 @@ impl Sha256 {
         let mut digest = [0u8; DIGEST_LEN];
         for (index, word) in self.state.iter().enumerate() {
             let at = index.saturating_mul(4);
+            // COVERAGE-EXEMPT: `state` is 8 words and `digest` is 32 bytes,
+            // so `at` runs 0, 4, .. 28 and every 4-byte window fits.
             let Some(slot) = digest.get_mut(at..at.saturating_add(4)) else {
                 break;
             };
@@ -228,9 +238,13 @@ impl Sha256 {
 
         for (index, slot) in schedule.iter_mut().take(16).enumerate() {
             let at = index.saturating_mul(4);
+            // COVERAGE-EXEMPT: `block` is `[u8; BLOCK_LEN]` with BLOCK_LEN 64
+            // and the loop takes 16 iterations, so `at` runs 0, 4, .. 60.
             let Some(bytes) = block.get(at..at.saturating_add(4)) else {
                 return;
             };
+            // COVERAGE-EXEMPT: `bytes` is a 4-byte slice by the line above, so
+            // the conversion cannot fail.
             let Ok(word) = <[u8; 4]>::try_from(bytes) else {
                 return;
             };
@@ -243,11 +257,15 @@ impl Sha256 {
                 schedule.get(index.saturating_sub(2)).copied(),
                 schedule.get(index.saturating_sub(16)).copied(),
                 schedule.get(index.saturating_sub(7)).copied(),
+                // COVERAGE-EXEMPT: `schedule` is `[u32; 64]` and `index` runs
+                // 16..64, so index-15, index-2, index-16 and index-7 are all
+                // within it.
             ) else {
                 return;
             };
             let s0 = a.rotate_right(7) ^ a.rotate_right(18) ^ (a >> 3);
             let s1 = b.rotate_right(17) ^ b.rotate_right(19) ^ (b >> 10);
+            // COVERAGE-EXEMPT: `index` runs 16..64 and `schedule` is 64 long.
             let Some(slot) = schedule.get_mut(index) else {
                 return;
             };
@@ -260,6 +278,8 @@ impl Sha256 {
             let (Some(word), Some(constant)) = (
                 schedule.get(index).copied(),
                 ROUND_CONSTANTS.get(index).copied(),
+                // COVERAGE-EXEMPT: `index` runs 0..64; `schedule` is 64 long and
+                // `ROUND_CONSTANTS` is the 64 constants of FIPS 180-4 §4.2.2.
             ) else {
                 return;
             };

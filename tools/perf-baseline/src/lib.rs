@@ -70,6 +70,10 @@ impl Encoding {
                 let blocks = weights.div_ceil(32);
                 match blocks.checked_mul(4) {
                     Some(scales) => weights.checked_add(scales),
+                    // COVERAGE-EXEMPT: `blocks` is `weights.div_ceil(32)`, so
+                    // for any `u64` it is at most 2^59 and `blocks * 4` at most
+                    // 2^61. The multiply cannot overflow. The overflow that CAN
+                    // happen is the `checked_add` above, which is tested.
                     None => None,
                 }
             }

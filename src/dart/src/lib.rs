@@ -153,6 +153,11 @@ impl DmaWindow {
         if self.is_empty() {
             return false;
         }
+        // COVERAGE-EXEMPT: no constructible window has a `None` end page.
+        // `granted` returns `deny_all` when `base_page + pages` would overflow,
+        // and `deny_all` is 0/0, so `checked_add` always succeeds here. The
+        // guard stays because that is a property of today's constructors, and
+        // a new one that forgets the check should fail closed rather than wrap.
         let (Some(self_end), Some(other_end)) = (self.end_page(), other.end_page()) else {
             return false;
         };

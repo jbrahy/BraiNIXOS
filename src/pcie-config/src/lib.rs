@@ -113,6 +113,12 @@ pub fn walk(config_space: &[u8], out: &mut [Capability]) -> Result<usize, WalkEr
     let mut found = 0;
 
     while offset != 0 {
+        // COVERAGE-EXEMPT: unreachable given the other checks, and kept
+        // because it does not depend on them. An offset must be >= HEADER_LEN
+        // (0x40), 4-byte aligned and inside 256 bytes, which allows 48 distinct
+        // offsets; `visited` refuses a repeat. So a walk ends in `Cycle` by the
+        // 49th entry and `found` cannot reach MAX_CAPABILITIES at 96. This is
+        // the bound that survives if the alignment or header rules are relaxed.
         if found >= MAX_CAPABILITIES {
             return Err(WalkError::TooManyCapabilities);
         }
@@ -127,6 +133,10 @@ pub fn walk(config_space: &[u8], out: &mut [Capability]) -> Result<usize, WalkEr
         // whose second byte falls outside config space is out of range even
         // though its first byte is inside.
         let next_at = at.checked_add(1).ok_or(WalkError::OutOfRange)?;
+        // COVERAGE-EXEMPT: the largest offset passing the alignment and
+        // header checks above is 252, so `next_at` is at most 253 and always
+        // inside 256 bytes. Kept for the same reason as the capability bound:
+        // it is the check that still holds if the alignment rule changes.
         if next_at >= CONFIG_SPACE_LEN {
             return Err(WalkError::OutOfRange);
         }

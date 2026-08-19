@@ -98,3 +98,42 @@ fn dropping_write_and_revoking_leave_the_holder_no_better_off() {
     // And there is no way back: narrowing an empty window yields nothing.
     assert_eq!(holder.narrow_window(64, 8), Err(WindowError::NotContained));
 }
+
+/// The two early exits of `permits_everything_in`, which no test reached.
+///
+/// Both were invisible until `coverage-gate.py` learned to see single-file
+/// crates: `brainix-dart`'s report has no filename header, so every uncovered
+/// line in it was being dropped and the crate scored a clean zero.
+#[test]
+fn a_window_permits_nothing_of_a_window_it_does_not_contain() {
+    let low = DmaWindow::granted(0, 8, true);
+    let high = DmaWindow::granted(64, 8, true);
+
+    // Disjoint: containment fails, so the authority question is already
+    // answered and the write bits never get compared.
+    assert!(!low.contains(&high));
+    assert!(!low.permits_everything_in(&high));
+    assert!(!high.permits_everything_in(&low));
+
+    // Overlapping but not containing is the same answer, and is the case a
+    // range check written as "starts inside" would wave through.
+    let straddling = DmaWindow::granted(4, 8, true);
+    assert!(!low.contains(&straddling));
+    assert!(!low.permits_everything_in(&straddling));
+}
+
+#[test]
+fn an_empty_window_asks_for_nothing_even_when_it_claims_write_authority() {
+    let read_only = DmaWindow::granted(0, 16, false);
+    let empty_writable = DmaWindow::granted(0, 0, true);
+
+    // The empty window names no page, so there is no authority to widen -- and
+    // this is the one case where a writable window is permitted by a read-only
+    // one. Getting it wrong the other way would refuse a legitimate revoke.
+    assert!(empty_writable.is_empty());
+    assert!(read_only.contains(&empty_writable));
+    assert!(read_only.permits_everything_in(&empty_writable));
+
+    // The converse does not hold: an empty window contains only empty windows.
+    assert!(!empty_writable.permits_everything_in(&read_only));
+}
