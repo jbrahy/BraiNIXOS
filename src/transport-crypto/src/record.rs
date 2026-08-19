@@ -166,6 +166,25 @@ impl RecordSealer {
         self.sequence.value()
     }
 
+    /// A sealer at a chosen sequence. **Tests only.**
+    ///
+    /// `SequenceCounter::at` exists in `brainix_bsp` for exactly this reason --
+    /// "a guard nobody can test at its boundary is a guard nobody has tested"
+    /// -- and it is safe to expose publicly there because a counter holds no
+    /// key. This is not: a sealer holds one, so a public constructor at an
+    /// arbitrary sequence would let a caller reseal at a used nonce, which is
+    /// the single failure the exhaustion guard exists to prevent.
+    ///
+    /// `cfg(test)` rather than `pub(crate)`, so it is absent from the compiled
+    /// crate entirely and cannot be reached by any caller at all.
+    #[cfg(test)]
+    fn at(keys: DirectionKeys, sequence: u32) -> Self {
+        Self {
+            keys,
+            sequence: SequenceCounter::at(sequence),
+        }
+    }
+
     /// Seals `payload` as one data record and advances the sequence.
     ///
     /// The plaintext is framed by [`encode_record_plaintext`], which is what
@@ -179,7 +198,6 @@ impl RecordSealer {
             return Err(TransportCryptoError::PayloadExceedsRecordPlaintext);
         }
         if self.sequence.is_exhausted() {
-            // COVERAGE-EXEMPT: same as the opener's: 2^32 records on a single channel is not reachable in a test, and the guard is what prevents nonce reuse.
             return Err(TransportCryptoError::SequenceExhausted);
         }
         let plaintext_length = frame_plaintext(payload, out)?;
@@ -287,6 +305,15 @@ impl RecordOpener {
         }
     }
 
+    /// An opener at a chosen sequence. **Tests only.** See [`RecordSealer::at`].
+    #[cfg(test)]
+    fn at(keys: DirectionKeys, sequence: u32) -> Self {
+        Self {
+            keys,
+            sequence: SequenceCounter::at(sequence),
+        }
+    }
+
     /// The sequence the next record is expected at.
     #[must_use]
     pub const fn sequence(&self) -> u32 {
@@ -311,7 +338,6 @@ impl RecordOpener {
         scratch: &'a mut [u8],
     ) -> Result<OpenedRecord<'a>, TransportCryptoError> {
         if self.sequence.is_exhausted() {
-            // COVERAGE-EXEMPT: exhausting a u32 sequence needs 2^32 records sealed on one channel, which no test can drive in bounded time. The guard is what stops nonce reuse after wrap, so it stays.
             return Err(TransportCryptoError::SequenceExhausted);
         }
         let nonce = self.sequence.nonce();
@@ -455,4 +481,83 @@ fn length_cipher(keys: &DirectionKeys, nonce: [u8; 8]) -> ChaCha20Legacy {
 /// A ChaCha20 instance over `K_2` at the record's nonce.
 fn payload_cipher(keys: &DirectionKeys, nonce: [u8; 8]) -> ChaCha20Legacy {
     ChaCha20Legacy::new(keys.payload_key.expose().into(), (&nonce).into())
+}
+
+/// The sequence-exhaustion boundary, which no integration test can reach.
+///
+/// # Why these were exempt, and why that was wrong
+///
+/// Both guards carried the note "2^32 records on a single channel is not
+/// reachable in a test". The first half is true and the conclusion is not:
+/// `brainix_bsp` exposes `SequenceCounter::at` for exactly this purpose, with
+/// exactly this argument -- *a guard nobody can test at its boundary is a
+/// guard nobody has tested.*
+///
+/// What was missing was a way to build a **sealer** at a position, and that is
+/// not safe to expose the way the counter is: a counter holds no key, a sealer
+/// does, so a public constructor at an arbitrary sequence would let a caller
+/// reseal at a used nonce -- the one failure this guard exists to prevent.
+/// Hence `cfg(test)`, absent from the compiled crate entirely.
+///
+/// This is the guard that stands between the protocol and nonce reuse. It is
+/// worth the constructor.
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use brainix_bsp::MAX_RECORD_SEQ;
+
+    fn keys() -> DirectionKeys {
+        // Deterministic and arbitrary: these tests are about the counter, not
+        // about the key schedule, which known_answer.rs covers.
+        let mut material = [0u8; LEN_DIR_KEYS];
+        for (index, byte) in material.iter_mut().enumerate() {
+            *byte = (index as u8).wrapping_mul(7).wrapping_add(11);
+        }
+        DirectionKeys::from_material(Secret::from_bytes(material))
+    }
+
+    #[test]
+    fn the_last_sealable_record_succeeds_and_the_next_is_refused() {
+        let mut sealer = RecordSealer::at(keys(), MAX_RECORD_SEQ - 1);
+        let mut out = [0u8; 128];
+
+        // One below the ceiling still seals: the guard must not cost the last
+        // legitimate record.
+        assert!(sealer.seal(b"last", &mut out).is_ok());
+        assert_eq!(sealer.sequence(), MAX_RECORD_SEQ);
+
+        // At the ceiling it refuses, and keeps refusing. A sealer that denied
+        // once and then wrapped would reuse nonce 0 with a live key, which is
+        // a total loss of confidentiality for the channel.
+        for _ in 0..3 {
+            assert_eq!(
+                sealer.seal(b"one too many", &mut out).unwrap_err(),
+                TransportCryptoError::SequenceExhausted
+            );
+            assert_eq!(sealer.sequence(), MAX_RECORD_SEQ);
+        }
+    }
+
+    #[test]
+    fn the_opener_refuses_at_the_same_boundary() {
+        // Symmetry matters: an opener that kept accepting past the ceiling
+        // would accept a peer's reused nonce as fresh.
+        let mut sealer = RecordSealer::at(keys(), MAX_RECORD_SEQ - 1);
+        let mut wire = [0u8; 128];
+        let written = sealer.seal(b"last", &mut wire).expect("the last record");
+
+        let mut opener = RecordOpener::at(keys(), MAX_RECORD_SEQ - 1);
+        let mut scratch = [0u8; 128];
+        let opened = opener
+            .open(&wire[..written], &mut scratch)
+            .expect("the last record opens");
+        assert_eq!(opened.payload, b"last");
+        assert_eq!(opener.sequence(), MAX_RECORD_SEQ);
+
+        assert_eq!(
+            opener.open(&wire[..written], &mut scratch).unwrap_err(),
+            TransportCryptoError::SequenceExhausted
+        );
+    }
 }
