@@ -48,7 +48,8 @@
 
 use brainix_tensor::{
     matmul_q4_0_q8a, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations,
-    quantize_q4_0, rope, MatMulShape, Q4Weights, Q8Weights, RopePairing, RopeParams, Q8_0_BLOCK,
+    quantize_q4_0, rmsnorm, rope, softmax, swiglu, MatMulShape, Q4Weights, Q8Weights, RopePairing,
+    RopeParams, Q8_0_BLOCK,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Barrier;
@@ -552,6 +553,76 @@ fn measure_rope(label: &str, heads: usize, d_head: usize, calls: usize) {
     std::hint::black_box(&out);
 }
 
+/// Times the non-matmul kernels a decode calls, at realistic widths.
+///
+/// # Why this is here
+///
+/// To answer one question with a number instead of an argument: does anything
+/// besides the matmul matter? Four optimizations were proposed from reading
+/// code today and three were refuted by measurement, two of them making things
+/// slower. The cheapest way to stop doing that is to know the shares first.
+///
+/// Each is timed per DECODE TOKEN: a 32-layer model calls rmsnorm twice per
+/// layer, swiglu once, and softmax once per head.
+fn measure_elementwise(d_model: usize, d_ffn: usize, heads: usize, context: usize, layers: usize) {
+    let x: Vec<f32> = (0..d_model).map(|i| (i % 23) as f32 * 0.05 - 0.5).collect();
+    let weight: Vec<f32> = (0..d_model).map(|i| 1.0 + (i % 7) as f32 * 0.01).collect();
+    let mut out = vec![0.0_f32; d_model];
+
+    let reps = 2000;
+    let start = Instant::now();
+    for _ in 0..reps {
+        rmsnorm(&x, &weight, 1.0e-5, &mut out).expect("rmsnorm");
+    }
+    let rms_each = start.elapsed().as_secs_f64() / reps as f64;
+    std::hint::black_box(&out);
+
+    let gate: Vec<f32> = (0..d_ffn).map(|i| (i % 19) as f32 * 0.1 - 0.9).collect();
+    let up: Vec<f32> = (0..d_ffn).map(|i| (i % 13) as f32 * 0.1 - 0.6).collect();
+    let mut ffn_out = vec![0.0_f32; d_ffn];
+    let start = Instant::now();
+    for _ in 0..reps {
+        swiglu(&gate, &up, &mut ffn_out).expect("swiglu");
+    }
+    let swiglu_each = start.elapsed().as_secs_f64() / reps as f64;
+    std::hint::black_box(&ffn_out);
+
+    let scores: Vec<f32> = (0..context).map(|i| (i % 29) as f32 * 0.1 - 1.4).collect();
+    let mut probabilities = vec![0.0_f32; context];
+    let start = Instant::now();
+    for _ in 0..reps {
+        softmax(&scores, &mut probabilities).expect("softmax");
+    }
+    let softmax_each = start.elapsed().as_secs_f64() / reps as f64;
+    std::hint::black_box(&probabilities);
+
+    // Per token: rmsnorm twice a layer plus a final one, swiglu once a layer,
+    // softmax once per head per layer.
+    let rms_total = rms_each * (layers * 2 + 1) as f64;
+    let swiglu_total = swiglu_each * layers as f64;
+    let softmax_total = softmax_each * (layers * heads) as f64;
+    let sum = rms_total + swiglu_total + softmax_total;
+
+    println!("  d_model={d_model} d_ffn={d_ffn} heads={heads} context={context} layers={layers}");
+    println!(
+        "  rmsnorm   {:>9.3} ms/token   ({:.2} us each)",
+        rms_total * 1e3,
+        rms_each * 1e6
+    );
+    println!(
+        "  swiglu    {:>9.3} ms/token   ({:.2} us each)",
+        swiglu_total * 1e3,
+        swiglu_each * 1e6
+    );
+    println!(
+        "  softmax   {:>9.3} ms/token   ({:.2} us each)",
+        softmax_total * 1e3,
+        softmax_each * 1e6
+    );
+    println!("  ---------------------------");
+    println!("  elementwise total {:>6.3} ms/token", sum * 1e3);
+}
+
 fn main() {
     println!();
     println!("  matmul_q8_0 — weight-byte throughput, single core");
@@ -639,5 +710,11 @@ fn main() {
     println!();
     measure_rope("12 heads x 64, 2000 calls", 12, 64, 2000);
     measure_rope("32 heads x 128, 500 calls", 32, 128, 500);
+    println!();
+
+    println!();
+    println!("  Everything that is NOT a matmul, per decode token");
+    println!();
+    measure_elementwise(4096, 11008, 32, 2048, 32);
     println!();
 }
