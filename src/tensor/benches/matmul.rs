@@ -64,6 +64,34 @@ const BYTES_PER_WEIGHT_ELEMENT: f64 = 1.125;
 /// Vendor figure for the M2 Pro, used only to express the result as a fraction
 /// of the ceiling. It is not measured here and is labelled as vendor-supplied
 /// wherever it is printed.
+///
+/// # The vendor figure is not the ceiling this kernel can reach
+///
+/// Measured 2026-08-19, from `measure_scaling`'s own two cases. They differ in
+/// one thing that matters more than the thread count:
+///
+/// | matrix | 1 thread | 4 threads | 6 threads | 8 threads |
+/// | --- | --- | --- | --- | --- |
+/// | 18.9 MB, largely SLC-resident | 47.5 | 151.7 | **217.7** | 194.4 |
+/// | 151 MB, streams from DRAM | 30.1 | **116.5** | 115.0 | 124.7 |
+///
+/// The 217.7 figure is 109% "of bus" and is not a memory result at all -- the
+/// matrix fits in the system-level cache, so it measures the SLC. **The DRAM
+/// ceiling for this access pattern is about 120 GB/s, not 200**, and four
+/// threads already reach 94% of it.
+///
+/// Two consequences worth stating where the constant lives, because reading
+/// "58% of bus" and going looking for the missing 42% is the mistake this note
+/// exists to prevent:
+///
+/// 1. **The `Q8_0` matmul has no headroom left on this machine.** It is not
+///    compute-bound; it is at the memory ceiling with the workers it already
+///    has. Making the inner loop cheaper cannot help.
+/// 2. **The only lever left on the matmul is bytes moved**, which is what
+///    `NORTH_STAR.md` said the regime would be once the kernels were fast
+///    enough, and is now measured rather than asserted. `Q4_0` moves 1.80x
+///    fewer bytes and is 1.34x the speed at six threads -- but it is a BXW1
+///    format version bump, not a tuning change.
 const REFERENCE_BANDWIDTH_GB_S: f64 = 200.0;
 
 /// Builds a deterministic `Q8_0` payload of the given shape.

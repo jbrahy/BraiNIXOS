@@ -484,6 +484,14 @@ fn quantize_one_block(
         *slot = if usable {
             // Round to nearest; the reciprocal is not used because
             // `peak / 127` then `value / scale` keeps the endpoints exact.
+            //
+            // The divide is not the cost it looks like. Measured 2026-08-19
+            // against a per-block reciprocal multiply: 1.03x to 1.09x, with an
+            // A-vs-A control in the same binary reading 0.98x to 1.03x. This
+            // loop already runs at ~1500 M elem/s, so quantizing every
+            // activation a decode needs costs about 0.76 ms/token at the
+            // reference shape -- 1% of a decode, against `softmax`'s 12%.
+            // Trading the exact endpoints for 5% of 1% is not a trade.
             let scaled = *value / scale;
             let rounded = if scaled >= 0.0 {
                 scaled + 0.5
