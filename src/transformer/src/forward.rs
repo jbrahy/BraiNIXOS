@@ -311,7 +311,7 @@ impl<'a> Model<'a> {
             layer.attention_norm,
             self.config.normalization_epsilon,
             prefix_mut(workspace.normed, span)?,
-            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
+            // COVERAGE-EXEMPT: nothing on this line can refuse for a `Model` that exists. The slice helpers, the size arithmetic and the tensor kernels are all handed extents derived from the one `ModelConfig` that `Model::new` validated and the one `Workspace` that `Workspace::new` sized for it, and a batch too large for that workspace is refused earlier with `BatchExceedsWorkspace`. The `?` stays so a shape reaching this path unvalidated cannot be ignored.
         )?;
         self.project_query_key_value(dispatch, workspace, layer, token_count)?;
         self.rotate(workspace, start, token_count)?;
@@ -324,7 +324,7 @@ impl<'a> Model<'a> {
             start,
             token_count,
             self.attention_shape()?,
-            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
+            // COVERAGE-EXEMPT: nothing on this line can refuse for a `Model` that exists. The slice helpers, the size arithmetic and the tensor kernels are all handed extents derived from the one `ModelConfig` that `Model::new` validated and the one `Workspace` that `Workspace::new` sized for it, and a batch too large for that workspace is refused earlier with `BatchExceedsWorkspace`. The `?` stays so a shape reaching this path unvalidated cannot be ignored.
         )?;
         self.project_attention_output(dispatch, workspace, layer, token_count)?;
         add_into(
@@ -393,7 +393,7 @@ impl<'a> Model<'a> {
                 token,
                 query_width,
                 &params,
-                // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
+                // COVERAGE-EXEMPT: nothing on this line can refuse for a `Model` that exists. The slice helpers, the size arithmetic and the tensor kernels are all handed extents derived from the one `ModelConfig` that `Model::new` validated and the one `Workspace` that `Workspace::new` sized for it, and a batch too large for that workspace is refused earlier with `BatchExceedsWorkspace`. The `?` stays so a shape reaching this path unvalidated cannot be ignored.
             )?;
             rotate_row(
                 workspace.key,
@@ -401,7 +401,7 @@ impl<'a> Model<'a> {
                 token,
                 key_value_width,
                 &params,
-                // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
+                // COVERAGE-EXEMPT: nothing on this line can refuse for a `Model` that exists. The slice helpers, the size arithmetic and the tensor kernels are all handed extents derived from the one `ModelConfig` that `Model::new` validated and the one `Workspace` that `Workspace::new` sized for it, and a batch too large for that workspace is refused earlier with `BatchExceedsWorkspace`. The `?` stays so a shape reaching this path unvalidated cannot be ignored.
             )?;
         }
         Ok(())
@@ -459,7 +459,7 @@ impl<'a> Model<'a> {
         let attention = prefix(
             workspace.attention,
             checked_product(token_count, query_width)?,
-            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
+            // COVERAGE-EXEMPT: nothing on this line can refuse for a `Model` that exists. The slice helpers, the size arithmetic and the tensor kernels are all handed extents derived from the one `ModelConfig` that `Model::new` validated and the one `Workspace` that `Workspace::new` sized for it, and a batch too large for that workspace is refused earlier with `BatchExceedsWorkspace`. The `?` stays so a shape reaching this path unvalidated cannot be ignored.
         )?;
         let span = checked_product(token_count, self.config.model_width)?;
         layer.attention_output_projection.project(
@@ -485,7 +485,7 @@ impl<'a> Model<'a> {
             layer.feed_forward_norm,
             self.config.normalization_epsilon,
             prefix_mut(workspace.normed, span)?,
-            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
+            // COVERAGE-EXEMPT: nothing on this line can refuse for a `Model` that exists. The slice helpers, the size arithmetic and the tensor kernels are all handed extents derived from the one `ModelConfig` that `Model::new` validated and the one `Workspace` that `Workspace::new` sized for it, and a batch too large for that workspace is refused earlier with `BatchExceedsWorkspace`. The `?` stays so a shape reaching this path unvalidated cannot be ignored.
         )?;
         self.project_branches(dispatch, workspace, layer, token_count)?;
         self.project_down(dispatch, workspace, layer, token_count)?;
@@ -516,7 +516,7 @@ impl<'a> Model<'a> {
             workspace.quant_scratch,
             dispatch,
             prefix_mut(workspace.gate, inner)?,
-            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
+            // COVERAGE-EXEMPT: nothing on this line can refuse for a `Model` that exists. The slice helpers, the size arithmetic and the tensor kernels are all handed extents derived from the one `ModelConfig` that `Model::new` validated and the one `Workspace` that `Workspace::new` sized for it, and a batch too large for that workspace is refused earlier with `BatchExceedsWorkspace`. The `?` stays so a shape reaching this path unvalidated cannot be ignored.
         )?;
         layer.up_projection.project(
             shape,
@@ -524,13 +524,13 @@ impl<'a> Model<'a> {
             workspace.quant_scratch,
             dispatch,
             prefix_mut(workspace.up, inner)?,
-            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
+            // COVERAGE-EXEMPT: nothing on this line can refuse for a `Model` that exists. The slice helpers, the size arithmetic and the tensor kernels are all handed extents derived from the one `ModelConfig` that `Model::new` validated and the one `Workspace` that `Workspace::new` sized for it, and a batch too large for that workspace is refused earlier with `BatchExceedsWorkspace`. The `?` stays so a shape reaching this path unvalidated cannot be ignored.
         )?;
         swiglu(
             prefix(workspace.gate, inner)?,
             prefix(workspace.up, inner)?,
             prefix_mut(workspace.activated, inner)?,
-            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
+            // COVERAGE-EXEMPT: nothing on this line can refuse for a `Model` that exists. The slice helpers, the size arithmetic and the tensor kernels are all handed extents derived from the one `ModelConfig` that `Model::new` validated and the one `Workspace` that `Workspace::new` sized for it, and a batch too large for that workspace is refused earlier with `BatchExceedsWorkspace`. The `?` stays so a shape reaching this path unvalidated cannot be ignored.
         )?;
         Ok(())
     }
@@ -576,7 +576,7 @@ impl<'a> Model<'a> {
             self.weights.final_norm,
             self.config.normalization_epsilon,
             prefix_mut(workspace.normed, width)?,
-            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
+            // COVERAGE-EXEMPT: nothing on this line can refuse for a `Model` that exists. The slice helpers, the size arithmetic and the tensor kernels are all handed extents derived from the one `ModelConfig` that `Model::new` validated and the one `Workspace` that `Workspace::new` sized for it, and a batch too large for that workspace is refused earlier with `BatchExceedsWorkspace`. The `?` stays so a shape reaching this path unvalidated cannot be ignored.
         )?;
         let shape = self.projection_shape(1, width, self.config.vocabulary_size);
         self.weights.logit_matrix().project(
