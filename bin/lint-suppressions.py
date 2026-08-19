@@ -57,6 +57,14 @@ PERMITTED_TREES = {
 # everything here is architecture-neutral code written since the pivot, and a
 # suppression in it is a decision rather than an inheritance.
 PERMITTED_FILES = {
+    "src/transformer/examples/perplexity.rs": (
+        "`cognitive_complexity` on `run`. A benchmark driver reads as a script -- "
+        "load the blob, describe it, build the weights, run each configuration, "
+        "print the comparison -- and cutting it into named halves moves code "
+        "without making the order easier to follow, which is the only thing a "
+        "reader of a measurement harness wants. The lint is right that the "
+        "function is long and wrong that splitting it helps."
+    ),
     "src/bsp/src/record.rs": (
         "`absurd_extreme_comparisons` on two `>=` guards against MAX_RECORD_SEQ. "
         "BSP v2 §8 makes the *values* in its ceiling table tunable and only the "
@@ -76,6 +84,43 @@ def is_test_path(path: Path) -> bool:
     return "tests" in parts or "fuzz_targets" in parts or path.name.startswith("test_")
 
 
+def on_a_cfg_test_item(lines: list[str], index: int) -> bool:
+    """Whether the suppression at `index` sits on a `#[cfg(test)]` item.
+
+    The rule this gate enforces is that PRODUCTION code must not suppress: the
+    workspace lints forbid `unwrap`, `expect` and bare arithmetic because those
+    are wrong on a serving datapath, and they are how a test states an
+    expectation.
+
+    `is_test_path` implements that rule by looking at the path, which is right
+    for `tests/` and blind to `#[cfg(test)] mod tests` inside `src/`. An in-crate
+    test module is the only way to reach a private function, so the audit on
+    2026-08-19 added eight of them -- and this gate failed on every one while
+    reporting a rule it was not actually applying.
+
+    Attribute order is not fixed, so both of these count:
+
+        #[cfg(test)]                     #[allow(clippy::expect_used)]
+        #[allow(clippy::expect_used)]    #[cfg(test)]
+        mod tests {                      mod tests {
+
+    Only the attributes immediately adjacent are considered. A `#[cfg(test)]`
+    further up the file says nothing about this item.
+    """
+    for step in (-1, 1):
+        cursor = index + step
+        while 0 <= cursor < len(lines):
+            stripped = lines[cursor].strip()
+            if stripped.startswith("#[cfg(test)]"):
+                return True
+            # Keep walking only across other attributes and blank lines; the
+            # first real token ends the run.
+            if not (stripped.startswith("#[") or stripped.startswith("#![") or not stripped):
+                break
+            cursor += step
+    return False
+
+
 def scan() -> list[tuple[str, int, str]]:
     found = []
     for path in sorted(REPO_ROOT.rglob("*.rs")):
@@ -90,7 +135,7 @@ def scan() -> list[tuple[str, int, str]]:
         except (OSError, UnicodeDecodeError):
             continue
         for number, line in enumerate(lines, start=1):
-            if SUPPRESSION.search(line):
+            if SUPPRESSION.search(line) and not on_a_cfg_test_item(lines, number - 1):
                 found.append((text, number, line.strip()))
     return found
 
