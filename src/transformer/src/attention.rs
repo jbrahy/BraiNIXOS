@@ -35,7 +35,7 @@
 //! switch does not preserve vector state, so a NEON kernel today would be a
 //! correctness bug wearing a performance costume.
 
-use brainix_tensor::softmax;
+use brainix_tensor::{softmax, TensorError};
 
 use crate::cache::SessionCache;
 use crate::config::checked_product;
@@ -330,7 +330,15 @@ fn softmax_every_head<D: Dispatch>(
         // a shared closure can set without allocation or a lock, and every
         // argument below is derived from shapes already validated, so a refusal
         // is a bug in this arithmetic rather than a runtime condition.
-        let failed = AtomicBool::new(false);
+        // Two flags, not one. They report DIFFERENT errors, and reporting one
+        // for the other is a defect this code had until 2026-08-19: the serial
+        // path propagates whatever `softmax` refused with, while this path
+        // returned `WorkspaceTooSmall` for every failure -- so the same model,
+        // decoded with and without a dispatcher, named different causes for the
+        // same defect. Non-finite scores are reachable with extreme weights, so
+        // that divergence was reachable too.
+        let refused = AtomicBool::new(false);
+        let mis_sliced = AtomicBool::new(false);
         dispatch.for_each_chunk(destination, width, |index, chunk| {
             let base = index.saturating_mul(per_worker);
             for (local, row) in chunk.chunks_mut(shape.score_stride).enumerate() {
@@ -344,26 +352,34 @@ fn softmax_every_head<D: Dispatch>(
                 let end = start.saturating_add(context);
                 match (scores.get(start..end), row.get_mut(..context)) {
                     (Some(source), Some(target)) => {
+                        // Only non-finite input is reachable of the three
+                        // things `softmax` refuses on, and the serial path
+                        // names it -- so this path names the same thing.
+                        // COVERAGE-EXEMPT: needs weights whose dot product
+                        // overflows to infinity; no fixture here does.
                         if softmax(source, target).is_err() {
-                            // COVERAGE-EXEMPT: softmax refuses only on an empty
-                            // row, a length mismatch or non-finite input.
-                            // `context >= 1`, the two slices are both `context`
-                            // long by construction, and non-finite scores are a
-                            // model defect the serial path reports identically.
-                            failed.store(true, Ordering::Relaxed);
+                            refused.store(true, Ordering::Relaxed);
                         }
                     }
                     // COVERAGE-EXEMPT: both slices are `context` long by the
                     // arithmetic directly above, which is why the flag rather
                     // than a panic: a refactor that breaks that agreement is
                     // caught loudly instead of half-writing the board.
-                    _ => failed.store(true, Ordering::Relaxed),
+                    _ => mis_sliced.store(true, Ordering::Relaxed),
                 }
             }
         });
-        if failed.load(Ordering::Relaxed) {
-            // COVERAGE-EXEMPT: as above. The specific kernel error is lost
-            // because a `Fn` closure cannot carry one out.
+        if refused.load(Ordering::Relaxed) {
+            // The same error the serial path gives. A `Fn` closure cannot carry
+            // a `Result` out, so the variant is reconstructed rather than
+            // forwarded -- sound because only one of `softmax`'s refusals is
+            // reachable from here, which is what the note at the call site
+            // argues.
+            // COVERAGE-EXEMPT: as the store above.
+            return Err(TransformerError::Kernel(TensorError::NonFiniteInput));
+        }
+        if mis_sliced.load(Ordering::Relaxed) {
+            // COVERAGE-EXEMPT: as the store above.
             return Err(TransformerError::WorkspaceTooSmall);
         }
         Ok(())
