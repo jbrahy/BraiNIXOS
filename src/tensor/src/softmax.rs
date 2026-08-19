@@ -16,6 +16,39 @@
 //! One row per call. Attention softmaxes one query's scores at a time, and a
 //! batched entry point would have to carry a row length that the caller already
 //! knows, which is one more thing to get wrong for no saving.
+//!
+//! # Three ways to make this faster, all measured, none taken (2026-08-19)
+//!
+//! This kernel is the largest serial cost in a decode: `benches/matmul.rs` puts
+//! it at **9.44 ms/token** at the reference shape, 79% of all elementwise work,
+//! and it does not shrink when the matmuls are split across workers. So it was
+//! worth attacking directly.
+//!
+//! | variant | vs this code |
+//! | --- | --- |
+//! | four independent `exp` chains and four sum accumulators | 1.01x to 1.02x |
+//! | eight chains | 1.02x to 1.03x |
+//! | four chains plus an `exp` without the NaN and overflow branches, which cannot fire once the maximum is subtracted | 1.02x to 1.04x |
+//! | **this code, measured against itself** | **1.00x to 1.02x** |
+//!
+//! The last row is the point. The noise floor is 2%, and nothing clears it.
+//! All three produce bit-identical output, so there is not even a rounding
+//! trade to weigh.
+//!
+//! The unrolling that wins in `matmul` and in `attention::dot_product` does
+//! nothing here because the loop is not dependency-bound: consecutive `exp`
+//! calls are already independent and the machine already overlaps them. At
+//! ~236 M elements/s against ~315 M `exp`/s standalone, this loop is running at
+//! the polynomial's throughput with the max pass, the store, the sum and the
+//! normalize pass on top. There is no stall to remove.
+//!
+//! **A warning about how this was nearly mismeasured.** The first run of the
+//! same benchmark reported the four-chain version at **1.22x**. It was not.
+//! Adding two more variants to the same binary made the *baseline* 21% faster,
+//! from 195 to 236 M elem/s, purely from inlining and code layout. The A/B was
+//! honest and the answer was still wrong, because the baseline moved. Measuring
+//! the baseline against itself in the same binary is what caught it, and it is
+//! the only reason this reads "refuted" rather than "1.22x, shipped".
 
 use crate::error::TensorError;
 use crate::math::exp_f32;
