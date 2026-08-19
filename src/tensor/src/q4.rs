@@ -141,7 +141,7 @@ impl<'a> Q4Weights<'a> {
 /// Written as a straight loop over the packed bytes so the compiler can see
 /// sixteen independent lane computations. This is the work `Q4_0` adds and
 /// `Q8_0` does not pay, so it is the whole of the trade.
-#[inline]
+#[inline(always)]
 pub(crate) fn unpack_block(packed: &[u8], out: &mut [u8; Q4_0_BLOCK]) {
     for (index, byte) in packed.iter().enumerate().take(Q4_0_BLOCK_BYTES) {
         // Sign-extend each nibble from four bits: shift into the top of a byte

@@ -160,11 +160,6 @@ impl<'a> Model<'a> {
                     start,
                     token_count: tokens.len(),
                 },
-                // COVERAGE-EXEMPT: the `?` is the error arm of a layer that
-                // cannot refuse here -- `Model::new` validated the config and
-                // every slice handed down is sized from that same validated
-                // geometry. It stays so that a future shape reaching this path
-                // unvalidated cannot be ignored.
             )?;
         }
         self.project_logits(dispatch, workspace, tokens.len(), logits)?;
@@ -356,7 +351,6 @@ impl<'a> Model<'a> {
             workspace.quant_scratch,
             dispatch,
             prefix_mut(workspace.query, checked_product(token_count, query_width)?)?,
-            // COVERAGE-EXEMPT: the tensor kernels cannot refuse here: Model::new validated the config, and every slice handed to them is sized from that same validated geometry. The `?` is what keeps a kernel refusal from being ignored if a future shape reaches this path unvalidated.
         )?;
         let shape = self.projection_shape(token_count, self.config.model_width, key_value_width);
         let key_span = checked_product(token_count, key_value_width)?;

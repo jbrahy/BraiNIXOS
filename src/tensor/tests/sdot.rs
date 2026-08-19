@@ -6,8 +6,8 @@
 //! checked rather than hoped for.
 
 use brainix_tensor::{
-    matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations, MatMulShape,
-    Q8Weights,
+    matmul_q4_0_q8a, matmul_q4_0_q8a_rows, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows,
+    quantize_activations, quantize_q4_0, MatMulShape, Q4Weights, Q8Weights,
 };
 
 /// Deterministic pseudo-random floats in a range typical of activations.
@@ -191,4 +191,121 @@ fn a_row_range_past_the_end_denies() {
     let mut y = vec![0.0f32; 8];
     // Starts inside, ends outside.
     assert!(matmul_q8_0_q8a_rows(shape, &weights, &quantized, 60, 8, &mut y).is_err());
+}
+
+#[test]
+fn splitting_the_q4_output_rows_reproduces_the_whole() {
+    // The same property as `splitting_the_output_rows_reproduces_the_whole`,
+    // for `Q4_0`. It matters more here, not less: the row-split kernel is the
+    // only reason `Q4_0` can reach the bandwidth-bound regime where its fewer
+    // bytes are worth anything, so it is the kernel a decode will actually run
+    // once the dispatcher has workers.
+    //
+    // Bit-for-bit again, and for the same reason: splitting changes who does
+    // the work, not the arithmetic. A tolerance here would hide precisely the
+    // bug this is for -- an off-by-one in the row offset, which perturbs a few
+    // outputs by a little and passes any bound loose enough to allow rounding.
+    const N_OUT: usize = 96;
+    const N_IN: usize = 128;
+
+    // Build the weights by quantizing known values, so the payload is a real
+    // Q4_0 encoding rather than bytes that merely parse.
+    let dense = values(N_OUT * N_IN, 23);
+    let mut payload = vec![0u8; Q4Weights::derived_payload_len(N_OUT, N_IN).expect("shape")];
+    quantize_q4_0(N_OUT, N_IN, &dense, &mut payload).expect("quantize weights");
+    let weights = Q4Weights::new(&payload, N_OUT, N_IN).expect("weights");
+
+    let x = values(N_IN, 7);
+    let shape = MatMulShape {
+        n_tokens: 1,
+        n_in: N_IN,
+        n_out: N_OUT,
+    };
+    let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, N_IN).expect("len")];
+    quantize_activations(1, N_IN, &x, &mut scratch).expect("quantize activations");
+    let quantized = Q8Weights::new(&scratch, 1, N_IN).expect("view");
+
+    let mut whole = vec![0.0f32; N_OUT];
+    matmul_q4_0_q8a(shape, &weights, &quantized, &mut whole).expect("whole");
+
+    for workers in [1usize, 2, 3, 4, 6] {
+        let per = N_OUT / workers;
+        let mut split = vec![0.0f32; N_OUT];
+        for (index, chunk) in split.chunks_mut(per).enumerate() {
+            matmul_q4_0_q8a_rows(shape, &weights, &quantized, index * per, chunk.len(), chunk)
+                .expect("range");
+        }
+        assert_eq!(split, whole, "{workers} workers disagreed with one call");
+    }
+}
+
+#[test]
+fn a_q4_row_range_past_the_end_denies() {
+    const N_OUT: usize = 64;
+    const N_IN: usize = 64;
+    let dense = values(N_OUT * N_IN, 31);
+    let mut payload = vec![0u8; Q4Weights::derived_payload_len(N_OUT, N_IN).expect("shape")];
+    quantize_q4_0(N_OUT, N_IN, &dense, &mut payload).expect("quantize");
+    let weights = Q4Weights::new(&payload, N_OUT, N_IN).expect("weights");
+
+    let x = values(N_IN, 3);
+    let shape = MatMulShape {
+        n_tokens: 1,
+        n_in: N_IN,
+        n_out: N_OUT,
+    };
+    let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, N_IN).expect("len")];
+    quantize_activations(1, N_IN, &x, &mut scratch).expect("quantize");
+    let quantized = Q8Weights::new(&scratch, 1, N_IN).expect("view");
+
+    // One row past the end, and a count that wraps the addition. Both must be
+    // refused rather than read past the payload: this kernel is handed offsets
+    // computed by a dispatcher, which is exactly the code most likely to be
+    // wrong about them.
+    let mut out = vec![0.0f32; N_OUT];
+    assert!(matmul_q4_0_q8a_rows(shape, &weights, &quantized, N_OUT, 1, &mut out[..1]).is_err());
+    assert!(matmul_q4_0_q8a_rows(shape, &weights, &quantized, 1, N_OUT, &mut out).is_err());
+    assert!(
+        matmul_q4_0_q8a_rows(shape, &weights, &quantized, usize::MAX, 2, &mut out[..2]).is_err()
+    );
+    // A zero count is a caller error rather than a no-op, matching Q8_0.
+    assert!(matmul_q4_0_q8a_rows(shape, &weights, &quantized, 0, 0, &mut []).is_err());
+
+    // Each of the three shape agreements the kernel checks, disagreed one at a
+    // time. A dispatcher passes this function a shape and a view that were
+    // derived separately, so "they describe the same matrix" is an assumption
+    // worth refusing on rather than indexing on.
+    let wrong_n_out = MatMulShape {
+        n_out: N_OUT + 32,
+        ..shape
+    };
+    assert!(
+        matmul_q4_0_q8a_rows(wrong_n_out, &weights, &quantized, 0, 1, &mut out[..1]).is_err(),
+        "a shape claiming more output rows than the weights have must be refused"
+    );
+
+    let wrong_n_in = MatMulShape {
+        n_in: N_IN + 32,
+        ..shape
+    };
+    assert!(
+        matmul_q4_0_q8a_rows(wrong_n_in, &weights, &quantized, 0, 1, &mut out[..1]).is_err(),
+        "a reduction width the weights do not have must be refused"
+    );
+
+    let wrong_tokens = MatMulShape {
+        n_tokens: 2,
+        ..shape
+    };
+    assert!(
+        matmul_q4_0_q8a_rows(wrong_tokens, &weights, &quantized, 0, 1, &mut out[..2]).is_err(),
+        "more tokens than the activation view holds must be refused"
+    );
+
+    // And the destination length, which is the one a chunking bug gets wrong:
+    // n_tokens x row_count, not n_tokens x n_out.
+    assert!(
+        matmul_q4_0_q8a_rows(shape, &weights, &quantized, 0, 4, &mut out[..3]).is_err(),
+        "y must be exactly n_tokens x row_count"
+    );
 }

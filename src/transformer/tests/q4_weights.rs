@@ -37,7 +37,7 @@ mod common;
 
 use brainix_tensor::{quantize_q4_0, Q4Weights, RopePairing};
 use brainix_transformer::{
-    quantized_activation_bytes, session_cache_floats, workspace_floats, CacheGeometry,
+    quantized_activation_bytes, session_cache_floats, workspace_floats, CacheGeometry, Dispatch,
     KeyValueArena, LayerWeights, LogitProjection, Model, ModelWeights, Serial, WeightMatrix,
     Workspace,
 };
@@ -122,6 +122,43 @@ fn q4_layers<'a>(fixture: &'a Fixture, payloads: &'a [Vec<u8>]) -> Vec<LayerWeig
 /// `scratch_bytes` of zero is the case with no room for quantized activations,
 /// which `Q4_0` must refuse rather than compute another way.
 fn logits_for(quantized_to_four_bits: bool, scratch_bytes: usize) -> Result<Vec<f32>, ()> {
+    logits_under(&Serial, quantized_to_four_bits, scratch_bytes)
+}
+
+/// A dispatcher that really splits, running the chunks in this thread.
+///
+/// Sequential on purpose, as in `split_dispatch.rs`: the question is whether
+/// the DECOMPOSITION is right -- chunk boundaries, row offsets, threshold --
+/// and threads would add scheduling to a test about arithmetic.
+struct Chunked {
+    chunks: usize,
+    minimum_bytes: usize,
+}
+
+impl Dispatch for Chunked {
+    fn chunks(&self) -> usize {
+        self.chunks
+    }
+
+    fn minimum_split_bytes(&self) -> usize {
+        self.minimum_bytes
+    }
+
+    fn for_each_chunk<F>(&self, out: &mut [f32], chunk_len: usize, body: F)
+    where
+        F: Fn(usize, &mut [f32]) + Sync,
+    {
+        for (index, chunk) in out.chunks_mut(chunk_len.max(1)).enumerate() {
+            body(index, chunk);
+        }
+    }
+}
+
+fn logits_under<D: Dispatch>(
+    dispatch: &D,
+    quantized_to_four_bits: bool,
+    scratch_bytes: usize,
+) -> Result<Vec<f32>, ()> {
     let fixture = Fixture::new(common::fixture_config(RopePairing::HalfSplit), 0x0451_0451);
     let config = fixture.config;
 
@@ -157,7 +194,7 @@ fn logits_for(quantized_to_four_bits: bool, scratch_bytes: usize) -> Result<Vec<
 
     let mut logits = vec![0.0_f32; config.vocabulary_size];
     model
-        .forward(&Serial, &mut workspace, &mut cache, &[2_u32], &mut logits)
+        .forward(dispatch, &mut workspace, &mut cache, &[2_u32], &mut logits)
         .map_err(|_| ())?;
     Ok(logits)
 }
@@ -233,4 +270,58 @@ fn four_bit_weights_refuse_when_there_is_no_room_to_quantize_activations() {
         logits_for(false, 0).is_ok(),
         "Q8_0 falls back to the f32-activation kernel and still answers"
     );
+}
+
+#[test]
+fn splitting_four_bit_output_rows_reproduces_the_serial_answer() {
+    // The Q4_0 row-split path, which is the only way Q4_0 reaches the
+    // bandwidth-bound regime where its fewer bytes are worth anything. Without
+    // it, every Q4_0 projection runs on the calling core however many workers
+    // are idle -- and measured that way Q4_0 is 0.78x of Q8_0. With it, the two
+    // are level at 227.6 against 229.0 tok/s, for a model 1.67x smaller.
+    //
+    // Equality, not a tolerance: worker k computes its own output rows from all
+    // of the activations, so the decomposition is exact. A tolerance would hide
+    // an off-by-one in the row offset, which perturbs a few outputs slightly
+    // and passes any bound loose enough to allow rounding.
+    let config = common::fixture_config(RopePairing::HalfSplit);
+    let scratch = quantized_activation_bytes(&config, MAXIMUM_BATCH).unwrap();
+    let serial = logits_for(true, scratch).expect("Q4_0 runs serially");
+
+    for chunks in [2_usize, 3, 4, 8] {
+        let split = logits_under(
+            &Chunked {
+                chunks,
+                // Zero threshold so this small fixture takes the branch at all.
+                minimum_bytes: 0,
+            },
+            true,
+            scratch,
+        )
+        .expect("Q4_0 runs split");
+        assert_eq!(
+            split, serial,
+            "{chunks} chunks disagreed with one, and a row split is exact"
+        );
+    }
+}
+
+#[test]
+fn four_bit_work_below_the_threshold_stays_on_the_calling_core() {
+    // The threshold is a performance knob and never a correctness one. A
+    // ceiling nothing can exceed skips the split branch entirely, and the
+    // answer must be identical to the serial one.
+    let config = common::fixture_config(RopePairing::HalfSplit);
+    let scratch = quantized_activation_bytes(&config, MAXIMUM_BATCH).unwrap();
+    let serial = logits_for(true, scratch).expect("serial");
+    let unsplit = logits_under(
+        &Chunked {
+            chunks: 4,
+            minimum_bytes: usize::MAX,
+        },
+        true,
+        scratch,
+    )
+    .expect("unsplit");
+    assert_eq!(unsplit, serial);
 }

@@ -718,6 +718,102 @@ pub fn matmul_q8_0_q8a_rows(
     Ok(())
 }
 
+/// `y = W xᵀ` for the output rows `row_start .. row_start + row_count`.
+///
+/// The `Q4_0` counterpart of [`matmul_q8_0_q8a_rows`], and the reason `Q4_0`
+/// can be worth anything on this machine at all.
+///
+/// # Why this had to exist before `Q4_0` could be judged
+///
+/// `Q4_0` moves 1.80x fewer bytes than `Q8_0` and pays for it in arithmetic:
+/// every nibble is unpacked to an `i8` before `SDOT` can touch it. That trade
+/// wins only when the caller is short of bandwidth rather than short of
+/// compute.
+///
+/// Without this function it could never be short of bandwidth. The dispatcher
+/// splits a projection by output rows, so a kernel with no row-split form runs
+/// on the calling core however many workers are idle — which pins `Q4_0` in
+/// the compute-bound regime, exactly where its own module note says it loses.
+/// Measured before this existed: **0.82x of `Q8_0` on one core and 0.78x
+/// pooled**, on a model that had shrunk from 172.5 MB to 103.0 MB.
+///
+/// # Bit-for-bit with the whole-output form
+///
+/// Same requirement as the `Q8_0` pair, for the same reason: the split and
+/// unsplit paths must agree exactly, so `splitting_the_q4_output_rows_
+/// reproduces_the_whole` compares with `assert_eq!` rather than a tolerance.
+/// The inner loop below is therefore a copy of [`matmul_q4_0_q8a`]'s and must
+/// stay one — changing the association of a single `f32` sum in one and not
+/// the other breaks that test, which is what it is for.
+///
+/// # Errors
+///
+/// [`TensorError::ZeroDimension`], [`TensorError::ShapeMismatch`] if the row
+/// range leaves the weight matrix or `y` is not `n_tokens × row_count`, or
+/// [`TensorError::DimensionOverflow`].
+pub fn matmul_q4_0_q8a_rows(
+    shape: MatMulShape,
+    weights: &crate::q4::Q4Weights<'_>,
+    activations: &Q8Weights<'_>,
+    row_start: usize,
+    row_count: usize,
+    y: &mut [f32],
+) -> Result<(), TensorError> {
+    if shape.n_tokens == 0 || shape.n_in == 0 || row_count == 0 {
+        return Err(TensorError::ZeroDimension);
+    }
+    let row_end = row_start
+        .checked_add(row_count)
+        .ok_or(TensorError::DimensionOverflow)?;
+    if row_end > weights.n_out() || shape.n_out != weights.n_out() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    if shape.n_in != weights.n_in() || shape.n_in != activations.n_in() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    if shape.n_tokens != activations.n_out() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    let required_y = shape
+        .n_tokens
+        .checked_mul(row_count)
+        .ok_or(TensorError::DimensionOverflow)?;
+    if y.len() != required_y {
+        return Err(TensorError::ShapeMismatch);
+    }
+
+    let mut unpacked = [0u8; Q8_0_BLOCK];
+    for (local_index, (weight_scales, weight_packed)) in
+        weights.rows().skip(row_start).take(row_count).enumerate()
+    {
+        for (token_index, (x_scales, x_quants)) in activations.rows().enumerate() {
+            let mut acc = 0.0_f32;
+            for (((weight_scale, packed_block), x_scale), x_block) in weight_scales
+                .chunks_exact(SCALE_BYTES)
+                .zip(weight_packed.chunks_exact(Q8_0_BLOCK / 2))
+                .zip(x_scales.chunks_exact(SCALE_BYTES))
+                .zip(x_quants.chunks_exact(Q8_0_BLOCK))
+            {
+                let ws = read_f32_le(weight_scale).ok_or(TensorError::MalformedPayload)?;
+                let xs = read_f32_le(x_scale).ok_or(TensorError::MalformedPayload)?;
+                crate::q4::unpack_block(packed_block, &mut unpacked);
+                acc += ws * xs * block_dot_i8(&unpacked, x_block) as f32;
+            }
+            let slot = y
+                .get_mut(
+                    token_index
+                        .checked_mul(row_count)
+                        .ok_or(TensorError::DimensionOverflow)?
+                        .checked_add(local_index)
+                        .ok_or(TensorError::DimensionOverflow)?,
+                )
+                .ok_or(TensorError::ShapeMismatch)?;
+            *slot = acc;
+        }
+    }
+    Ok(())
+}
+
 /// `y = W xᵀ` with `Q4_0` weights and `Q8_0` activations.
 ///
 /// Each 16-byte weight block is unpacked to 32 signed bytes and then fed to the

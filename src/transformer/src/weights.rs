@@ -42,8 +42,8 @@
 
 use crate::dispatch::{chunk_len, Dispatch};
 use brainix_tensor::{
-    matmul_f32, matmul_q4_0_q8a, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows,
-    quantize_activations, MatMulShape, Q4Weights, Q8Weights,
+    matmul_f32, matmul_q4_0_q8a, matmul_q4_0_q8a_rows, matmul_q8_0, matmul_q8_0_q8a,
+    matmul_q8_0_q8a_rows, quantize_activations, MatMulShape, Q4Weights, Q8Weights,
 };
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -224,10 +224,42 @@ impl WeightMatrix<'_> {
                 };
                 quantize_activations(shape.n_tokens, shape.n_in, activations, scratch)?;
                 let view = Q8Weights::new(scratch, shape.n_tokens, shape.n_in)?;
-                // Serial: there is no row-split `Q4_0` kernel yet, so the
-                // dispatcher is unused on this path and every projection runs
-                // on the calling core.
-                matmul_q4_0_q8a(shape, weights, &view, destination)?;
+                // `Q4_0` costs 0.625 bytes per element against `Q8_0`'s 1.125,
+                // so the same output row is worth less to split. Compared
+                // against the dispatcher's threshold on the bytes THIS dtype
+                // moves, not on the ones `Q8_0` would have moved.
+                let weight_bytes = shape.n_out.saturating_mul(shape.n_in).saturating_mul(5) / 8;
+                let worth_splitting = weight_bytes >= dispatch.minimum_split_bytes();
+                if shape.n_tokens == 1 && dispatch.chunks() > 1 && worth_splitting {
+                    let width = chunk_len(shape.n_out, dispatch.chunks())?;
+                    // As the `Q8_0` split above: a `Fn` closure cannot carry a
+                    // `Result` out, and every argument here is derived from
+                    // shapes already validated, so a refusal is a bug in the
+                    // split arithmetic rather than a runtime condition.
+                    let failed = AtomicBool::new(false);
+                    dispatch.for_each_chunk(destination, width, |index, chunk| {
+                        let start = index.saturating_mul(width);
+                        // Unreachable for the same reason the `Q8_0` arm's
+                        // refusal is: every argument comes from a validated
+                        // shape and a `chunk_len` width. The decomposition
+                        // itself IS covered -- q4_weights.rs asserts the split
+                        // path agrees with `Serial` bit for bit -- and only
+                        // this refusal cannot be provoked.
+                        // COVERAGE-EXEMPT: see the note above.
+                        if matmul_q4_0_q8a_rows(shape, weights, &view, start, chunk.len(), chunk)
+                            .is_err()
+                        {
+                            // COVERAGE-EXEMPT: see the note above.
+                            failed.store(true, Ordering::Relaxed);
+                        }
+                    });
+                    if failed.load(Ordering::Relaxed) {
+                        // COVERAGE-EXEMPT: as above.
+                        return Err(TransformerError::WeightShapeMismatch);
+                    }
+                } else {
+                    matmul_q4_0_q8a(shape, weights, &view, destination)?;
+                }
             }
         }
         Ok(())
