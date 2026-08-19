@@ -114,7 +114,6 @@ impl<'a> Node<'a> {
             .checked_add(1)
             .ok_or(AdtError::DepthLimitExceeded)?;
         if header.child_count > 0 && child_depth > crate::MAX_TREE_DEPTH {
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             return Err(AdtError::DepthLimitExceeded);
         }
         Ok(ChildIter {
@@ -188,8 +187,16 @@ impl<'a> Node<'a> {
         }
 
         let name = property.as_c_str()?;
+        // Unreachable by arithmetic, not by the parse-time contract the rest
+        // of this file cites. The check above bounds the VALUE at
+        // `MAX_NODE_VALUE_LEN` (64) and `as_c_str` needs a NUL inside it, so
+        // the longest decodable name is 63 -- exactly `MAX_NODE_NAME_LEN`,
+        // never more. The guard stays because it is the one that still holds
+        // if those two constants are ever set independently, and today they
+        // are one apart by coincidence rather than by a stated rule.
+        //
+        // COVERAGE-EXEMPT: see the note above.
         if name.len() > MAX_NODE_NAME_LEN {
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             return Err(AdtError::NodeNameTooLong);
         }
         Ok(name)
@@ -238,7 +245,6 @@ impl<'a> Node<'a> {
             .ok_or(AdtError::MissingCellCounts)?
             .as_u32()?;
         if value == 0 || value > 2 {
-            // COVERAGE-EXEMPT: #address-cells and #size-cells are validated by CellCounts::new when the tree is parsed, so a count outside 0..=2 never reaches here.
             return Err(AdtError::InvalidAddressCells);
         }
         Ok(value)
@@ -353,5 +359,146 @@ impl<'a> Iterator for ChildIter<'a> {
             }
         };
         Some(Ok(node))
+    }
+}
+
+/// Guards reached by constructing a cursor directly.
+///
+/// `Node::new` is `pub(crate)`, so from inside the crate a node can be built
+/// over bytes that `DeviceTree::parse` would never have produced. That is
+/// precisely the situation the fail-closed guards in this file exist for, and
+/// until now nothing stood there -- every one of them was exempt from the
+/// coverage gate on the grounds that a parsed tree cannot reach them, which is
+/// true and is also why they were never executed.
+///
+/// The builder writes into a fixed array rather than a `Vec`: this crate is
+/// `no_std` and stays that way in its own tests.
+#[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::expect_used
+)]
+mod tests {
+    use super::*;
+
+    /// A blob under construction, in a buffer big enough for these fixtures.
+    struct Blob {
+        bytes: [u8; 256],
+        len: usize,
+    }
+
+    impl Blob {
+        const fn new() -> Self {
+            Self {
+                bytes: [0u8; 256],
+                len: 0,
+            }
+        }
+
+        fn push(&mut self, bytes: &[u8]) {
+            for byte in bytes {
+                self.bytes[self.len] = *byte;
+                self.len += 1;
+            }
+        }
+
+        /// An 8-byte node header.
+        fn header(&mut self, properties: u32, children: u32) {
+            self.push(&properties.to_le_bytes());
+            self.push(&children.to_le_bytes());
+        }
+
+        /// One property: 32-byte NUL-padded name, LE length, value, pad to 4.
+        fn property(&mut self, name: &str, value: &[u8]) {
+            let start = self.len;
+            self.push(name.as_bytes());
+            while self.len - start < 32 {
+                self.push(&[0]);
+            }
+            self.push(&(value.len() as u32).to_le_bytes());
+            self.push(value);
+            while !(self.len - start).is_multiple_of(4) {
+                self.push(&[0]);
+            }
+        }
+
+        fn as_slice(&self) -> &[u8] {
+            &self.bytes[..self.len]
+        }
+    }
+
+    /// A node with a `name` and one child that has a `name`.
+    fn parent_with_one_child() -> Blob {
+        let mut blob = Blob::new();
+        blob.header(1, 1);
+        blob.property("name", b"deep\0");
+        blob.header(1, 0);
+        blob.property("name", b"leaf\0");
+        blob
+    }
+
+    #[test]
+    fn descending_past_the_depth_limit_is_refused_rather_than_followed() {
+        // A node that HAS children, sitting at the deepest level the format
+        // admits. Walking into them would make a path longer than
+        // `MAX_PATH_NODES`, which every fixed-size path buffer in this crate is
+        // sized from -- so the refusal is what keeps those buffers honest.
+        let blob = parent_with_one_child();
+        let at_limit = Node::new(blob.as_slice(), 0, crate::MAX_TREE_DEPTH);
+        assert_eq!(
+            at_limit.children().err(),
+            Some(AdtError::DepthLimitExceeded),
+            "a node at the depth limit must refuse to yield children"
+        );
+
+        // One shallower is fine, which is what makes the limit a limit rather
+        // than an off-by-one.
+        let below = Node::new(blob.as_slice(), 0, crate::MAX_TREE_DEPTH - 1);
+        assert!(below.children().is_ok());
+    }
+
+    #[test]
+    fn a_childless_node_at_the_limit_is_not_refused() {
+        // The guard is on `child_count > 0`, not on depth alone. A leaf at the
+        // limit is legal and its empty iterator must still be handed back --
+        // refusing here would make the deepest level of every tree unreadable.
+        let mut blob = Blob::new();
+        blob.header(1, 0);
+        blob.property("name", b"leaf\0");
+        let at_limit = Node::new(blob.as_slice(), 0, crate::MAX_TREE_DEPTH);
+        let mut children = at_limit.children().expect("a leaf adds no depth");
+        assert!(children.next().is_none());
+    }
+
+    #[test]
+    fn a_cell_count_outside_one_or_two_is_refused() {
+        // `#address-cells` is how many 32-bit words an address occupies. Zero
+        // means a `reg` entry has no address, and three or more would read past
+        // the fixed-size buffers `AddressRange` uses. `CellCounts::new` rejects
+        // both when a tree is parsed; this is the same rule at the accessor,
+        // where a cursor built by other means arrives.
+        for bad in [0u32, 3, 4, u32::MAX] {
+            let mut blob = Blob::new();
+            blob.header(2, 0);
+            blob.property("name", b"bus\0");
+            blob.property("#address-cells", &bad.to_le_bytes());
+            let node = Node::new(blob.as_slice(), 0, 0);
+            assert_eq!(
+                node.address_cells().err(),
+                Some(AdtError::InvalidAddressCells),
+                "#address-cells = {bad} must be refused"
+            );
+        }
+
+        // One and two are the only legal values, and both must pass.
+        for good in [1u32, 2] {
+            let mut blob = Blob::new();
+            blob.header(2, 0);
+            blob.property("name", b"bus\0");
+            blob.property("#address-cells", &good.to_le_bytes());
+            let node = Node::new(blob.as_slice(), 0, 0);
+            assert_eq!(node.address_cells(), Ok(good));
+        }
     }
 }
