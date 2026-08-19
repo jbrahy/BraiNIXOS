@@ -295,7 +295,6 @@ fn classify(name: &[u8], n_layers: u32) -> Option<Slot> {
 /// complete.
 fn parse_layer_index(digits: &[u8]) -> Option<u32> {
     if digits.is_empty() || digits.len() > MAX_INDEX_DIGITS {
-        // COVERAGE-EXEMPT: same as below: an overlong or empty digit run is caught as UnknownTensorName by the name matcher first.
         return None;
     }
     if digits.len() > 1 && digits.first() == Some(&b'0') {
@@ -305,10 +304,76 @@ fn parse_layer_index(digits: &[u8]) -> Option<u32> {
     for byte in digits {
         let digit = byte.checked_sub(b'0')?;
         if digit > 9 {
-            // COVERAGE-EXEMPT: parse_layer_index is only reached for a name whose shape already matched the layer pattern, and the table walk rejects a non-digit or overlong index as UnknownTensorName before this. Kept so the parser is total.
             return None;
         }
         value = value.checked_mul(10)?.checked_add(u32::from(digit))?;
     }
     Some(value)
+}
+
+/// `parse_layer_index` at its edges, which the table walk never presents.
+///
+/// # Why these were exempt
+///
+/// The two guards below carried the note that the name matcher rejects an
+/// empty, overlong or non-digit index as `UnknownTensorName` first. That is
+/// true of every path through `WeightBlob::parse`, and it is why nothing had
+/// ever executed them.
+///
+/// It is also a statement about the CALLER. This function is a parser: it is
+/// total or it is not, independently of who calls it today, and the reason it
+/// is written to be total is that the caller's filtering is exactly the sort of
+/// thing a later refactor moves. A private function is reachable from inside
+/// the crate, so the edges can simply be presented to it.
+#[cfg(test)]
+mod tests {
+    use super::{parse_layer_index, MAX_INDEX_DIGITS};
+
+    #[test]
+    fn the_canonical_spellings_parse() {
+        assert_eq!(parse_layer_index(b"0"), Some(0));
+        assert_eq!(parse_layer_index(b"7"), Some(7));
+        assert_eq!(parse_layer_index(b"42"), Some(42));
+        // Three digits is the limit and must still parse: a 512-layer model is
+        // not exotic, and an off-by-one here would refuse `999`.
+        assert_eq!(parse_layer_index(b"999"), Some(999));
+    }
+
+    #[test]
+    fn an_empty_or_overlong_index_is_refused() {
+        assert_eq!(parse_layer_index(b""), None);
+
+        // One past the limit. `1000` is four digits, so a model with more than
+        // 1000 layers cannot name its tensors -- which is a format bound, not
+        // an oversight, and this pins it.
+        assert_eq!(parse_layer_index(b"1000"), None);
+        let overlong = [b'9'; MAX_INDEX_DIGITS + 1];
+        assert_eq!(parse_layer_index(&overlong), None);
+    }
+
+    #[test]
+    fn a_non_digit_is_refused_rather_than_folded_into_a_number() {
+        // The subtraction below `b'0'` wraps for anything under it and lands
+        // above 9 for anything over, so both directions must be refused. A
+        // parser that accepted `:` as 10 would give one layer two names.
+        for bad in [&b"1a"[..], b"a1", b"1:", b":", b"/", b"1/1", b"+1", b"-1"] {
+            assert_eq!(
+                parse_layer_index(bad),
+                None,
+                "{bad:?} is not a canonical index"
+            );
+        }
+    }
+
+    #[test]
+    fn a_leading_zero_is_not_a_second_spelling_of_the_same_layer() {
+        // The whole reason the canonical spelling is mandatory: `01` and `1`
+        // naming one layer would make the duplicate check incomplete, and the
+        // duplicate check is what stops two records claiming one slot.
+        assert_eq!(parse_layer_index(b"01"), None);
+        assert_eq!(parse_layer_index(b"001"), None);
+        assert_eq!(parse_layer_index(b"00"), None);
+        // But a bare zero IS canonical -- layer 0 exists.
+        assert_eq!(parse_layer_index(b"0"), Some(0));
+    }
 }
