@@ -127,7 +127,10 @@ fn verify_content(record: &Record<'_>, payload: &[u8]) -> Result<(), Bxw1Error> 
             }
             Ok(())
         }
-        Dtype::Q8 => {
+        // Both quantized dtypes have the same plane structure and the same
+        // scale rule; only the quant plane's width differs, and the quant plane
+        // is not validated either way.
+        Dtype::Q8 | Dtype::Q4 => {
             let (scale_len, quant_off) = q8_planes(record.elements)?;
             let scales = slice_at(payload, 0, scale_len).ok_or(Bxw1Error::ExtentPastBlob)?;
             for scale in scales.chunks_exact(F32_BYTES) {

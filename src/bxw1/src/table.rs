@@ -201,7 +201,10 @@ impl Shape {
         // Rule D8: no `Q8_0` block ever straddles a row boundary. The rule is
         // on the last dimension rather than on the element count because that
         // is what lets a per-row dot product decompose into whole blocks.
-        if dtype == Dtype::Q8 && !last.is_multiple_of(BXW1_Q8_0_BLOCK) {
+        // `Q4_0` uses the same 32-element block, so one rule covers both and a
+        // model can be requantized between them without reshaping.
+        let blocked = matches!(dtype, Dtype::Q8 | Dtype::Q4);
+        if blocked && !last.is_multiple_of(BXW1_Q8_0_BLOCK) {
             return Err(Bxw1Error::LastDimensionNotBlockAligned);
         }
 
@@ -265,15 +268,21 @@ fn derive_data_len(dtype: Dtype, elements: u64) -> Result<u64, Bxw1Error> {
         Dtype::F32 => elements
             .checked_mul(F32_BYTES)
             .ok_or(Bxw1Error::DerivedLengthOverflow),
-        Dtype::Q8 => {
+        Dtype::Q8 | Dtype::Q4 => {
             let blocks = elements
                 .checked_div(BXW1_Q8_0_BLOCK)
                 .ok_or(Bxw1Error::DerivedLengthOverflow)?;
             let scale_len = blocks
                 .checked_mul(SCALE_BYTES)
                 .ok_or(Bxw1Error::DerivedLengthOverflow)?;
+            // The only difference between the two: `Q8_0` stores one byte per
+            // weight, `Q4_0` two weights per byte.
+            let per_block = match dtype {
+                Dtype::Q4 => QUANT_BLOCK_BYTES / 2,
+                _ => QUANT_BLOCK_BYTES,
+            };
             let quant_len = blocks
-                .checked_mul(QUANT_BLOCK_BYTES)
+                .checked_mul(per_block)
                 .ok_or(Bxw1Error::DerivedLengthOverflow)?;
             round_up_to_align(scale_len)?
                 .checked_add(quant_len)
@@ -365,4 +374,49 @@ pub(crate) fn require_no_trailing_bytes(cursor: u64, header: &Header) -> Result<
         return Err(Bxw1Error::TrailingBytesAfterLastExtent);
     }
     Ok(())
+}
+
+/// Unit tests for the derivations, which the integration suite reaches only
+/// through a whole blob.
+///
+/// The allows mirror `tests/adversarial.rs`: the workspace lints are written
+/// for production code and correctly refuse `expect` and bare arithmetic
+/// there, but a test that cannot say `expect` says something longer and worse
+/// instead.
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::arithmetic_side_effects)]
+mod tests {
+    use super::*;
+
+    /// The whole point of `Q4_0`, in one assertion: 0.625 bytes per weight
+    /// against `Q8_0`'s 1.125.
+    ///
+    /// `derive_data_len` is what the loader uses to decide whether a record's
+    /// declared length is the only length it could legally have, so getting
+    /// this wrong is not a sizing bug -- it is an accepted blob whose extents
+    /// do not describe its contents.
+    #[test]
+    fn q4_derives_four_bits_a_weight_and_q8_derives_eight() {
+        // One 128-element row: 4 blocks of 32. Scales are 4 x 4 = 16 bytes,
+        // rounded up to the 128-byte alignment, then the quant plane.
+        let elements = 128;
+        let scales_padded = BXW1_ALIGN; // 16 bytes of scale, padded to 128
+
+        let q8 = derive_data_len(Dtype::Q8, elements).expect("q8 length");
+        let q4 = derive_data_len(Dtype::Q4, elements).expect("q4 length");
+
+        assert_eq!(q8, scales_padded + 128, "one byte per weight, plus scales");
+        assert_eq!(q4, scales_padded + 64, "two weights per byte, plus scales");
+
+        // The quant planes, with the shared scale padding removed, are exactly
+        // 2:1. Asserting the ratio rather than only the constants means a
+        // future change to the alignment cannot quietly break the relationship.
+        assert_eq!(q8 - scales_padded, 2 * (q4 - scales_padded));
+    }
+
+    #[test]
+    fn f32_is_four_bytes_a_weight_and_needs_no_block_alignment() {
+        assert_eq!(derive_data_len(Dtype::F32, 1).expect("f32"), 4);
+        assert_eq!(derive_data_len(Dtype::F32, 128).expect("f32"), 512);
+    }
 }

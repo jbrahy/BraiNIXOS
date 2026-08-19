@@ -195,3 +195,21 @@ fn rope_pairing_round_trips_through_its_bxw1_value() {
         RopePairing::BXW1_HALF_SPLIT
     );
 }
+
+/// `Q4_0`'s wire value, both directions.
+///
+/// The pair matters more than either half: a loader that decodes `0x0002` but
+/// re-encodes it as something else writes a blob it cannot read back.
+#[test]
+fn the_q4_dtype_round_trips_through_its_wire_value() {
+    assert_eq!(Dtype::from_bxw1(Dtype::BXW1_Q4_0), Ok(Dtype::Q4));
+    assert_eq!(Dtype::Q4.to_bxw1(), Dtype::BXW1_Q4_0);
+    assert_eq!(Dtype::BXW1_Q4_0, 0x0002);
+
+    // The other two are unchanged by the addition, which is the compatibility
+    // claim: a v1.0 blob written before Q4_0 existed still reads identically.
+    assert_eq!(Dtype::from_bxw1(0x0000), Ok(Dtype::F32));
+    assert_eq!(Dtype::from_bxw1(0x0001), Ok(Dtype::Q8));
+    assert_eq!(Dtype::F32.to_bxw1(), 0x0000);
+    assert_eq!(Dtype::Q8.to_bxw1(), 0x0001);
+}

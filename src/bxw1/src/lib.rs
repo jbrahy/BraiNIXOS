@@ -151,6 +151,11 @@ pub(crate) const BXW1_ALIGN_MASK: u64 = 127;
 /// Elements per `Q8_0` block.
 pub const BXW1_Q8_0_BLOCK: u64 = 32;
 
+/// Elements per `Q4_0` block (§4.4). The same 32 as `Q8_0`, deliberately: one
+/// block-alignment rule (D8) covers both, and a model can be requantized
+/// between them without reshaping.
+pub const BXW1_Q4_0_BLOCK: u64 = 32;
+
 /// Hard maximum blob size: 22 GiB (§8.2).
 ///
 /// A token-rate floor as much as a memory ceiling: at the reference machine's
@@ -191,10 +196,10 @@ pub const BXW1_ARCH_DECODER_ROPE_GQA_SWIGLU: u32 = 1;
 
 /// A tensor's element type (§4).
 ///
-/// Exactly two, and the cost is stated in §4: there is no `f16`, no `bf16`,
-/// and no `Q4`/`Q5`/`Q6`. A model that would fit at 4-bit and does not fit at
-/// 8-bit cannot be served at all — adding a dtype is a format version bump,
-/// not a flag.
+/// Three, and the cost of each is stated in §4: there is no `f16`, no `bf16`,
+/// and no `Q5`/`Q6`. Adding a dtype is a format version bump, not a flag, and
+/// the note under [`Dtype::Q4`] records how that was handled when `Q4_0` was
+/// added on 2026-08-19.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dtype {
     /// IEEE-754 binary32, little-endian, one value per element (`0x0000`).
@@ -205,6 +210,33 @@ pub enum Dtype {
     /// an underscore-separated digit group; the format's name for it is
     /// `Q8_0` everywhere else.
     Q8,
+    /// `Q4_0`: split-plane, 32-element blocks, two weights per byte (`0x0002`).
+    ///
+    /// **0.625 bytes per weight against `Q8_0`'s 1.125**, so 1.80x fewer bytes
+    /// moved. `NORTH_STAR.md` ranks this first among in-bounds performance work
+    /// — *"Q8 first, lower precision where quality permits"* — because it
+    /// divides the bandwidth-bound ceiling directly, and the ceiling is where
+    /// the matmul now sits: four workers reach 116.5 GB/s of a measured
+    /// ~120 GB/s.
+    ///
+    /// # Why this did not bump the version, which needs saying
+    ///
+    /// The header's `version_major` and `version_minor` are matched **exactly**
+    /// (§3.1), not negotiated. So a minor bump would make every existing v1.0
+    /// blob unreadable by this loader — the opposite of what a compatible
+    /// addition should cost.
+    ///
+    /// The `dtype` field is already the discriminator, and it already fails
+    /// closed: [`Dtype::from_bxw1`] refuses an unrecognized value with
+    /// [`Bxw1Error::UnknownDtype`]. So a reader built before `Q4_0` existed
+    /// **rejects** a `Q4_0` blob rather than misreading it, which is exactly the
+    /// property a version bump would have been protecting. Old readers refuse
+    /// new files; new readers accept old files. That is the compatibility a
+    /// minor version normally buys, obtained without breaking every blob in
+    /// existence.
+    ///
+    /// Named `Q4` for the same reason `Q8` is.
+    Q4,
 }
 
 impl Dtype {
@@ -213,6 +245,9 @@ impl Dtype {
 
     /// BXW1 `dtype` value for [`Dtype::Q8`].
     pub const BXW1_Q8_0: u16 = 0x0001;
+
+    /// BXW1 `dtype` value for [`Dtype::Q4`].
+    pub const BXW1_Q4_0: u16 = 0x0002;
 
     /// Decodes a record's `dtype` field (rule D1).
     ///
@@ -223,6 +258,7 @@ impl Dtype {
         match value {
             Self::BXW1_F32 => Ok(Self::F32),
             Self::BXW1_Q8_0 => Ok(Self::Q8),
+            Self::BXW1_Q4_0 => Ok(Self::Q4),
             _ => Err(Bxw1Error::UnknownDtype),
         }
     }
@@ -233,6 +269,7 @@ impl Dtype {
         match self {
             Self::F32 => Self::BXW1_F32,
             Self::Q8 => Self::BXW1_Q8_0,
+            Self::Q4 => Self::BXW1_Q4_0,
         }
     }
 }

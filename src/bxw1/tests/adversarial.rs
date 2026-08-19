@@ -680,10 +680,29 @@ fn a_layer_index_with_a_leading_zero_denies() {
 
 #[test]
 fn an_unknown_dtype_denies() {
+    // 3, not 2. 2 was unknown until `Q4_0` was added on 2026-08-19, and this
+    // test failing is how the addition announced itself -- which is the useful
+    // behaviour: a dtype cannot be added without a test noticing.
     let mut blob = valid_blob();
-    blob.patch_u16(blob.record_field(1, record::DTYPE), 2);
+    blob.patch_u16(blob.record_field(1, record::DTYPE), 3);
     blob.reseal_table();
     assert_eq!(blob.error(), Bxw1Error::UnknownDtype);
+}
+
+#[test]
+fn every_unassigned_dtype_above_the_last_one_denies() {
+    // The boundary and a spread above it, so a future addition trips this the
+    // same way rather than quietly widening what the loader accepts.
+    for value in [3u16, 4, 0x00ff, 0x8000, 0xffff] {
+        let mut blob = valid_blob();
+        blob.patch_u16(blob.record_field(1, record::DTYPE), value);
+        blob.reseal_table();
+        assert_eq!(
+            blob.error(),
+            Bxw1Error::UnknownDtype,
+            "dtype {value:#06x} is not assigned and must be refused"
+        );
+    }
 }
 
 #[test]
