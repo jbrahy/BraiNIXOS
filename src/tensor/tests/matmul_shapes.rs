@@ -378,3 +378,66 @@ fn the_row_split_kernel_denies_every_disagreeing_shape() {
     )
     .is_err());
 }
+
+/// An odd number of blocks, which exercises the two-block unroll's remainder.
+///
+/// Both `Q8_0` kernels process two 32-element blocks per iteration and handle a
+/// leftover block in a tail loop. Every other test in this crate uses a width
+/// that is an even number of blocks -- 64, 128, 256 -- so the tail never ran.
+/// A kernel that silently dropped the last block would have passed all of them.
+///
+/// 96 is three blocks: two through the unrolled body, one through the tail.
+#[test]
+fn an_odd_block_count_still_sums_every_block() {
+    const N_OUT: usize = 6;
+    const N_IN: usize = 96;
+    assert_eq!(N_IN / 32, 3, "the point of this test is the odd block");
+
+    let weight_values = values(N_OUT * N_IN, 77);
+    let mut wp = vec![0u8; Q8Weights::derived_payload_len(N_OUT, N_IN).expect("shape")];
+    quantize_activations(N_OUT, N_IN, &weight_values, &mut wp).expect("quantize");
+    let weights = Q8Weights::new(&wp, N_OUT, N_IN).expect("view");
+
+    let x = values(N_IN, 78);
+    let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, N_IN).expect("shape")];
+    quantize_activations(1, N_IN, &x, &mut scratch).expect("quantize");
+    let view = Q8Weights::new(&scratch, 1, N_IN).expect("view");
+
+    let shape = MatMulShape {
+        n_tokens: 1,
+        n_in: N_IN,
+        n_out: N_OUT,
+    };
+    let mut whole = vec![0.0f32; N_OUT];
+    matmul_q8_0_q8a(shape, &weights, &view, &mut whole).expect("matmul");
+
+    // Against the decoded payloads, so this checks the arithmetic and not just
+    // that two code paths agree with each other about a shared mistake.
+    let decoded_w = decode_q8(&wp, N_OUT, N_IN);
+    let decoded_x = decode_q8(&scratch, 1, N_IN);
+    for (out_index, produced) in whole.iter().enumerate() {
+        let expected: f32 = (0..N_IN)
+            .map(|k| decoded_w[out_index * N_IN + k] * decoded_x[k])
+            .sum();
+        assert!(
+            (produced - expected).abs() <= expected.abs().max(1.0) * 1e-4,
+            "row {out_index}: {produced} vs {expected}; the third block was \
+             dropped by the unroll's tail"
+        );
+    }
+
+    // And the row-split kernel's tail, which is a separate copy of the same
+    // loop and must agree bit for bit.
+    for workers in [2_usize, 3, 6] {
+        let width = N_OUT.div_ceil(workers);
+        let mut split = vec![0.0f32; N_OUT];
+        for (index, chunk) in split.chunks_mut(width).enumerate() {
+            let start = index * width;
+            matmul_q8_0_q8a_rows(shape, &weights, &view, start, chunk.len(), chunk).expect("rows");
+        }
+        assert_eq!(
+            split, whole,
+            "{workers} workers disagreed at an odd block count"
+        );
+    }
+}

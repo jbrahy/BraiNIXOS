@@ -533,16 +533,33 @@ pub fn matmul_q8_0_q8a(
     for (out_index, (weight_scales, weight_quants)) in weights.rows().enumerate() {
         for (token_index, (x_scales, x_quants)) in activations.rows().enumerate() {
             let mut acc = 0.0_f32;
-            for (((weight_scale, weight_block), x_scale), x_block) in weight_scales
+            let mut wsp = weight_scales.chunks_exact(SCALE_BYTES * 2);
+            let mut wqp = weight_quants.chunks_exact(Q8_0_BLOCK * 2);
+            let mut xsp = x_scales.chunks_exact(SCALE_BYTES * 2);
+            let mut xqp = x_quants.chunks_exact(Q8_0_BLOCK * 2);
+            for (((a, b), c), d) in wsp
+                .by_ref()
+                .zip(wqp.by_ref())
+                .zip(xsp.by_ref())
+                .zip(xqp.by_ref())
+            {
+                let ws0 = read_f32_le(&a[..SCALE_BYTES]).ok_or(TensorError::MalformedPayload)?;
+                let xs0 = read_f32_le(&c[..SCALE_BYTES]).ok_or(TensorError::MalformedPayload)?;
+                let ws1 = read_f32_le(&a[SCALE_BYTES..]).ok_or(TensorError::MalformedPayload)?;
+                let xs1 = read_f32_le(&c[SCALE_BYTES..]).ok_or(TensorError::MalformedPayload)?;
+                let d0 = block_dot_i8(&b[..Q8_0_BLOCK], &d[..Q8_0_BLOCK]) as f32;
+                let d1 = block_dot_i8(&b[Q8_0_BLOCK..], &d[Q8_0_BLOCK..]) as f32;
+                acc += ws0 * xs0 * d0 + ws1 * xs1 * d1;
+            }
+            for (((weight_scale, weight_block), x_scale), x_block) in wsp
+                .remainder()
                 .chunks_exact(SCALE_BYTES)
-                .zip(weight_quants.chunks_exact(Q8_0_BLOCK))
-                .zip(x_scales.chunks_exact(SCALE_BYTES))
-                .zip(x_quants.chunks_exact(Q8_0_BLOCK))
+                .zip(wqp.remainder().chunks_exact(Q8_0_BLOCK))
+                .zip(xsp.remainder().chunks_exact(SCALE_BYTES))
+                .zip(xqp.remainder().chunks_exact(Q8_0_BLOCK))
             {
                 let ws = read_f32_le(weight_scale).ok_or(TensorError::MalformedPayload)?;
                 let xs = read_f32_le(x_scale).ok_or(TensorError::MalformedPayload)?;
-                // One f32 multiply per 32 elements instead of per element: the
-                // integer sum is exact, so both scales apply once at the end.
                 acc += ws * xs * block_dot_i8(weight_block, x_block) as f32;
             }
             let row_start = token_index
@@ -623,12 +640,39 @@ pub fn matmul_q8_0_q8a_rows(
         weights.rows().skip(row_start).take(row_count).enumerate()
     {
         for (token_index, (x_scales, x_quants)) in activations.rows().enumerate() {
+            // Two blocks per iteration, identical to `matmul_q8_0_q8a`.
+            //
+            // It has to be identical, not merely equivalent: the two kernels
+            // are required to agree BIT FOR BIT, and
+            // `splitting_the_output_rows_reproduces_the_whole` asserts it with
+            // `assert_eq!`. Unrolling only one of them changes the association
+            // of one f32 sum and that test fails immediately -- which is
+            // exactly what it is for, and what caught this.
             let mut acc = 0.0_f32;
-            for (((weight_scale, weight_block), x_scale), x_block) in weight_scales
+            let mut wsp = weight_scales.chunks_exact(SCALE_BYTES * 2);
+            let mut wqp = weight_quants.chunks_exact(Q8_0_BLOCK * 2);
+            let mut xsp = x_scales.chunks_exact(SCALE_BYTES * 2);
+            let mut xqp = x_quants.chunks_exact(Q8_0_BLOCK * 2);
+            for (((a, b), c), d) in wsp
+                .by_ref()
+                .zip(wqp.by_ref())
+                .zip(xsp.by_ref())
+                .zip(xqp.by_ref())
+            {
+                let ws0 = read_f32_le(&a[..SCALE_BYTES]).ok_or(TensorError::MalformedPayload)?;
+                let xs0 = read_f32_le(&c[..SCALE_BYTES]).ok_or(TensorError::MalformedPayload)?;
+                let ws1 = read_f32_le(&a[SCALE_BYTES..]).ok_or(TensorError::MalformedPayload)?;
+                let xs1 = read_f32_le(&c[SCALE_BYTES..]).ok_or(TensorError::MalformedPayload)?;
+                let d0 = block_dot_i8(&b[..Q8_0_BLOCK], &d[..Q8_0_BLOCK]) as f32;
+                let d1 = block_dot_i8(&b[Q8_0_BLOCK..], &d[Q8_0_BLOCK..]) as f32;
+                acc += ws0 * xs0 * d0 + ws1 * xs1 * d1;
+            }
+            for (((weight_scale, weight_block), x_scale), x_block) in wsp
+                .remainder()
                 .chunks_exact(SCALE_BYTES)
-                .zip(weight_quants.chunks_exact(Q8_0_BLOCK))
-                .zip(x_scales.chunks_exact(SCALE_BYTES))
-                .zip(x_quants.chunks_exact(Q8_0_BLOCK))
+                .zip(wqp.remainder().chunks_exact(Q8_0_BLOCK))
+                .zip(xsp.remainder().chunks_exact(SCALE_BYTES))
+                .zip(xqp.remainder().chunks_exact(Q8_0_BLOCK))
             {
                 let ws = read_f32_le(weight_scale).ok_or(TensorError::MalformedPayload)?;
                 let xs = read_f32_le(x_scale).ok_or(TensorError::MalformedPayload)?;
