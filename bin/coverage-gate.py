@@ -81,6 +81,17 @@ CRATES = [
 #                   orphans. Cannot execute on a host, and has no future.
 IGNORE_REGEX = r"(.*-verify/)|(boot-stub-apple/src/main\.rs)|(kernel/src/(arch|net|ssh)/)"
 
+# Crates that legitimately measure ZERO executable lines, and why. Anything
+# else reporting zero is a crate the gate cannot see rather than a crate with
+# nothing to see, and those are not the same thing -- five crates spent an
+# unknown period scoring a clean zero because llvm-cov omits the filename header
+# for single-file crates and nothing here noticed.
+CODELESS_CRATES = {
+    "brainix-datapath": "a doc-only lib.rs; its integration tests exercise "
+                        "bsp, servd, inferd and transport-crypto, and their "
+                        "coverage is counted against those crates",
+}
+
 EXEMPT_MARKER = "COVERAGE-EXEMPT:"
 # A multi-line call expression puts the uncovered `)?;` several lines below the
 # marker that explains it, so the lookback has to span one call. Kept tight
@@ -124,6 +135,28 @@ def text_report(crate: str, target: str) -> str:
         capture_output=True, text=True, cwd=REPO_ROOT,
     )
     return result.stdout
+
+
+def measured_line_count(crate: str, target: str) -> int:
+    """Executable lines llvm-cov actually measured for `crate`.
+
+    Zero means one of two very different things: the crate has no executable
+    code, or the gate failed to measure it. Only the first is acceptable, and
+    only for crates named in `CODELESS_CRATES`.
+    """
+    result = subprocess.run(
+        ["cargo", "llvm-cov", "report", "--target", target, "--json",
+         "--ignore-filename-regex", IGNORE_REGEX, "-p", crate],
+        capture_output=True, text=True, cwd=REPO_ROOT,
+    )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return 0
+    return sum(
+        block.get("totals", {}).get("lines", {}).get("count", 0)
+        for block in payload.get("data", [])
+    )
 
 
 def sole_source_file(crate: str, target: str) -> str | None:
@@ -263,6 +296,7 @@ def main() -> int:
     unjustified: list[str] = []
     total_exempt = 0
     all_uncovered: set[tuple[str, int]] = set()
+    unmeasured: list[str] = []
 
     print(f"{'CRATE':<28} {'UNCOVERED':>10} {'EXEMPT':>8} {'UNJUSTIFIED':>12}")
     print("-" * 62)
@@ -284,6 +318,8 @@ def main() -> int:
             else:
                 rel = path.replace(str(REPO_ROOT) + "/", "")
                 bad.append(f"{rel}:{line_number}")
+        if measured_line_count(crate, host) == 0 and crate not in CODELESS_CRATES:
+            unmeasured.append(crate)
         total_exempt += exempt
         unjustified.extend(bad)
         flag = "" if not bad else "  <-- FAILS"
@@ -317,6 +353,20 @@ def main() -> int:
     if report_only:
         return 0
 
+    if unmeasured:
+        print("\nCOVERAGE GATE FAILED — these crates measured NOTHING.", file=sys.stderr)
+        print("Zero uncovered lines because zero lines were seen is not a pass.",
+              file=sys.stderr)
+        for crate in unmeasured:
+            print(f"  {crate}", file=sys.stderr)
+        print("\nEither the crate lost its tests, or the report did not generate.",
+              file=sys.stderr)
+        print("If it genuinely has no executable code, add it to CODELESS_CRATES",
+              file=sys.stderr)
+        print("with the reason, so the zero is a statement rather than a silence.",
+              file=sys.stderr)
+        return 1
+
     if unjustified:
         print("\nCOVERAGE GATE FAILED — these lines are uncovered and unexplained.",
               file=sys.stderr)
@@ -329,7 +379,8 @@ def main() -> int:
         return 1
 
     print(f"\ncoverage gate: PASS — 100% of reachable lines, "
-          f"{total_exempt} exempt with stated reasons")
+          f"{total_exempt} exempt with stated reasons, "
+          f"{len(CRATES) - len(CODELESS_CRATES)} crates measured")
     return 0
 
 

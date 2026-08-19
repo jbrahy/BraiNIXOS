@@ -119,3 +119,8 @@ brainix-disk.img
 # Recovery-mode admin credential staged on the mini, never in the repo.
 # bin/as-install-boot-object.sh reads it from the target's disk.
 .admin
+
+# Python bytecode caches. Two of these were tracked, and the coverage gate
+# regenerates one whenever it is imported as a module for testing.
+__pycache__/
+*.pyc
