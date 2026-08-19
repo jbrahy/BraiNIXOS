@@ -32,6 +32,7 @@ Usage:
     bin/coverage-gate.py            # enforce
     bin/coverage-gate.py --report   # print, enforce nothing
     bin/coverage-gate.py --list     # every unjustified line, with source
+    bin/coverage-gate.py --stale    # exemption markers that no longer excuse anything
 """
 
 from __future__ import annotations
@@ -179,6 +180,44 @@ def looks_stale(lines: list[tuple[str, int]]) -> bool:
     return False
 
 
+def stale_markers(uncovered: set[tuple[str, int]]) -> list[tuple[str, int, str]]:
+    """Exemption markers that no longer sit above any uncovered line.
+
+    An exemption is a licence to leave a line untested, and it is granted once
+    and then never looked at again. When the line it excused becomes covered --
+    a new test reaches it, or a refactor deletes the branch -- the marker stays
+    behind, and from then on it silently licenses whatever code drifts into its
+    eight-line window instead.
+
+    That is the failure mode this finds: not an uncovered line without a reason,
+    which the gate already refuses, but a reason without an uncovered line.
+    """
+    stale: list[tuple[str, int, str]] = []
+    for path in sorted({p for p, _ in uncovered} | set(_marker_files())):
+        try:
+            lines = (REPO_ROOT / path).read_text(errors="ignore").splitlines()
+        except OSError:
+            continue
+        for index, text in enumerate(lines, start=1):
+            if EXEMPT_MARKER not in text:
+                continue
+            # The marker excuses its own line and the EXEMPT_LOOKBACK lines
+            # below it -- the same window `is_exempt` searches, read forwards.
+            window = range(index, index + EXEMPT_LOOKBACK + 1)
+            if not any((path, number) in uncovered for number in window):
+                stale.append((path, index, text.strip()))
+    return stale
+
+
+def _marker_files() -> list[str]:
+    """Every tracked source file carrying an exemption marker."""
+    result = subprocess.run(
+        ["git", "grep", "-l", EXEMPT_MARKER, "--", "*.rs"],
+        capture_output=True, text=True, cwd=REPO_ROOT,
+    )
+    return [line for line in result.stdout.splitlines() if line]
+
+
 def main() -> int:
     report_only = "--report" in sys.argv
     target = subprocess.run(["rustc", "-vV"], capture_output=True, text=True).stdout
@@ -188,6 +227,7 @@ def main() -> int:
 
     unjustified: list[str] = []
     total_exempt = 0
+    all_uncovered: set[tuple[str, int]] = set()
 
     print(f"{'CRATE':<28} {'UNCOVERED':>10} {'EXEMPT':>8} {'UNJUSTIFIED':>12}")
     print("-" * 62)
@@ -202,6 +242,7 @@ def main() -> int:
         exempt = 0
         bad: list[str] = []
         for path, line_number in found:
+            all_uncovered.add((path.replace(str(REPO_ROOT) + "/", ""), line_number))
             reason = is_exempt(path, line_number)
             if reason:
                 exempt += 1
@@ -215,6 +256,21 @@ def main() -> int:
 
     print("-" * 62)
     print(f"{'TOTAL':<28} {'':>10} {total_exempt:>8} {len(unjustified):>12}")
+
+    if "--stale" in sys.argv:
+        stale = stale_markers(all_uncovered)
+        print()
+        if not stale:
+            print("no stale exemptions: every marker still excuses an uncovered line")
+            return 0
+        print(f"{len(stale)} exemption marker(s) no longer excuse anything:")
+        for path, number, text in stale:
+            print(f"  {path}:{number}")
+            print(f"      {text[:100]}")
+        print()
+        print("Each of these is a licence with nothing left to license. Delete it,")
+        print("or the next uncovered line that drifts into its window inherits it.")
+        return 1
 
     if "--list" in sys.argv:
         print()

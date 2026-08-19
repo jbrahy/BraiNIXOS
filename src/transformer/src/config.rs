@@ -226,7 +226,6 @@ fn maximum_position(length: usize) -> Result<u32, TransformerError> {
 pub(crate) const fn checked_product(left: usize, right: usize) -> Result<usize, TransformerError> {
     match left.checked_mul(right) {
         Some(product) => Ok(product),
-        // COVERAGE-EXEMPT: `checked_product`/`scale`/`extend` are const fns folded at COMPILE time to compute buffer sizes, so their refusal arms have no runtime execution for llvm-cov to observe. A shape that would overflow is rejected by ModelConfig::validate before any of these is reached at runtime.
         None => Err(TransformerError::DimensionOverflow),
     }
 }
@@ -252,10 +251,20 @@ pub(crate) const fn extend(
     match (accumulated, addend) {
         (Ok(value), Ok(other)) => match value.checked_add(other) {
             Some(total) => Ok(total),
-            // COVERAGE-EXEMPT: `checked_product`/`scale`/`extend` are const fns folded at COMPILE time to compute buffer sizes, so their refusal arms have no runtime execution for llvm-cov to observe. A shape that would overflow is rejected by ModelConfig::validate before any of these is reached at runtime.
+            // The reason that used to be here claimed every refusal arm in
+            // this file is unobservable because the functions are `const`.
+            // That was false, and `coverage-gate.py --stale` caught it:
+            // `checked_product`'s refusal arm runs twice under the current
+            // tests and `extend`'s propagating arm once. Both markers are
+            // gone. This arm is the only one genuinely unreached.
+            //
+            // COVERAGE-EXEMPT: reaching it needs two workspace extents whose
+            // SUM overflows `usize` while each is individually fine, and every
+            // caller derives both from a `ModelConfig` that `validate` has
+            // already bounded. The guard stays because that is a fact about
+            // today's callers, not about this function.
             None => Err(TransformerError::DimensionOverflow),
         },
-        // COVERAGE-EXEMPT: `checked_product`/`scale`/`extend` are const fns folded at COMPILE time to compute buffer sizes, so their refusal arms have no runtime execution for llvm-cov to observe. A shape that would overflow is rejected by ModelConfig::validate before any of these is reached at runtime.
         (Err(error), _) | (_, Err(error)) => Err(error),
     }
 }
