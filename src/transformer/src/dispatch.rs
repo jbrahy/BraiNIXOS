@@ -142,6 +142,108 @@ pub trait Dispatch {
         F: Fn(usize, &mut [f32]) + Sync;
 }
 
+/// Single-core `Q8_0` weight-byte throughput, in bytes per microsecond.
+///
+/// 47 GB/s, measured by `benches/matmul.rs` on an M2 Pro performance core and
+/// stable across the shapes a decode uses. It appears here as bytes per
+/// microsecond so [`split_threshold_bytes`] needs no floating point: 47 GB/s is
+/// 47000 bytes/us.
+pub const SINGLE_CORE_BYTES_PER_MICROSECOND: usize = 47_000;
+
+/// The smallest work worth splitting, from a dispatcher's own round trip.
+///
+/// # Why this is a function and not a constant
+///
+/// [`Dispatch::minimum_split_bytes`] documents the rule
+/// `round_trip x rate / (1 - 1/w)` and then every implementation has to apply
+/// it by hand, which means every implementation carries a number fitted to
+/// whatever machine its author measured. The numbers in this crate's history
+/// were fitted to a laptop whose pooled round trip is about 26 us; the
+/// kernel's own is about 2 us, an order of magnitude apart, and a dispatcher
+/// that inherits the wrong one either splits work too small to pay or leaves
+/// nearly every projection unsplit.
+///
+/// A dispatcher knows its own round trip -- it can time its barrier pair once
+/// at construction. Given that, this computes the threshold, and the constant
+/// stops being a property of the machine the code was written on.
+///
+/// # The arithmetic
+///
+/// Splitting `bytes` across `w` workers saves `(bytes / rate) x (1 - 1/w)` and
+/// costs one round trip, so the crossover is where those are equal:
+///
+/// ```text
+/// bytes = round_trip x rate x w / (w - 1)
+/// ```
+///
+/// `w / (w - 1)` rather than `1 / (1 - 1/w)` because they are the same number
+/// and the first one divides integers exactly once.
+///
+/// # Measured against the sweep it replaces
+///
+/// `benches/matmul.rs` sweeps the real crossover by doubling. On this host:
+///
+/// | workers | round trip | measured crossover | this function |
+/// | --- | --- | --- | --- |
+/// | 2 | 8.45 us | 1152 KB | 734 KB |
+/// | 4 | 25.83 us | 2304 KB | 1530 KB |
+///
+/// Both **under-predict by about 1.5x**, consistently. The model counts only
+/// the weight bytes and ignores the activation read and the output write, so
+/// it thinks a split saves more than it does.
+///
+/// Erring low is the right direction and the measurements say by how much.
+/// Splitting slightly-too-small work costs a few percent -- the `>= 512 KB`
+/// row against `>= 2 MB` in `attention`'s note. Leaving whole projections
+/// serial costs 1.37x. A caller that wants the measured crossover rather than
+/// the conservative one can multiply by 3/2; the default here is the one whose
+/// failure mode is cheap.
+///
+/// # Examples
+///
+/// ```
+/// # use brainix_transformer::dispatch::split_threshold_bytes;
+/// // A pooled dispatcher that timed its barrier pair at 26 us, four workers.
+/// assert_eq!(split_threshold_bytes(26, 4), 1_629_333);
+/// // The kernel's own IPI round trip is far cheaper, so it splits far more.
+/// assert_eq!(split_threshold_bytes(2, 4), 125_333);
+/// // One worker never splits, whatever the round trip.
+/// assert_eq!(split_threshold_bytes(26, 1), usize::MAX);
+/// ```
+#[must_use]
+pub const fn split_threshold_bytes(round_trip_microseconds: usize, workers: usize) -> usize {
+    if workers <= 1 {
+        // Nothing to split onto, so nothing is ever worth splitting. `MAX`
+        // rather than 0: this is a threshold work must EXCEED, and 0 would
+        // mean "split everything" -- the opposite.
+        return usize::MAX;
+    }
+    let saved_fraction_denominator = match workers.checked_sub(1) {
+        Some(value) => value,
+        // COVERAGE-EXEMPT: `workers > 1` is guaranteed by the branch above, so
+        // the subtraction cannot underflow. `checked_sub` because this is a
+        // `const fn` on the crate's surface and a bare `-` here would be a
+        // panic waiting for someone to relax the guard.
+        None => return usize::MAX,
+    };
+    let cost = match round_trip_microseconds.checked_mul(SINGLE_CORE_BYTES_PER_MICROSECOND) {
+        Some(value) => value,
+        None => return usize::MAX,
+    };
+    let scaled = match cost.checked_mul(workers) {
+        Some(value) => value,
+        None => return usize::MAX,
+    };
+    match scaled.checked_div(saved_fraction_denominator) {
+        Some(value) => value,
+        // COVERAGE-EXEMPT: `workers > 1` above makes the divisor at least 1,
+        // so this cannot divide by zero. `checked_div` rather than `/` because
+        // the workspace denies bare arithmetic and a `const fn` on the crate's
+        // surface should not carry a panic path for a future caller to find.
+        None => usize::MAX,
+    }
+}
+
 /// The single-threaded dispatcher.
 ///
 /// What the kernel uses until it has a scheduler, and what every existing test
@@ -179,7 +281,7 @@ pub(crate) fn chunk_len(n_out: usize, chunks: usize) -> Result<usize, Transforme
 
 #[cfg(test)]
 mod tests {
-    use super::{chunk_len, Dispatch, Serial};
+    use super::{chunk_len, split_threshold_bytes, Dispatch, Serial};
     use crate::error::TransformerError;
 
     /// `Serial` is what every existing test gets by default, and that is
@@ -256,5 +358,83 @@ mod tests {
             "no split of nothing is meaningful, and a zero here would become a \
              zero chunk length downstream"
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::arithmetic_side_effects)]
+mod threshold_tests {
+    use super::{split_threshold_bytes, SINGLE_CORE_BYTES_PER_MICROSECOND};
+
+    #[test]
+    fn one_worker_never_splits_whatever_the_round_trip() {
+        // `MAX` and not 0. This is a threshold work must EXCEED, so 0 would
+        // mean "split everything" -- precisely backwards for a dispatcher with
+        // nowhere to split onto.
+        assert_eq!(split_threshold_bytes(0, 1), usize::MAX);
+        assert_eq!(split_threshold_bytes(26, 1), usize::MAX);
+        assert_eq!(split_threshold_bytes(usize::MAX, 0), usize::MAX);
+    }
+
+    #[test]
+    fn the_threshold_is_the_round_trip_priced_in_weight_bytes() {
+        // Two workers: half the work is moved, so the saving is bytes/2 and
+        // the crossover is twice what one round trip costs.
+        let round_trip = 8;
+        assert_eq!(
+            split_threshold_bytes(round_trip, 2),
+            round_trip * SINGLE_CORE_BYTES_PER_MICROSECOND * 2
+        );
+
+        // Four workers save three quarters, so the crossover is 4/3 of the
+        // cost -- lower than at two, which is the direction that matters: more
+        // workers make more work worth splitting, not less.
+        assert!(split_threshold_bytes(8, 4) < split_threshold_bytes(8, 2));
+        assert!(split_threshold_bytes(8, 8) < split_threshold_bytes(8, 4));
+    }
+
+    #[test]
+    fn a_cheaper_round_trip_splits_more_work() {
+        // The whole reason this is a function. The host's pooled barrier is
+        // ~26 us and the kernel's own IPI is ~2 us, so the same code splits
+        // work an order of magnitude smaller on the target -- and a dispatcher
+        // that inherited the host's constant would leave nearly every
+        // projection in a decode unsplit.
+        let host = split_threshold_bytes(26, 4);
+        let target = split_threshold_bytes(2, 4);
+        assert!(
+            target * 10 < host,
+            "26 us gives {host} and 2 us gives {target}; the ratio should track \
+             the round trips"
+        );
+        assert_eq!(host, 1_629_333);
+        assert_eq!(target, 125_333);
+    }
+
+    #[test]
+    fn a_free_round_trip_makes_everything_worth_splitting() {
+        // Not a real dispatcher, but the boundary the arithmetic has to hold
+        // at: zero cost means no work is too small.
+        assert_eq!(split_threshold_bytes(0, 4), 0);
+        assert_eq!(split_threshold_bytes(0, 2), 0);
+    }
+
+    #[test]
+    fn an_absurd_round_trip_saturates_instead_of_wrapping() {
+        // Caller-supplied, so the overflow guards are reachable from outside
+        // and must refuse rather than wrap into a small threshold -- which
+        // would silently turn "never split" into "split everything".
+        assert_eq!(split_threshold_bytes(usize::MAX, 4), usize::MAX);
+        assert_eq!(split_threshold_bytes(usize::MAX / 2, 4), usize::MAX);
+
+        // Both multiplications, separately. The two above overflow on the
+        // first one (round trip x rate); this one survives that and overflows
+        // on the second (x workers), which is a different guard and was
+        // unreached until the coverage gate said so.
+        let survives_the_first = usize::MAX / SINGLE_CORE_BYTES_PER_MICROSECOND;
+        assert!(survives_the_first
+            .checked_mul(SINGLE_CORE_BYTES_PER_MICROSECOND)
+            .is_some());
+        assert_eq!(split_threshold_bytes(survives_the_first, 4), usize::MAX);
     }
 }
