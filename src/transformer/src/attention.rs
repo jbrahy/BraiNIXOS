@@ -145,38 +145,40 @@ pub(crate) fn attend<D: Dispatch>(
 /// one dispatch softmaxes the whole board, and then every head blends. The
 /// price is the score board itself -- see `workspace::floats_per_call`.
 ///
-/// # Why this is on a branch and not on the main line
+/// # Measured 1.40x end to end, once the shape let it show
 ///
-/// The end-to-end effect could not be measured on the machine it was written
-/// on, and it was not for want of trying. Two independent analyses of the same
-/// interleaved A/B, on a 123 MB model at 1500 tokens of context:
+/// This spent a while unmerged because two attempts to price it end to end
+/// could not resolve it: across binaries the single-core path -- identical
+/// arithmetic in both -- reported up to 22% either way, and within one binary
+/// two thresholds disagreed about the sign. Both were run on models where
+/// `softmax` is a few percent of a decode, against a host whose noise band is
+/// about 8%. The instrument was coarser than the effect.
 ///
-/// **Across binaries**, this build against one from the parent commit, the
-/// single-core path -- which runs identical arithmetic in both -- reported
-/// 1.220x, 1.168x and 1.020x. A path that cannot have changed appearing 22%
-/// faster means the comparison is measuring the host, not the change.
+/// The fix was the shape, not the method. On a model whose every matrix is
+/// **under** the split threshold, changing the threshold varies only whether
+/// `softmax` is shared out -- nothing else moves. 4 layers, `d_model` 256, 32
+/// heads, 2000 tokens of context, best of five:
 ///
-/// **Within one binary**, pooled against serial, which cancels codegen and
-/// layout differences entirely because both paths are in the same build:
+/// | threshold | what splits | tok/s | vs no split |
+/// | --- | --- | --- | --- |
+/// | `>= 0 KB` | everything, including 72 KB matmuls | 703.88 | 0.83x |
+/// | `>= 512 KB` | **`softmax` only** | **1187.35** | **1.40x** |
+/// | `>= 2 MB` | `softmax` only | 1086.04 | 1.28x |
+/// | `split nothing` | neither | 850.42 | 1.00x |
 ///
-/// | threshold | before, per round | after, per round |
-/// | --- | --- | --- |
-/// | >= 512 KB | 1.107 1.087 1.036 | 1.088 1.116 1.123 |
-/// | >= 2 MB | 1.143 1.169 1.006 | 0.946 1.115 1.103 |
+/// One core is 840.59, within noise of the 850.42 that a pool splitting
+/// nothing reaches, so the pool itself is free and the 1.40x is the split.
 ///
-/// The two thresholds disagree about the sign: 512 KB says the change is worth
-/// +2.7% at the median, 2 MB says -3.5%. Per-round spread is about ±8%, which
-/// is larger than the ~9% the arithmetic predicts (2.99x on the 13% of a
-/// four-worker decode that `softmax` occupies at the reference shape).
+/// The 0.83x row is a second reading of the crossover rule in
+/// `dispatch::minimum_split_bytes`, arrived at from the other direction:
+/// splitting 72 KB matrices costs more than it saves, and a dispatcher with no
+/// threshold gives back more than the softmax split wins.
 ///
-/// So: the phase is 2.99x, the arithmetic predicts single-digit percent end to
-/// end, and the instrument resolves ±8%. That is not a refutation and it is not
-/// a win. It is an unmeasured change, and unmeasured changes do not ship here
-/// -- the same rule that produced sixteen refutations and kept five wins.
-///
-/// It wants a quiet machine. The target's dispatch round trip is about 2 us
-/// against this host's 26, so the same code should be worth several times more
-/// there, and the answer should actually resolve.
+/// **What this does not claim.** 1.40x is on a shape chosen so `softmax`
+/// dominates. At the reference shape it is ~13% of a four-worker decode, so
+/// the same 2.99x on the phase is worth single digits overall -- which is
+/// exactly what the earlier attempts could not resolve, and why they were
+/// right to stay unmerged rather than be reported as a win.
 fn attend_one_token<D: Dispatch>(
     dispatch: &D,
     workspace: &mut Workspace<'_>,
