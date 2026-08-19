@@ -55,6 +55,10 @@ use std::thread;
 /// Kept as the control. It measured **0.99x** end to end: four spawns cost about
 /// 37 us and five of a layer's seven projections take less than that, so the
 /// creation cost consumes the entire gain.
+// Unused on purpose. It is the control the pool is measured against, and its
+// number is in the doc comment above; deleting it would delete the evidence
+// that spawning per call was tried and lost.
+#[allow(dead_code)]
 struct SpawnPerCall(usize);
 
 impl Dispatch for SpawnPerCall {
@@ -164,14 +168,15 @@ fn worker_loop(
         if let Some(posted) = posted {
             let begin = index.saturating_mul(posted.chunk_len);
             if begin < posted.total {
-                let len = posted.chunk_len.min(posted.total.saturating_sub(begin));
+                let span = posted.chunk_len.min(posted.total.saturating_sub(begin));
                 // SAFETY: `begin` is a multiple of `chunk_len` and `len` is
                 // clamped to the remainder, so this worker's range is disjoint
                 // from every other worker's, and the barriers bound its validity
                 // to the posting call. This is the same argument
                 // `slice::chunks_mut` makes, reconstructed across threads
                 // because the borrow cannot cross the park.
-                let chunk = unsafe { core::slice::from_raw_parts_mut(posted.base.add(begin), len) };
+                let chunk =
+                    unsafe { core::slice::from_raw_parts_mut(posted.base.add(begin), span) };
                 (posted.trampoline)(posted.closure, index, chunk);
             }
         }
@@ -333,7 +338,9 @@ fn evaluate<D: Dispatch>(
     let mut predictions = 0usize;
     for position in 0..count.saturating_sub(1) {
         let token = *tokens.get(position).ok_or("token index")?;
-        let target = *tokens.get(position + 1).ok_or("target index")?;
+        let target = *tokens
+            .get(position.saturating_add(1))
+            .ok_or("target index")?;
         model
             .forward(
                 dispatch,
@@ -358,6 +365,11 @@ fn evaluate<D: Dispatch>(
     Ok((mean.exp(), predictions as f64 / elapsed))
 }
 
+// A benchmark driver reads as a script: load the blob, describe it, build the
+// weights, run each configuration, print the comparison. Cutting it into named
+// halves would move code without making the order easier to follow, which is
+// the only thing a reader of this file wants.
+#[allow(clippy::cognitive_complexity)]
 fn run(model_path: &str, vocab_path: &str, sample_path: Option<&str>) -> Result<(), String> {
     let blob_bytes = std::fs::read(model_path).map_err(|e| format!("{model_path}: {e}"))?;
     let vocab_bytes = std::fs::read(vocab_path).map_err(|e| format!("{vocab_path}: {e}"))?;
@@ -410,8 +422,12 @@ fn run(model_path: &str, vocab_path: &str, sample_path: Option<&str>) -> Result<
         }
         None => SAMPLE.to_string(),
     };
-    let mut tokens = vec![0u32; text.len() + 2];
-    let mut scratch = vec![0u32; text.len() + 2];
+    // Two spare slots for whatever leading/trailing marker the vocabulary
+    // adds; `saturating_add` because the workspace denies bare arithmetic and a
+    // sample that overflows `usize` is not a case worth a distinct error.
+    let room = text.len().saturating_add(2);
+    let mut tokens = vec![0u32; room];
+    let mut scratch = vec![0u32; room];
     let count = vocabulary
         .encode(text.as_bytes(), &mut scratch, &mut tokens)
         .map_err(|error| format!("encode: {error:?}"))?;
@@ -468,7 +484,12 @@ fn run(model_path: &str, vocab_path: &str, sample_path: Option<&str>) -> Result<
     println!(
         "loaded {} F32 tensors ({:.1} MB copied), rest borrowed as Q8_0",
         floats.stored.len(),
-        floats.stored.iter().map(|v| v.len() * 4).sum::<usize>() as f64 / 1e6
+        floats
+            .stored
+            .iter()
+            .map(|v| v.len().saturating_mul(4))
+            .sum::<usize>() as f64
+            / 1e6
     );
 
     // ---- pass two: build the borrowed view ---------------------------------
@@ -576,7 +597,9 @@ fn run(model_path: &str, vocab_path: &str, sample_path: Option<&str>) -> Result<
         let mut predictions = 0usize;
         for position in 0..count.saturating_sub(1) {
             let token = *tokens.get(position).ok_or("token index")?;
-            let target = *tokens.get(position + 1).ok_or("target index")?;
+            let target = *tokens
+                .get(position.saturating_add(1))
+                .ok_or("target index")?;
             model
                 .forward(&Serial, &mut workspace, &mut cache, &[token], &mut logits)
                 .map_err(|error| format!("forward at {position}: {error:?}"))?;
@@ -606,8 +629,10 @@ fn run(model_path: &str, vocab_path: &str, sample_path: Option<&str>) -> Result<
         4 * 1024 * 1024,
         usize::MAX,
     ] {
-        let start = Barrier::new(workers + 1);
-        let finish = Barrier::new(workers + 1);
+        // One extra participant: the caller waits on the same pair.
+        let party = workers.saturating_add(1);
+        let start = Barrier::new(party);
+        let finish = Barrier::new(party);
         let job: Mutex<Option<Job>> = Mutex::new(None);
         let shutting_down = AtomicBool::new(false);
         let mut outcome = None;
