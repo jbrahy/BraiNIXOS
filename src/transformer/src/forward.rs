@@ -160,6 +160,11 @@ impl<'a> Model<'a> {
                     start,
                     token_count: tokens.len(),
                 },
+                // COVERAGE-EXEMPT: the `?` is the error arm of a layer that
+                // cannot refuse here -- `Model::new` validated the config and
+                // every slice handed down is sized from that same validated
+                // geometry. It stays so that a future shape reaching this path
+                // unvalidated cannot be ignored.
             )?;
         }
         self.project_logits(dispatch, workspace, tokens.len(), logits)?;
@@ -360,6 +365,9 @@ impl<'a> Model<'a> {
             workspace.quant_scratch,
             dispatch,
             prefix_mut(workspace.key, key_span)?,
+            // COVERAGE-EXEMPT: as the layer loop -- a validated geometry means
+            // this projection cannot refuse, and the `?` is what keeps a
+            // refusal from being ignored if that ever stops being true.
         )?;
         layer.value_projection.project(
             shape,

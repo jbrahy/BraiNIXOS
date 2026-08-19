@@ -97,3 +97,85 @@ pub(crate) fn chunk_len(n_out: usize, chunks: usize) -> Result<usize, Transforme
     }
     Ok(n_out.div_ceil(chunks.max(1)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{chunk_len, Dispatch, Serial};
+    use crate::error::TransformerError;
+
+    /// `Serial` is what every existing test gets by default, and that is
+    /// exactly why nothing exercised it: it is reached through `Model::forward`
+    /// and never asked anything directly. The coverage gate found the whole
+    /// impl uncovered.
+    #[test]
+    fn the_serial_dispatcher_reports_one_chunk_and_no_threshold() {
+        let serial = Serial;
+        assert_eq!(serial.chunks(), 1, "serial work is one chunk by definition");
+        assert_eq!(
+            serial.minimum_split_bytes(),
+            0,
+            "a dispatcher that cannot split has no size below which splitting is a loss"
+        );
+    }
+
+    #[test]
+    fn the_serial_dispatcher_visits_every_chunk_exactly_once_in_order() {
+        let mut out = [0.0_f32; 7];
+        let serial = Serial;
+        // Deliberately not a divisor of the length: the last chunk is short,
+        // which is the case a `chunks_mut` loop gets wrong if it assumes even
+        // division.
+        serial.for_each_chunk(&mut out, 3, |index, chunk| {
+            for slot in chunk.iter_mut() {
+                *slot = index as f32;
+            }
+        });
+        assert_eq!(out, [0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn a_zero_chunk_length_does_not_hang() {
+        // `chunks_mut(0)` panics, so the impl clamps to one. Without that this
+        // is not a wrong answer, it is a process that never returns -- the
+        // worst failure mode available to a kernel.
+        // The closure is `Fn`, not `FnMut` -- it has to be, because a parallel
+        // implementation shares it across threads -- so the counter is atomic
+        // rather than captured by mutable reference.
+        let mut out = [0.0_f32; 3];
+        let visits = core::sync::atomic::AtomicUsize::new(0);
+        Serial.for_each_chunk(&mut out, 0, |_, chunk| {
+            assert_eq!(chunk.len(), 1);
+            visits.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        });
+        assert_eq!(
+            visits.load(core::sync::atomic::Ordering::Relaxed),
+            3,
+            "a zero length must degrade to one element each"
+        );
+    }
+
+    #[test]
+    fn chunk_len_rounds_up_so_no_chunk_is_empty() {
+        // Rounded DOWN, 10 outputs over 4 workers gives width 2 and a fifth
+        // trailing chunk -- one more worker than asked for. Rounded up it is 3,
+        // and the last chunk is the short one.
+        assert_eq!(chunk_len(10, 4).expect("width"), 3);
+        assert_eq!(chunk_len(8, 4).expect("width"), 2);
+        assert_eq!(chunk_len(1, 4).expect("width"), 1);
+    }
+
+    #[test]
+    fn chunk_len_treats_zero_chunks_as_one_rather_than_dividing_by_it() {
+        assert_eq!(chunk_len(10, 0).expect("width"), 10);
+    }
+
+    #[test]
+    fn chunk_len_denies_a_zero_output_width() {
+        assert_eq!(
+            chunk_len(0, 4).unwrap_err(),
+            TransformerError::ZeroDimension,
+            "no split of nothing is meaningful, and a zero here would become a \
+             zero chunk length downstream"
+        );
+    }
+}

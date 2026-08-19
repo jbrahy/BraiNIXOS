@@ -65,10 +65,20 @@ pub const fn quantized_activation_bytes(
     // Mirrors BXW1 §4.3: a 128-aligned scale plane followed by the quant plane.
     let blocks = match widest.checked_div(32) {
         Some(value) => value,
+        // COVERAGE-EXEMPT: the divisor is the literal 32, so this cannot be
+        // reached. `checked_div` rather than `/` because a bare division by a
+        // constant that later becomes a variable is a panic waiting for a
+        // refactor, and this is a `const fn` on the crate's surface.
         None => return Err(TransformerError::ZeroDimension),
     };
     let scales = match blocks.checked_mul(4) {
         Some(value) => value,
+        // COVERAGE-EXEMPT: `blocks` is `widest / 32`, so `blocks * 4` is at
+        // most `widest / 8` and cannot overflow for any `widest` that is itself
+        // a `usize`. The guard stays because that argument depends on the block
+        // size and the scale width, and a format change moves both. The one
+        // overflow in this derivation that CAN fire is the add below, and it is
+        // tested.
         None => return Err(TransformerError::DimensionOverflow),
     };
     let padded = scales.next_multiple_of(128);

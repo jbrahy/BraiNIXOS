@@ -253,6 +253,9 @@ fn dot_product(left: &[f32], right: &[f32]) -> f32 {
             let left_value = left_lane.get(lane).copied().unwrap_or(0.0);
             let right_value = right_lane.get(lane).copied().unwrap_or(0.0);
             let Some(slot) = lanes.get_mut(lane) else {
+                // COVERAGE-EXEMPT: `lanes` is `[_; DOT_LANES]` and `lane` runs
+                // `0..DOT_LANES`, so this cannot be reached. Indexing instead
+                // would put a panic path in the attention inner loop.
                 continue;
             };
             *slot += left_value * right_value;
@@ -271,4 +274,91 @@ fn dot_product(left: &[f32], right: &[f32]) -> f32 {
 
     // Pairwise, matching `block_dot`.
     ((lanes[0] + lanes[1]) + (lanes[2] + lanes[3])) + tail
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{accumulate_weighted, dot_product, DOT_LANES};
+
+    /// A reference that is deliberately the shape the four-lane kernel replaced.
+    fn serial(left: &[f32], right: &[f32]) -> f32 {
+        let mut acc = 0.0_f32;
+        for (l, r) in left.iter().zip(right.iter()) {
+            acc += l * r;
+        }
+        acc
+    }
+
+    #[test]
+    fn four_lanes_agree_with_a_serial_dot_on_aligned_widths() {
+        // Fixed storage: this crate is `no_std` and has no allocator, which is
+        // the same constraint the kernels themselves are written under.
+        let mut left = [0.0_f32; 128];
+        let mut right = [0.0_f32; 128];
+        for (index, slot) in left.iter_mut().enumerate() {
+            *slot = (index % 7) as f32 * 0.25 - 0.75;
+        }
+        for (index, slot) in right.iter_mut().enumerate() {
+            *slot = (index % 5) as f32 * 0.5 - 1.0;
+        }
+
+        for width in [4_usize, 8, 64, 128] {
+            let produced = dot_product(&left[..width], &right[..width]);
+            let expected = serial(&left[..width], &right[..width]);
+            // Not bit-identical, and it cannot be: four partial sums accumulate
+            // in a different order than one running total. The bound is what
+            // the format leaves free, and it is tight enough that a transposed
+            // index or a dropped lane fails it.
+            assert!(
+                (produced - expected).abs() <= expected.abs().max(1.0) * 1e-5,
+                "width {width}: {produced} vs {expected}"
+            );
+        }
+    }
+
+    /// The tail exists for a `d_head` that is not a multiple of four.
+    ///
+    /// Every model seen so far has a power-of-two head width, so this path is
+    /// reached by no real config -- which is exactly why it needs a test. A
+    /// kernel that is silently wrong on the first model that does not is worse
+    /// than the six lines that handle it.
+    #[test]
+    fn a_width_that_is_not_a_multiple_of_four_still_sums_every_element() {
+        let mut left = [0.0_f32; 64];
+        for (index, slot) in left.iter_mut().enumerate() {
+            *slot = (index as f32) + 1.0;
+        }
+        let right = [1.0_f32; 64];
+
+        for width in [1_usize, 2, 3, 5, 7, 9, 63] {
+            // With a right side of all ones the answer is the sum 1..=width,
+            // known in closed form, so a dropped tail element is visible rather
+            // than merely different.
+            let expected = (width * (width + 1) / 2) as f32;
+            let produced = dot_product(&left[..width], &right[..width]);
+            assert!(
+                (produced - expected).abs() <= expected.abs().max(1.0) * 1e-5,
+                "width {width}: {produced} should be {expected}; an element \
+                 past the last full group of {DOT_LANES} was dropped"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_dot_is_zero_rather_than_a_panic() {
+        assert_eq!(dot_product(&[], &[]), 0.0);
+    }
+
+    #[test]
+    fn accumulate_weighted_adds_rather_than_overwrites() {
+        // The name says `+=` and the attention loop depends on it: every
+        // position folds into the same destination, so an assignment here
+        // would silently keep only the last one.
+        let value = [1.0_f32, 2.0, 3.0];
+        let mut destination = [10.0_f32, 20.0, 30.0];
+        accumulate_weighted(2.0, &value, &mut destination);
+        assert_eq!(destination, [12.0, 24.0, 36.0]);
+        accumulate_weighted(0.5, &value, &mut destination);
+        assert_eq!(destination, [12.5, 25.0, 37.5]);
+    }
 }

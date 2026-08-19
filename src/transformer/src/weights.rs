@@ -167,11 +167,25 @@ impl WeightMatrix<'_> {
                                     chunk,
                                 )
                                 .is_err()
+                                // Unreachable. Every shape here came from a
+                                // validated ModelConfig and a chunk_len width,
+                                // so the kernel cannot refuse. The split path
+                                // itself IS tested, in split_dispatch.rs; only
+                                // this refusal cannot be provoked, and the flag
+                                // exists to catch a refactor that breaks the
+                                // agreement between those two.
+                                // COVERAGE-EXEMPT: see the note above.
                                 {
+                                    // COVERAGE-EXEMPT: see the note above.
                                     failed.store(true, Ordering::Relaxed);
                                 }
                             });
                             if failed.load(Ordering::Relaxed) {
+                                // COVERAGE-EXEMPT: as above. The specific
+                                // kernel error is lost because a `Fn` closure
+                                // shared across threads cannot carry a `Result`
+                                // out without allocating; the flag is the most
+                                // it can set.
                                 return Err(TransformerError::WeightShapeMismatch);
                             }
                         } else {
