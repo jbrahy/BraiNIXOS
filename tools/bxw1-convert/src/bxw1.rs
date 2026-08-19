@@ -35,6 +35,8 @@ pub enum Dtype {
     F32,
     /// Split-plane, 32-element-block 8-bit.
     Q8_0,
+    /// `Q4_0`: split-plane, 32-element blocks, two weights per byte (`0x0002`).
+    Q4_0,
 }
 
 impl Dtype {
@@ -42,6 +44,7 @@ impl Dtype {
         match self {
             Self::F32 => 0x0000,
             Self::Q8_0 => 0x0001,
+            Self::Q4_0 => 0x0002,
         }
     }
 }
@@ -176,14 +179,18 @@ impl Builder {
 
         let (payload, adjustments) = match dtype {
             Dtype::F32 => encode_f32(values),
-            Dtype::Q8_0 => {
+            Dtype::Q8_0 | Dtype::Q4_0 => {
                 let last = *dims.last().ok_or_else(|| format!("{name}: rank 0"))?;
                 if last % Q8_0_BLOCK as u64 != 0 {
                     return Err(format!(
                         "{name}: last dimension {last} is not a multiple of 32 (rule D8)"
                     ));
                 }
-                encode_q8_0(values)
+                if dtype == Dtype::Q4_0 {
+                    encode_q4_0(values)
+                } else {
+                    encode_q8_0(values)
+                }
             }
         };
         if adjustments.non_finite > 0 {
@@ -323,8 +330,82 @@ fn encode_f32(values: &[f32]) -> (Vec<u8>, Adjustments) {
     (out, adjustments)
 }
 
+/// Encodes `Q4_0` in the split-plane layout of §4.4.
+///
+/// # The convention, which is not the only possible one
+///
+/// This must agree byte for byte with `brainix_tensor::Q4Weights`, and the two
+/// are compiled separately, so the agreement is asserted by a test rather than
+/// by both authors having read the same paragraph. `tests/q4_agreement.rs`
+/// compares this against `brainix_tensor::quantize_q4_0` over adversarial
+/// blocks; if you change either, that test is what tells you.
+///
+/// The parts that a reimplementation gets wrong:
+///
+/// - **`scale = peak / 7`, not `peak / 8`.** The nibble is read back as a
+///   two's-complement `i4`, whose range is `-8..=7`. Using 8 would make the
+///   representable set asymmetric about zero, so a weight and its negation
+///   would not quantize to opposite values.
+/// - **Even index in the LOW nibble.** Value `2k` occupies bits 0-3 of byte
+///   `k`, value `2k+1` bits 4-7. Swapping them transposes every pair.
+/// - **An unusable block is `+0.0` and zero nibbles**, matching §4.2's rule for
+///   `Q8_0` and for the same reason: no subnormal scale is admitted.
+pub(crate) fn encode_q4_0(values: &[f32]) -> (Vec<u8>, Adjustments) {
+    let mut adjustments = Adjustments::default();
+    let blocks = values.len() / Q8_0_BLOCK;
+    let mut scales = Vec::with_capacity(blocks * 4);
+    let mut quants = Vec::with_capacity(blocks * (Q8_0_BLOCK / 2));
+
+    for block in values.chunks_exact(Q8_0_BLOCK) {
+        let mut peak = 0.0f32;
+        for value in block {
+            if value.is_nan() || value.is_infinite() {
+                adjustments.non_finite += 1;
+                continue;
+            }
+            let magnitude = value.abs();
+            if magnitude > peak {
+                peak = magnitude;
+            }
+        }
+        let scale = peak / 7.0;
+        if peak == 0.0 || scale < f32::MIN_POSITIVE {
+            if peak == 0.0 {
+                adjustments.zero_blocks += 1;
+            } else {
+                adjustments.flushed_scales += 1;
+            }
+            scales.extend_from_slice(&0.0f32.to_le_bytes());
+            quants.extend(std::iter::repeat_n(0u8, Q8_0_BLOCK / 2));
+            continue;
+        }
+        scales.extend_from_slice(&scale.to_le_bytes());
+        for pair in block.chunks_exact(2) {
+            let nibble = |value: f32| -> u8 {
+                let scaled = value / scale;
+                let rounded = if scaled >= 0.0 {
+                    scaled + 0.5
+                } else {
+                    scaled - 0.5
+                } as i32;
+                (rounded.clamp(-7, 7) as i8 as u8) & 0x0F
+            };
+            quants.push(nibble(pair[0]) | (nibble(pair[1]) << 4));
+        }
+    }
+
+    let scale_span = round_up(scales.len() as u64, ALIGN) as usize;
+    let mut out = Vec::with_capacity(scale_span + quants.len());
+    out.extend_from_slice(&scales);
+    // Rule D21, as for `Q8_0`: the inter-plane pad is inside the digest-covered
+    // extent, so it is zero by requirement rather than by convention.
+    out.resize(scale_span, 0);
+    out.extend_from_slice(&quants);
+    (out, adjustments)
+}
+
 /// Encodes `Q8_0` in the split-plane layout of §4.2.
-fn encode_q8_0(values: &[f32]) -> (Vec<u8>, Adjustments) {
+pub(crate) fn encode_q8_0(values: &[f32]) -> (Vec<u8>, Adjustments) {
     let mut adjustments = Adjustments::default();
     let blocks = values.len() / Q8_0_BLOCK;
     let mut scales = Vec::with_capacity(blocks * 4);

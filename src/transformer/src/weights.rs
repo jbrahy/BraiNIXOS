@@ -42,8 +42,8 @@
 
 use crate::dispatch::{chunk_len, Dispatch};
 use brainix_tensor::{
-    matmul_f32, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations,
-    MatMulShape, Q8Weights,
+    matmul_f32, matmul_q4_0_q8a, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows,
+    quantize_activations, MatMulShape, Q4Weights, Q8Weights,
 };
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -63,6 +63,20 @@ pub enum WeightMatrix<'a> {
     Float32(&'a [f32]),
     /// BXW1 `Q8_0`: the split-plane view over the borrowed payload.
     Quantized8(Q8Weights<'a>),
+    /// BXW1 `Q4_0`: the split-plane view, two weights per byte.
+    ///
+    /// **0.625 bytes per weight against `Q8_0`'s 1.125.** Two things about this
+    /// path differ from `Q8_0` and both are visible from here:
+    ///
+    /// - **There is no `f32`-activation kernel.** `Q8_0` keeps one so a caller
+    ///   who supplies no quantization scratch gets the higher-precision result;
+    ///   `Q4_0` has only the `SDOT` form, so it refuses rather than silently
+    ///   computing something else.
+    /// - **There is no row-split kernel**, so a `Q4_0` projection runs on the
+    ///   calling core even when the dispatcher has workers idle. Since four
+    ///   workers on `Q8_0` are worth 1.37x end to end, `Q4_0` has to beat that
+    ///   on bytes alone before it is a win at all.
+    Quantized4(Q4Weights<'a>),
 }
 
 impl WeightMatrix<'_> {
@@ -83,6 +97,9 @@ impl WeightMatrix<'_> {
         let agrees = match self {
             Self::Float32(values) => values.len() == checked_product(out_features, in_features)?,
             Self::Quantized8(weights) => {
+                weights.n_out() == out_features && weights.n_in() == in_features
+            }
+            Self::Quantized4(weights) => {
                 weights.n_out() == out_features && weights.n_in() == in_features
             }
         };
@@ -194,6 +211,23 @@ impl WeightMatrix<'_> {
                     }
                     None => matmul_q8_0(shape, weights, activations, destination)?,
                 }
+            }
+            Self::Quantized4(weights) => {
+                // No fallback here, unlike `Quantized8`. There is no
+                // `f32`-activation `Q4_0` kernel, so an empty scratch is a
+                // caller error rather than a quieter path: computing the
+                // projection some other way would silently change what the
+                // model is.
+                let needed = Q8Weights::derived_payload_len(shape.n_tokens, shape.n_in)?;
+                let Some(scratch) = quant_scratch.get_mut(..needed) else {
+                    return Err(TransformerError::WorkspaceTooSmall);
+                };
+                quantize_activations(shape.n_tokens, shape.n_in, activations, scratch)?;
+                let view = Q8Weights::new(scratch, shape.n_tokens, shape.n_in)?;
+                // Serial: there is no row-split `Q4_0` kernel yet, so the
+                // dispatcher is unused on this path and every projection runs
+                // on the calling core.
+                matmul_q4_0_q8a(shape, weights, &view, destination)?;
             }
         }
         Ok(())

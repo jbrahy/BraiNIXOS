@@ -38,8 +38,8 @@
 //! `benches/matmul.rs` measures, and a debug build takes minutes per token.
 
 use brainix_bxw1::{Dtype, WeightBlob};
-use brainix_tensor::Q8Weights;
 use brainix_tensor::RopePairing;
+use brainix_tensor::{Q4Weights, Q8Weights};
 use brainix_tokenizer::Vocabulary;
 use brainix_transformer::{Dispatch, Serial};
 use brainix_transformer::{
@@ -260,9 +260,18 @@ fn build_matrix<'a>(
             let dims = tensor.dims();
             let n_out = *dims.first().ok_or_else(|| format!("{name}: rank 0"))? as usize;
             let n_in = *dims.get(1).ok_or_else(|| format!("{name}: rank 1"))? as usize;
-            let view = Q8Weights::new(tensor.data(), n_out, n_in)
-                .map_err(|error| format!("{name}: {error:?}"))?;
-            Ok(WeightMatrix::Quantized8(view))
+            match tensor.dtype() {
+                Dtype::Q4 => {
+                    let view = Q4Weights::new(tensor.data(), n_out, n_in)
+                        .map_err(|error| format!("{name}: {error:?}"))?;
+                    Ok(WeightMatrix::Quantized4(view))
+                }
+                _ => {
+                    let view = Q8Weights::new(tensor.data(), n_out, n_in)
+                        .map_err(|error| format!("{name}: {error:?}"))?;
+                    Ok(WeightMatrix::Quantized8(view))
+                }
+            }
         }
     }
 }
@@ -445,7 +454,7 @@ fn run(model_path: &str, vocab_path: &str, sample_path: Option<&str>) -> Result<
             .map_err(|error| format!("{name}: {error:?}"))?;
         Ok(match tensor.dtype() {
             Dtype::F32 => Some(floats.take(tensor.data())),
-            Dtype::Q8 => None,
+            Dtype::Q8 | Dtype::Q4 => None,
         })
     };
 
@@ -481,8 +490,15 @@ fn run(model_path: &str, vocab_path: &str, sample_path: Option<&str>) -> Result<
             matrices,
         });
     }
+    // Which quantized dtype the matrices actually are. `Q4_0` has no
+    // f32-activation kernel, so the comparison below has to know.
+    let quantized_is_q4 = blob
+        .tensor_by_name(b"layers.0.attention.wq.weight")
+        .map(|tensor| tensor.dtype() == Dtype::Q4)
+        .unwrap_or(false);
+    let quantized_name = if quantized_is_q4 { "Q4_0" } else { "Q8_0" };
     println!(
-        "loaded {} F32 tensors ({:.1} MB copied), rest borrowed as Q8_0",
+        "loaded {} F32 tensors ({:.1} MB copied), rest borrowed as {quantized_name}",
         floats.stored.len(),
         floats
             .stored
@@ -568,14 +584,29 @@ fn run(model_path: &str, vocab_path: &str, sample_path: Option<&str>) -> Result<
 
     let mut logits = vec![0.0f32; config.vocabulary_size];
     let mut results = Vec::new();
+    // Argument 4, not 3: argument 3 became the optional sample file. Before
+    // this was moved, passing a sample silently fell back to the default here
+    // because the path did not parse as a number -- the right answer by luck,
+    // which is not a way to pick a worker count.
     let workers: usize = std::env::args()
-        .nth(3)
+        .nth(4)
         .and_then(|value| value.parse().ok())
         .unwrap_or(4);
-    for (label, use_sdot) in [
-        ("f32 activations", false),
-        ("Q8_0 activations (SDOT)", true),
-    ] {
+    // `Q4_0` weights have only the SDOT kernel, so the f32-activation
+    // configuration cannot run against them. It is skipped with a reason
+    // rather than reported as a refusal, because the refusal is correct.
+    if quantized_is_q4 {
+        println!("skipping f32 activations -- Q4_0 has no f32-activation kernel");
+    }
+    let configurations: &[(&str, bool)] = if quantized_is_q4 {
+        &[("Q4_0 activations (SDOT)", true)]
+    } else {
+        &[
+            ("f32 activations", false),
+            ("Q8_0 activations (SDOT)", true),
+        ]
+    };
+    for &(label, use_sdot) in configurations {
         let scratch: &mut [u8] = if use_sdot {
             &mut quant_scratch
         } else {

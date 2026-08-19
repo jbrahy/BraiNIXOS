@@ -15,5 +15,11 @@ path = "src/main.rs"
 # enough to carry.
 [dependencies]
 
+# The kernel's own quantizer, as a differential oracle for the writer's. The
+# two are compiled separately and must agree byte for byte, so the agreement is
+# tested rather than assumed -- see tests/q4_agreement.rs.
+[dev-dependencies]
+brainix-tensor = { path = "../../src/tensor" }
+
 [profile.release]
 panic = "unwind"

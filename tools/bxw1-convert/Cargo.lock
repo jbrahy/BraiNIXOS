@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
+name = "brainix-tensor"
+version = "0.1.0"
+
+[[package]]
 name = "bxw1-convert"
 version = "0.1.0"
+dependencies = [
+ "brainix-tensor",
+]

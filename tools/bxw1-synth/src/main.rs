@@ -20,7 +20,7 @@
 //! chooses, which the per-kernel benchmarks cannot.
 //!
 //! Usage:
-//!     bxw1-synth <destination-dir> [--layers N] [--d-model N] [--f32]
+//!     bxw1-synth <destination-dir> [--layers N] [--d-model N] [--f32|--q4]
 
 #[path = "../../bxw1-convert/src/bxw1.rs"]
 mod bxw1;
@@ -205,7 +205,7 @@ fn build(shape: &Shape, dtype: Dtype) -> Result<(Vec<u8>, Vec<u8>), String> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("usage: bxw1-synth <destination-dir> [--layers N] [--d-model N] [--f32]");
+        eprintln!("usage: bxw1-synth <destination-dir> [--layers N] [--d-model N] [--f32|--q4]");
         return ExitCode::FAILURE;
     }
     let destination = PathBuf::from(&args[0]);
@@ -227,8 +227,13 @@ fn main() -> ExitCode {
         vocab: number("--vocab", 512),
         max_seq: number("--max-seq", 256),
     };
+    // `--q4` is what makes the north star's "lower precision where quality
+    // permits" measurable: emit the same deterministic weights at both widths
+    // and let examples/perplexity price the difference.
     let dtype = if args.iter().any(|a| a == "--f32") {
         Dtype::F32
+    } else if args.iter().any(|a| a == "--q4") {
+        Dtype::Q4_0
     } else {
         Dtype::Q8_0
     };
