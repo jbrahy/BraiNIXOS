@@ -79,30 +79,47 @@ pub trait Dispatch {
     ///
     /// The table above is a per-kernel sweep. `examples/perplexity` runs the
     /// same thresholds through a complete forward pass, which is the thing that
-    /// actually has to get faster, on a synthetic 180 MB model (12 layers,
-    /// `d_model` 1024, `d_ffn` 2816). Four runs, throughput relative to one
-    /// core:
+    /// actually has to get faster.
     ///
-    /// | threshold | run 1 | run 2 | run 3 | run 4 |
-    /// | --- | --- | --- | --- | --- |
-    /// | split everything | 0.84 | 0.62 | 1.01 | 0.90 |
-    /// | >= 512 KB | 0.76 | 0.70 | 0.67 | 0.87 |
-    /// | >= 2 MB | 0.89 | 1.03 | 1.31 | 0.98 |
-    /// | >= 4 MB | 0.75 | 1.00 | 1.29 | 0.97 |
-    /// | split nothing | 0.91 | 0.99 | 1.31 | 0.97 |
+    /// The host was busy -- load average 6.7, twelve cores -- so single runs
+    /// were useless: one baseline fell from 225 to 136 tok/s between rounds.
+    /// **Best-of-N fixes that**, because contention can only ever make a run
+    /// slower, so the maximum over enough runs converges on the uncontended
+    /// figure. Nine runs on the small model, five on the large one.
     ///
-    /// The absolute numbers are worthless -- the host was carrying a load
-    /// average of 6.7 and one run's single-core baseline collapsed from 225 to
-    /// 136 tok/s -- but the *ordering* survives all four runs: **512 KB is
-    /// always among the worst, and 2 MB is always indistinguishable from not
-    /// splitting at all.** That is exactly where the rule puts the crossover
-    /// for this pool, 1238 KB: 512 KB is below it and splits work that should
-    /// be left alone, 2 MB is above it and only splits what is worth splitting.
+    /// Two synthetic models, because the first one gave the wrong answer:
     ///
-    /// What these runs cannot say is whether splitting above the crossover
-    /// *wins*, because four workers cannot be measured on a host that has no
-    /// four idle cores. That measurement belongs on the target, which is quiet
-    /// and is the machine the number is for.
+    /// | threshold | 180 MB model | 900 MB model |
+    /// | --- | --- | --- |
+    /// | one core | 1.00x | 1.00x |
+    /// | pool, never splits (control) | 1.01x | 0.96x |
+    /// | split everything | 0.96x | 1.28x |
+    /// | >= 512 KB | 0.96x | 1.28x |
+    /// | >= 2 MB | **1.07x** | **1.37x** |
+    /// | >= 4 MB | 1.01x | **1.38x** |
+    ///
+    /// `d_model` 1024 with `d_ffn` 2816 puts only the three FFN projections over
+    /// the crossover; the four attention projections are 1 MB or less and stay
+    /// serial whatever the threshold says. So the 180 MB column measures
+    /// Amdahl's law, not the dispatcher. `d_model` 2048 with `d_ffn` 5632 puts
+    /// every projection over it, and the win appears: **1.37x end to end on four
+    /// workers.**
+    ///
+    /// Both columns agree on the thing the threshold is for. Splitting below the
+    /// crossover is not merely neutral, it costs: 1.28x against 1.37x on the
+    /// large model, a 7% loss for setting the number too low. A dispatcher that
+    /// splits everything gives back a fifth of what splitting is worth.
+    ///
+    /// # What four workers do not do
+    ///
+    /// 1.37x, not 4x, and not the 1.68x to 1.90x that `measure_pool` gets on a
+    /// single large matmul. The gap is everything that stays serial: `softmax`,
+    /// `swiglu`, `rmsnorm` and every projection under the threshold. At the
+    /// reference shape `benches/matmul.rs` puts the elementwise total at
+    /// 11.95 ms/token, of which `softmax` alone is 9.44 ms.
+    ///
+    /// The next multiple is therefore not in this dispatcher. It is in making
+    /// the serial remainder smaller or splitting it too.
     ///
     /// # Why this replaces a constant
     ///

@@ -217,11 +217,25 @@ pub(crate) fn exp(x: f64) -> f64 {
 /// cancellation eats most of the mantissa for large `|x|`. The two-part `ln2`
 /// exists to buy precision that `f32` cannot hold in the first place.
 ///
-/// The end-to-end row is the one that settles it. `exp` is faster in isolation
-/// and the model decodes at the same rate, because the forward pass is dominated
-/// by the `Q8_0` matmuls, not by `exp`. Paying 33x the error for a win that does
-/// not survive contact with the whole workload is a bad trade in either
-/// direction of the north star's ranking.
+/// The end-to-end row is the one that settles it, but it needs a caveat, because
+/// the model it was measured on was small enough to hide `exp` entirely.
+///
+/// At the reference shape -- `d_model` 4096, `d_ffn` 11008, 32 layers, context
+/// 2048 -- `benches/matmul.rs` puts `softmax` at **9.44 ms/token**, which is
+/// 79% of all elementwise work and roughly 12% of a decode running at the four-
+/// worker rate. `exp` is not negligible there. A 1.3x faster `exp` would be
+/// worth something like 3% of total decode.
+///
+/// It is still not worth 33x the error. 3% is a real number and the accuracy
+/// loss is a real number, and the loss is the larger of the two: `f32`
+/// activations already carry eight bits of quantization, but they carry it
+/// through a `softmax` whose whole job is to exponentiate small differences,
+/// which is where a 33x-roundoff error is least welcome.
+///
+/// The honest summary is: refuted, and refuted more narrowly than the
+/// measurement alone suggests. If `exp` ever needs to be faster, the way in is
+/// a better reduction -- Cody-Waite in `f32` with a three-part `ln2`, or a table
+/// -- not simply narrowing the arithmetic.
 pub(crate) fn exp_f32(x: f64) -> f64 {
     if x.is_nan() {
         return x;

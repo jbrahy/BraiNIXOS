@@ -125,6 +125,34 @@ def is_exempt(path: str, line_number: int) -> str | None:
     return None
 
 
+def source_line(path: str, line_number: int) -> str:
+    """The text at `path:line_number`, or "" if it cannot be read."""
+    try:
+        return (REPO_ROOT / path).read_text(errors="ignore").splitlines()[line_number - 1].strip()
+    except (OSError, IndexError, ValueError):
+        return ""
+
+
+def looks_stale(lines: list[tuple[str, int]]) -> bool:
+    """Whether an uncovered set points at lines that cannot BE uncovered.
+
+    llvm-cov emits a count only for lines that carry executable code, so a
+    blank line or a comment reported as uncovered means the line numbers came
+    from the current source and the counts came from an older build. Cargo
+    merges every .profraw it finds, and a build that happened between the
+    profile and the report is enough to shift them.
+
+    Observed 2026-08-19: a doc-only edit to math.rs put two comment lines in the
+    failure list, and the identical command passed on the next run. A gate that
+    fails on comments is a gate nobody believes the next time it is right.
+    """
+    for path, number in lines:
+        text = source_line(path, number)
+        if text == "" or text.startswith("//"):
+            return True
+    return False
+
+
 def main() -> int:
     report_only = "--report" in sys.argv
     target = subprocess.run(["rustc", "-vV"], capture_output=True, text=True).stdout
@@ -150,6 +178,14 @@ def main() -> int:
 
     for crate in CRATES:
         found = uncovered_lines(text_report(crate, host))
+        if looks_stale(found):
+            # Re-measure once, from clean profiles. If the second read agrees
+            # with the first, the lines are real and get reported as usual.
+            subprocess.run(
+                ["cargo", "llvm-cov", "clean", "--profraw-only"],
+                capture_output=True, text=True, cwd=REPO_ROOT,
+            )
+            found = uncovered_lines(text_report(crate, host))
         exempt = 0
         bad: list[str] = []
         for path, line_number in found:
@@ -171,12 +207,7 @@ def main() -> int:
         print()
         for entry in unjustified:
             path, _, number = entry.rpartition(":")
-            try:
-                source = (REPO_ROOT / path).read_text(errors="ignore").splitlines()
-                text = source[int(number) - 1].strip()
-            except (OSError, IndexError, ValueError):
-                text = "<unreadable>"
-            print(f"{entry:<48} {text}")
+            print(f"{entry:<48} {source_line(path, int(number))}")
         return 0
 
     if report_only:
