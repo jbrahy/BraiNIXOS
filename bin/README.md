@@ -12,6 +12,47 @@ three of them were wrong the first time in exactly the way the plan warns about:
 an unread error turned into a confident finding. Those bugs and their fixes are
 in the commit history and in comments at the point of failure.
 
+## The gates, which are not bring-up instruments
+
+Three scripts here have nothing to do with the mini. They are the checks that
+decide whether a change is allowed to land, and they are documented here
+because a gate nobody knows about is a gate nobody runs -- which is exactly how
+`coverage-gate.py` spent an unknown period scoring five crates as perfect while
+it could not see them at all.
+
+| Script | Asks | Runs where |
+| --- | --- | --- |
+| `coverage-gate.py` | is every uncovered line explained? | any host |
+| `coverage-gate.py --stale` | does every explanation still excuse something? | any host |
+| `sdot-gate.sh` | do the `Q8_0` matmuls still compile to `SDOT`? | **aarch64 only** |
+| `lint-suppressions.py` | is every lint suppression justified? | any host |
+
+```sh
+./bin/coverage-gate.py           # enforce: 100% of reachable lines
+./bin/coverage-gate.py --list    # every unjustified line, with its source
+./bin/coverage-gate.py --stale   # markers that no longer excuse anything
+./bin/sdot-gate.sh               # skips loudly on non-aarch64, never passes quietly
+```
+
+**Why `--stale` exists.** An exemption is granted once and then never re-read.
+When the line it excused becomes covered, the marker stays behind and licenses
+whatever code drifts into its eight-line window instead. Auditing the tree with
+it on 2026-08-19 found five justifications that were wrong rather than merely
+unproven -- including one on the record layer's nonce-reuse boundary, which had
+been disprovable since the day `SequenceCounter::at` was written.
+
+**Why `sdot-gate.sh` exists.** The tensor crate's largest win is not written in
+its source: there are no intrinsics, and `grep -rn neon src/tensor/src/` returns
+nothing, yet the quantized matmuls compile to `SDOT` because LLVM recognises the
+loop. That is worth 5.3 -> 57.0 GB/s on one core. A refactor can delete it with
+every test still green.
+
+**What it does not catch**, and this is worth knowing before trusting it: it
+counts instructions, so it cannot see a scheduling change. Adding
+`matmul_q4_0_q8a_rows` made `matmul_q4_0_q8a` **five times slower** with an
+identical `SDOT` count, because a second caller stopped `unpack_block` being
+specialised into the loop. Only `benches/matmul.rs` caught that.
+
 ## Where things run
 
 | Script | Runs on | Changes anything? |
