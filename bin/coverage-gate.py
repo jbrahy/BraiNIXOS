@@ -130,6 +130,18 @@ def main() -> int:
     target = subprocess.run(["rustc", "-vV"], capture_output=True, text=True).stdout
     host = next(l.split()[1] for l in target.splitlines() if l.startswith("host:"))
 
+    # Delete stale raw profiles before measuring. `cargo llvm-cov` MERGES every
+    # .profraw it finds, including ones left by unrelated `cargo test` runs, and
+    # a merged profile reports line numbers from the current source against
+    # coverage from an older build. That misfires as a FAILURE on lines that are
+    # doc comments -- observed on 2026-08-19, where a doc-only edit to math.rs
+    # "uncovered" two comment lines. --profraw-only clears the profiles without
+    # discarding the build, so the gate stays cheap to re-run.
+    subprocess.run(
+        ["cargo", "llvm-cov", "clean", "--profraw-only"],
+        capture_output=True, text=True, cwd=REPO_ROOT,
+    )
+
     unjustified: list[str] = []
     total_exempt = 0
 
