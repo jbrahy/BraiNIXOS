@@ -360,11 +360,84 @@ impl<'a> SessionCache<'a> {
         if key.len() != self.geometry.key_value_width
             || value.len() != self.geometry.key_value_width
         {
-            // COVERAGE-EXEMPT: the logit matrix's shape is validated by ModelWeights::validate_global before a Model exists, so this second check cannot fail on a constructed model. Defence in depth at the point of use.
             return Err(TransformerError::WeightShapeMismatch);
         }
         copy_into(key, self.slot(layer, KEY_PLANE, position)?);
         copy_into(value, self.slot(layer, VALUE_PLANE, position)?);
         Ok(())
+    }
+}
+
+/// `store` against a row of the wrong width.
+///
+/// # The reason this was exempt described a different check
+///
+/// The note read: *"the logit matrix's shape is validated by
+/// `ModelWeights::validate_global` before a Model exists, so this second check
+/// cannot fail on a constructed model."* This function stores a key and a value
+/// into the KV cache and compares their widths against the cache geometry. The
+/// logit matrix is not involved, and `validate_global` does not check this.
+///
+/// The reason was copy-pasted from a genuine exemption elsewhere. It was
+/// plausible enough to survive review precisely because it was true SOMEWHERE,
+/// which is the failure mode a boilerplate justification has.
+///
+/// The real argument is narrower and is now written where it belongs: callers
+/// pass rows sized from the same `ModelConfig` that sized the geometry. And it
+/// is reachable from inside the crate, so it need not be argued at all.
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use super::{CacheGeometry, KeyValueArena};
+    use crate::error::TransformerError;
+
+    const GEOMETRY: CacheGeometry = CacheGeometry {
+        layer_count: 2,
+        maximum_sequence_length: 4,
+        key_value_width: 8,
+    };
+
+    #[test]
+    fn a_row_of_the_wrong_width_is_refused_rather_than_panicking() {
+        let mut storage = [0.0_f32; 4096];
+        let mut arena = KeyValueArena::new(&mut storage, GEOMETRY).expect("geometry");
+        let mut session = arena.issue_session().expect("one session");
+
+        let correct = [1.0_f32; 8];
+        let short = [1.0_f32; 7];
+        let long = [1.0_f32; 9];
+
+        // The doc says why this is a length check and not `copy_from_slice`:
+        // that function panics on disagreement, and a panic here takes the
+        // whole server down on a shape bug that a refusal would merely report.
+        assert_eq!(
+            session.store(0, 0, &short, &correct),
+            Err(TransformerError::WeightShapeMismatch)
+        );
+        assert_eq!(
+            session.store(0, 0, &correct, &long),
+            Err(TransformerError::WeightShapeMismatch)
+        );
+        assert_eq!(
+            session.store(0, 0, &short, &short),
+            Err(TransformerError::WeightShapeMismatch)
+        );
+
+        // Both correct is accepted, so the test above is not passing because
+        // `store` refuses everything.
+        assert_eq!(session.store(0, 0, &correct, &correct), Ok(()));
+    }
+
+    #[test]
+    fn an_empty_row_is_refused_too() {
+        // Zero is the width a caller reaches by passing a slice it forgot to
+        // fill, and it must not be read as "store nothing, successfully".
+        let mut storage = [0.0_f32; 4096];
+        let mut arena = KeyValueArena::new(&mut storage, GEOMETRY).expect("geometry");
+        let mut session = arena.issue_session().expect("one session");
+        assert_eq!(
+            session.store(0, 0, &[], &[]),
+            Err(TransformerError::WeightShapeMismatch)
+        );
     }
 }
