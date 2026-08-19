@@ -346,6 +346,22 @@ pub fn matmul_q8_0(
 ///
 /// Accumulating in `i32` is exact. Thirty-two products of two `i8` values reach
 /// at most `32 x 127 x 127 = 516,128`, so nothing rounds and nothing overflows.
+///
+/// # No `#[inline(always)]`, and that is measured rather than assumed
+///
+/// This has four callers, and the four-caller case is exactly what cost
+/// `unpack_block` 5x until it was forced inline (see `matmul_q4_0_q8a_rows`).
+/// The same fix was tried here on 2026-08-19 and does nothing: interleaved
+/// best-of-four, end to end, across seven configurations gave 1.04, 1.01,
+/// 0.86, 0.95, 1.08, 1.06 and 1.02 -- scattered around 1.0 and inside the
+/// noise band, with the per-kernel bench disagreeing with itself by 1.8x
+/// between runs on the same binary.
+///
+/// The difference between the two helpers is worth keeping: `unpack_block`
+/// writes a 32-byte buffer the caller then reads, so it only pays off when
+/// specialised into the caller's loop, and the cost model stopped doing that
+/// at two callers. This one returns a scalar and is already being inlined --
+/// there is nothing for the attribute to buy.
 fn block_dot_i8(quant_block: &[u8], x_block: &[u8]) -> i32 {
     let mut lanes = [0i32; DOT_LANES];
     for (quant_lane, x_lane) in quant_block
