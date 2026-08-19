@@ -144,6 +144,39 @@ pub(crate) fn attend<D: Dispatch>(
 /// So the head loop is turned inside out. Every head scores into its own row,
 /// one dispatch softmaxes the whole board, and then every head blends. The
 /// price is the score board itself -- see `workspace::floats_per_call`.
+///
+/// # Why this is on a branch and not on the main line
+///
+/// The end-to-end effect could not be measured on the machine it was written
+/// on, and it was not for want of trying. Two independent analyses of the same
+/// interleaved A/B, on a 123 MB model at 1500 tokens of context:
+///
+/// **Across binaries**, this build against one from the parent commit, the
+/// single-core path -- which runs identical arithmetic in both -- reported
+/// 1.220x, 1.168x and 1.020x. A path that cannot have changed appearing 22%
+/// faster means the comparison is measuring the host, not the change.
+///
+/// **Within one binary**, pooled against serial, which cancels codegen and
+/// layout differences entirely because both paths are in the same build:
+///
+/// | threshold | before, per round | after, per round |
+/// | --- | --- | --- |
+/// | >= 512 KB | 1.107 1.087 1.036 | 1.088 1.116 1.123 |
+/// | >= 2 MB | 1.143 1.169 1.006 | 0.946 1.115 1.103 |
+///
+/// The two thresholds disagree about the sign: 512 KB says the change is worth
+/// +2.7% at the median, 2 MB says -3.5%. Per-round spread is about ±8%, which
+/// is larger than the ~9% the arithmetic predicts (2.99x on the 13% of a
+/// four-worker decode that `softmax` occupies at the reference shape).
+///
+/// So: the phase is 2.99x, the arithmetic predicts single-digit percent end to
+/// end, and the instrument resolves ±8%. That is not a refutation and it is not
+/// a win. It is an unmeasured change, and unmeasured changes do not ship here
+/// -- the same rule that produced sixteen refutations and kept five wins.
+///
+/// It wants a quiet machine. The target's dispatch round trip is about 2 us
+/// against this host's 26, so the same code should be worth several times more
+/// there, and the answer should actually resolve.
 fn attend_one_token<D: Dispatch>(
     dispatch: &D,
     workspace: &mut Workspace<'_>,
