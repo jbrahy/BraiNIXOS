@@ -280,8 +280,57 @@ fn whitespace_prefixed_segment_end(
 fn preceded_by_space(input: &[u8], position: usize) -> bool {
     let previous = match position.checked_sub(1) {
         Some(index) => index,
-        // COVERAGE-EXEMPT: preceded_by_space is only called with position >= 1, per its own contract.
         None => return false,
     };
     input.get(previous) == Some(&b' ')
+}
+
+/// `preceded_by_space` at position 0, which its caller never passes.
+///
+/// # Why this was exempt
+///
+/// The note said "only called with position >= 1, per its own contract", which
+/// is true: the single call site reaches it from inside a scan that has
+/// already advanced. So the `None` arm had never run.
+///
+/// A contract the caller happens to satisfy is not the same as a function that
+/// is safe to call. This one is private and takes a plain index, so the edge
+/// costs one line to present -- and the answer it gives at that edge is
+/// load-bearing. Llama-style pretokenization treats a space as the start of a
+/// word rather than a token of its own, and "is the previous byte a space" at
+/// position 0 has to mean **no** rather than panic or wrap. Answering `true`
+/// there would merge the first word of every input into a preceding word that
+/// does not exist.
+// A flat list of asserts reads as high cognitive complexity and is exactly
+// what a table-driven test should look like; splitting it into one function
+// per case would hide the symmetry the cases exist to show.
+#[cfg(test)]
+#[allow(clippy::cognitive_complexity)]
+mod tests {
+    use super::preceded_by_space;
+
+    #[test]
+    fn the_first_byte_is_never_preceded_by_a_space() {
+        // There is no byte before position 0, so the answer is "no" for every
+        // input including one that starts with a space.
+        assert!(!preceded_by_space(b"hello", 0));
+        assert!(!preceded_by_space(b" hello", 0));
+        assert!(!preceded_by_space(b"", 0));
+        assert!(!preceded_by_space(b" ", 0));
+    }
+
+    #[test]
+    fn a_space_before_the_position_is_reported_and_anything_else_is_not() {
+        // The ordinary case the caller does exercise, pinned here so the edge
+        // test above cannot pass by the function simply always saying false.
+        assert!(preceded_by_space(b" a", 1));
+        assert!(preceded_by_space(b"a b", 2));
+        assert!(!preceded_by_space(b"ab", 1));
+        assert!(!preceded_by_space(b"a\tb", 2), "a tab is not a space");
+        assert!(!preceded_by_space(b"a\nb", 2), "a newline is not a space");
+
+        // Past the end is "no" rather than a panic: the index comes from a
+        // scan, and a scan that overruns should not take the process with it.
+        assert!(!preceded_by_space(b"ab", 99));
+    }
 }
