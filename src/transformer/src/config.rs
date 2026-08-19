@@ -238,7 +238,6 @@ pub(crate) const fn scale(
 ) -> Result<usize, TransformerError> {
     match accumulated {
         Ok(value) => checked_product(value, factor),
-        // COVERAGE-EXEMPT: `checked_product`/`scale`/`extend` are const fns folded at COMPILE time to compute buffer sizes, so their refusal arms have no runtime execution for llvm-cov to observe. A shape that would overflow is rejected by ModelConfig::validate before any of these is reached at runtime.
         Err(error) => Err(error),
     }
 }
@@ -251,20 +250,87 @@ pub(crate) const fn extend(
     match (accumulated, addend) {
         (Ok(value), Ok(other)) => match value.checked_add(other) {
             Some(total) => Ok(total),
-            // The reason that used to be here claimed every refusal arm in
-            // this file is unobservable because the functions are `const`.
-            // That was false, and `coverage-gate.py --stale` caught it:
-            // `checked_product`'s refusal arm runs twice under the current
-            // tests and `extend`'s propagating arm once. Both markers are
-            // gone. This arm is the only one genuinely unreached.
-            //
-            // COVERAGE-EXEMPT: reaching it needs two workspace extents whose
-            // SUM overflows `usize` while each is individually fine, and every
-            // caller derives both from a `ModelConfig` that `validate` has
-            // already bounded. The guard stays because that is a fact about
-            // today's callers, not about this function.
             None => Err(TransformerError::DimensionOverflow),
         },
         (Err(error), _) | (_, Err(error)) => Err(error),
+    }
+}
+
+/// The size derivations, called directly rather than through a config.
+///
+/// # Both exemptions here were of the kinds this audit keeps finding
+///
+/// `scale`'s propagation arm carried the boilerplate claim that these are
+/// `const fn`s "folded at COMPILE time, so their refusal arms have no runtime
+/// execution for llvm-cov to observe". That is false, and was already shown
+/// false in this file: `checked_product`'s refusal arm runs twice under the
+/// current tests and `extend`'s propagating arm once.
+///
+/// `extend`'s overflow arm carried a reason I wrote myself while correcting the
+/// first one -- "every caller derives both from a `ModelConfig` that `validate`
+/// has already bounded". True, and a statement about the CALLER rather than the
+/// function, which is the second category. These are `pub(crate) const fn`s
+/// taking plain integers; the edges cost one call each.
+#[cfg(test)]
+mod tests {
+    use super::{checked_product, extend, scale};
+    use crate::error::TransformerError;
+
+    #[test]
+    fn a_refusal_propagates_through_scale_unchanged() {
+        // The point of threading `Result` through these rather than computing
+        // eagerly: the FIRST extent that cannot be sized is the one reported,
+        // so a workspace error names the field that overflowed rather than
+        // whichever later addition happened to notice.
+        let earlier = Err(TransformerError::DimensionOverflow);
+        assert_eq!(scale(earlier, 4), Err(TransformerError::DimensionOverflow));
+
+        // A different error propagates as itself, not as DimensionOverflow.
+        let other = Err(TransformerError::ZeroDimension);
+        assert_eq!(scale(other, 4), Err(TransformerError::ZeroDimension));
+
+        // And an Ok still scales.
+        assert_eq!(scale(Ok(6), 7), Ok(42));
+    }
+
+    #[test]
+    fn a_refusal_propagates_through_extend_from_either_side() {
+        let bad = Err(TransformerError::ZeroDimension);
+        assert_eq!(extend(bad, Ok(1)), Err(TransformerError::ZeroDimension));
+        assert_eq!(extend(Ok(1), bad), Err(TransformerError::ZeroDimension));
+        assert_eq!(extend(bad, bad), Err(TransformerError::ZeroDimension));
+        assert_eq!(extend(Ok(2), Ok(3)), Ok(5));
+    }
+
+    #[test]
+    fn a_sum_that_overflows_is_refused_even_when_both_sides_are_fine() {
+        // The case the previous reason called unreachable: each extent is a
+        // legal `usize` and their SUM is not. Wrapping here would return a
+        // small workspace size for an enormous model, and the caller would
+        // allocate it and then write past it.
+        assert_eq!(
+            extend(Ok(usize::MAX), Ok(1)),
+            Err(TransformerError::DimensionOverflow)
+        );
+        assert_eq!(
+            extend(Ok(usize::MAX / 2 + 1), Ok(usize::MAX / 2 + 1)),
+            Err(TransformerError::DimensionOverflow)
+        );
+        // One below the boundary still succeeds, so the check is not simply
+        // refusing anything large.
+        assert_eq!(extend(Ok(usize::MAX - 1), Ok(1)), Ok(usize::MAX));
+    }
+
+    #[test]
+    fn a_product_that_overflows_is_refused() {
+        assert_eq!(
+            checked_product(usize::MAX, 2),
+            Err(TransformerError::DimensionOverflow)
+        );
+        assert_eq!(checked_product(usize::MAX, 1), Ok(usize::MAX));
+        // Zero is a legal product, not an error: a batch of zero tokens sizes
+        // a zero-width extent, and refusing it here would make that a crash
+        // instead of an empty slice.
+        assert_eq!(checked_product(0, 9), Ok(0));
     }
 }
