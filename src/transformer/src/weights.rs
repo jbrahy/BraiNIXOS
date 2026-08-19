@@ -147,9 +147,28 @@ impl WeightMatrix<'_> {
                         // Row-splitting is only sound for a single token: for
                         // `n_tokens > 1` the output is `[n_tokens, n_out]`
                         // row-major, so a contiguous range of *output rows* is
-                        // not a contiguous range of `destination`. Prefill
-                        // therefore stays serial here and parallelizes over
-                        // tokens elsewhere.
+                        // not a contiguous range of `destination`.
+                        //
+                        // **Prefill is therefore entirely serial.** This said
+                        // it "parallelizes over tokens elsewhere" until
+                        // 2026-08-19, and there is no elsewhere: `forward.rs`
+                        // contains no dispatch call at all, so every projection
+                        // of a multi-token batch runs on the calling core.
+                        //
+                        // The obvious fix is wrong. Splitting by TOKENS is
+                        // contiguous -- token `t` owns `[t * n_out, ..)` -- but
+                        // this loop is weights-outer precisely so the weight
+                        // bytes are streamed once for the whole batch, and
+                        // giving each worker its own tokens makes each of them
+                        // stream the whole weight set. That multiplies the
+                        // traffic by the worker count on a kernel already at
+                        // the memory ceiling: 116.5 GB/s of a measured ~120.
+                        //
+                        // The sound split is by output rows, which needs a
+                        // dispatch primitive handing out STRIDED chunks rather
+                        // than contiguous ones. `for_each_chunk` cannot express
+                        // that, and inventing it before a prefill workload
+                        // exists to measure would be guessing.
                         // Weight bytes this projection moves: `Q8_0` costs 1.125 per
                         // element. Compared against the dispatcher's threshold
                         // so that work smaller than a synchronization stays on
