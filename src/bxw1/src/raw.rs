@@ -17,49 +17,22 @@
 
 use crate::error::Bxw1Error;
 
-/// Bytes in a little-endian `u16`.
-const U16_LEN: usize = 2;
-
-/// Bytes in a little-endian `u32`.
-const U32_LEN: usize = 4;
-
-/// Bytes in a little-endian `u64`.
-const U64_LEN: usize = 8;
-
 /// Bytes in a SHA-256 digest.
 pub(crate) const DIGEST_LEN: usize = 32;
 
 /// Reads a little-endian `u16` at `offset`, or `None` if it does not fit.
 pub(crate) fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
-    let end = offset.checked_add(U16_LEN)?;
-    match bytes.get(offset..end)? {
-        [b0, b1] => Some(u16::from_le_bytes([*b0, *b1])),
-        // COVERAGE-EXEMPT: `bytes.get(offset..end)?` above already guarantees the slice is exactly this many bytes, so the pattern always matches. The arm exists because the compiler cannot prove the length, and it is what keeps the function total instead of indexing.
-        _ => None,
-    }
+    Some(u16::from_le_bytes(*bytes.get(offset..)?.first_chunk()?))
 }
 
 /// Reads a little-endian `u32` at `offset`, or `None` if it does not fit.
 pub(crate) fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
-    let end = offset.checked_add(U32_LEN)?;
-    match bytes.get(offset..end)? {
-        [b0, b1, b2, b3] => Some(u32::from_le_bytes([*b0, *b1, *b2, *b3])),
-        // COVERAGE-EXEMPT: `bytes.get(offset..end)?` above already guarantees the slice is exactly this many bytes, so the pattern always matches. The arm exists because the compiler cannot prove the length, and it is what keeps the function total instead of indexing.
-        _ => None,
-    }
+    Some(u32::from_le_bytes(*bytes.get(offset..)?.first_chunk()?))
 }
 
 /// Reads a little-endian `u64` at `offset`, or `None` if it does not fit.
 pub(crate) fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
-    let end = offset.checked_add(U64_LEN)?;
-    let field = bytes.get(offset..end)?;
-    match field {
-        [b0, b1, b2, b3, b4, b5, b6, b7] => {
-            Some(u64::from_le_bytes([*b0, *b1, *b2, *b3, *b4, *b5, *b6, *b7]))
-        }
-        // COVERAGE-EXEMPT: `bytes.get(offset..end)?` above already guarantees the slice is exactly this many bytes, so the pattern always matches. The arm exists because the compiler cannot prove the length, and it is what keeps the function total instead of indexing.
-        _ => None,
-    }
+    Some(u64::from_le_bytes(*bytes.get(offset..)?.first_chunk()?))
 }
 
 /// Borrows the fixed-size field of `length` bytes at `offset`.
@@ -127,4 +100,78 @@ pub(crate) fn is_finite_element(bits: u32) -> bool {
 /// Compares a computed SHA-256 against a 32-byte field from the blob.
 pub(crate) fn digests_equal(computed: &[u8], declared: &[u8]) -> bool {
     computed.len() == DIGEST_LEN && declared.len() == DIGEST_LEN && computed == declared
+}
+
+/// The readers at both ends of their input.
+///
+/// # Why these are tests and not exemptions any more
+///
+/// These three used to be written as `bytes.get(offset..end)?` followed by a
+/// slice pattern, with an `_ => None` arm the compiler could not prove
+/// unreachable. That arm carried an exemption in every one of them.
+///
+/// `first_chunk` removes the arm rather than excusing it: it returns
+/// `Option<&[u8; N]>` directly, so there is no "wrong length" case to write.
+/// What is left are two `?`s that can BOTH fail for real -- an offset past the
+/// end, and too few bytes remaining -- so the bounds check is reachable instead
+/// of defensive, and the `checked_add` that computed `end` is gone with it.
+///
+/// Making the impossible state unrepresentable is better than justifying it.
+// A flat list of boundary asserts reads as high cognitive complexity and is
+// what a table of boundaries should look like; one function per case would
+// hide the symmetry the cases exist to show.
+#[cfg(test)]
+#[allow(clippy::cognitive_complexity)]
+mod tests {
+    use super::{read_u16_le, read_u32_le, read_u64_le};
+
+    #[test]
+    fn the_widths_decode_little_endian_at_an_offset() {
+        let bytes = [0xff, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09];
+        assert_eq!(read_u16_le(&bytes, 1), Some(0x0201));
+        assert_eq!(read_u32_le(&bytes, 1), Some(0x0403_0201));
+        assert_eq!(read_u64_le(&bytes, 1), Some(0x0807_0605_0403_0201));
+    }
+
+    #[test]
+    fn an_offset_past_the_end_reads_nothing() {
+        // The first `?`. A tensor record's offset comes off the wire, so this
+        // is hostile input rather than a programming error.
+        let bytes = [0u8; 4];
+        assert_eq!(read_u16_le(&bytes, 5), None);
+        assert_eq!(read_u32_le(&bytes, 99), None);
+        assert_eq!(read_u64_le(&bytes, usize::MAX), None);
+
+        // Exactly at the end is past it for a read of any width: there are
+        // zero bytes there.
+        assert_eq!(read_u16_le(&bytes, 4), None);
+        assert_eq!(read_u32_le(&bytes, 4), None);
+    }
+
+    #[test]
+    fn a_field_that_runs_off_the_end_reads_nothing() {
+        // The second `?`, which the old slice-pattern arm could never reach
+        // because the range `get` had already refused. One byte short in each
+        // case -- the boundary a truncated blob actually lands on.
+        let bytes = [0u8; 8];
+        assert_eq!(read_u16_le(&bytes, 7), None);
+        assert_eq!(read_u32_le(&bytes, 5), None);
+        assert_eq!(read_u64_le(&bytes, 1), None);
+
+        // And exactly enough succeeds, so the refusals above are the boundary
+        // rather than the function refusing everything near the end.
+        assert_eq!(read_u16_le(&bytes, 6), Some(0));
+        assert_eq!(read_u32_le(&bytes, 4), Some(0));
+        assert_eq!(read_u64_le(&bytes, 0), Some(0));
+    }
+
+    #[test]
+    fn an_empty_input_reads_nothing_at_offset_zero() {
+        // Zero-length is the degenerate case a truncated blob presents, and
+        // offset 0 is the one place a bounds check written as `offset < len`
+        // would wave through.
+        assert_eq!(read_u16_le(&[], 0), None);
+        assert_eq!(read_u32_le(&[], 0), None);
+        assert_eq!(read_u64_le(&[], 0), None);
+    }
 }
