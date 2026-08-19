@@ -245,6 +245,21 @@ drift:**
    written, property-tested and measured now. It was folded into A13 (FP context switch), which genuinely
    does need the kernel. Split.
 
+   **Superseded 2026-08-19, and the grep was the wrong instrument.** There are still no intrinsics and no
+   `neon` in `src/tensor/src/`, and there is `SDOT` in the binary anyway — `llvm-objdump` finds 14 of them
+   in `libbrainix_tensor.rlib`. The `i8`-by-`i8` inner loop written against `Q8_0` activations is an idiom
+   LLVM recognises, so the kernel reaches the instruction without naming it. Measured, that path runs at
+   **57.0 GB/s of weight bytes on one core against 5.3 GB/s** for the `f32`-activation kernel, and the
+   end-to-end decode difference on a synthetic model is **7.6x to 11.4x**.
+
+   What remains of A17 is therefore not "write NEON". It is the narrower and more fragile thing: the win
+   rests on a pattern match no test asserts, so a refactor can silently delete an order of magnitude. An
+   `SDOT`-presence check over the built artifact is worth more here than intrinsics would be.
+
+   The measurement also retires the row's premise. The `Q8_0` matmul is now **at the memory ceiling** —
+   four workers reach 116.5 GB/s of a measured ~120 GB/s DRAM ceiling — so hand-written SIMD cannot buy
+   what this row assumed it would.
+
 **No drift was found.** Nothing in the plan crosses a hard line, no row proposes an external crate, ambient
 authority, shared-memory IPC, a kernel heap, or a weakened confinement, and the exception ledger still
 holds exactly the four named exceptions. What the review found is that the plan was **under-scheduled, not

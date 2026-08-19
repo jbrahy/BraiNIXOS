@@ -132,11 +132,24 @@ avoiding copies dominate; micro-optimizing arithmetic does not. It also bounds w
 buy: a security mechanism that touches no memory on the hot path costs nearly nothing to keep, and
 removing it is not a performance win worth the loss. **Cut what moves bytes, not what merely offends.**
 
-**Inference on this machine is memory-bandwidth-bound, not compute-bound.** Single-stream decode reads
-essentially the whole weight set per token, so the ceiling is (model bytes) ÷ (memory bandwidth), and
-every design decision should be judged against that arithmetic first. This has a sharp consequence:
-**the biggest wins are in bytes moved, not instructions executed.** Quantization, weight layout, cache
-blocking, and avoiding copies dominate; micro-optimizing arithmetic does not.
+**Measured 2026-08-19, and the premise holds — but the number in it does not.** This paragraph was an
+assertion for as long as it has existed. `src/tensor/benches/matmul.rs` now settles it. Four workers on
+the `Q8_0` kernel reach **116.5 GB/s** streaming a 151 MB matrix from DRAM, and eight reach 124.7 — so the
+ceiling is real, it is roughly **120 GB/s, and four cores already take 94% of it.**
+
+It is not the 200 GB/s this document has been dividing by. That is a vendor figure for the part, and it
+is not reachable by this access pattern. Anything computed as "model bytes ÷ 200 GB/s" is optimistic by
+about 40% and should be recomputed. The bench prints a second case that appears to reach 217 GB/s; that
+matrix is 18.9 MB and fits in the system-level cache, so it measures the SLC and not memory.
+
+Two consequences for the ranking below, both of which it survives:
+
+- **"Bytes moved, not instructions executed" is now measured rather than argued.** The `Q8_0` matmul is
+  at the memory ceiling with the cores it already has, so making its inner loop cheaper cannot help. A
+  session spent trying produced fourteen refutations and five small wins, none of them in the matmul.
+- **The one lever left on the matmul is the one this document already ranks first.** `Q4_0` moves 1.80x
+  fewer bytes and measures 1.34x the speed at six threads. It is a BXW1 format version bump rather than
+  a tuning change, and `src/bxw1` says so explicitly, so it is a decision and not an optimisation.
 
 ### In-bounds performance work — expected, not merely permitted
 
