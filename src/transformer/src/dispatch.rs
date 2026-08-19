@@ -75,6 +75,35 @@ pub trait Dispatch {
     /// The sweep doubles, so the 4-worker row brackets rather than pins it, and
     /// the prediction lands inside the bracket.
     ///
+    /// # Confirmed against a whole model, 2026-08-19
+    ///
+    /// The table above is a per-kernel sweep. `examples/perplexity` runs the
+    /// same thresholds through a complete forward pass, which is the thing that
+    /// actually has to get faster, on a synthetic 180 MB model (12 layers,
+    /// `d_model` 1024, `d_ffn` 2816). Four runs, throughput relative to one
+    /// core:
+    ///
+    /// | threshold | run 1 | run 2 | run 3 | run 4 |
+    /// | --- | --- | --- | --- | --- |
+    /// | split everything | 0.84 | 0.62 | 1.01 | 0.90 |
+    /// | >= 512 KB | 0.76 | 0.70 | 0.67 | 0.87 |
+    /// | >= 2 MB | 0.89 | 1.03 | 1.31 | 0.98 |
+    /// | >= 4 MB | 0.75 | 1.00 | 1.29 | 0.97 |
+    /// | split nothing | 0.91 | 0.99 | 1.31 | 0.97 |
+    ///
+    /// The absolute numbers are worthless -- the host was carrying a load
+    /// average of 6.7 and one run's single-core baseline collapsed from 225 to
+    /// 136 tok/s -- but the *ordering* survives all four runs: **512 KB is
+    /// always among the worst, and 2 MB is always indistinguishable from not
+    /// splitting at all.** That is exactly where the rule puts the crossover
+    /// for this pool, 1238 KB: 512 KB is below it and splits work that should
+    /// be left alone, 2 MB is above it and only splits what is worth splitting.
+    ///
+    /// What these runs cannot say is whether splitting above the crossover
+    /// *wins*, because four workers cannot be measured on a host that has no
+    /// four idle cores. That measurement belongs on the target, which is quiet
+    /// and is the machine the number is for.
+    ///
     /// # Why this replaces a constant
     ///
     /// The perplexity harness carries 4 MB, swept once against a
