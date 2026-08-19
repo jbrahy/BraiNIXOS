@@ -16,6 +16,16 @@
 //! point is the *delta* between two implementations on identical input, which
 //! is the only comparison this file is designed to support.
 //!
+//!
+//! # Six decimal places, not three
+//!
+//! The delta this gate exists to see is small. Three decimals on a perplexity
+//! of 512 resolves about `2e-6` relative, which is coarser than several of the
+//! numerics changes worth pricing: the all-f32 `exp` measured on 2026-08-19
+//! carries a worst-case relative error of `1.95e-6` and would have printed as
+//! an exact tie. Six decimals is enough to tell "did not move" from "moved
+//! below the print width", and those are different findings.
+//!
 //! # Running it
 //!
 //! ```sh
@@ -340,7 +350,7 @@ fn evaluate<D: Dispatch>(
     }
     let elapsed = start.elapsed().as_secs_f64();
     let mean = total_nats / predictions as f64;
-    println!("  PERPLEXITY  {:.3}", mean.exp());
+    println!("  PERPLEXITY  {:.6}", mean.exp());
     println!(
         "  throughput  {:.2} tok/s  ({elapsed:.1}s)",
         predictions as f64 / elapsed
@@ -567,7 +577,7 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
         let elapsed = start.elapsed().as_secs_f64();
         let mean = total_nats / predictions as f64;
         println!("  mean CE     {mean:.4} nats");
-        println!("  PERPLEXITY  {:.3}", mean.exp());
+        println!("  PERPLEXITY  {:.6}", mean.exp());
         println!(
             "  throughput  {:.2} tok/s  ({elapsed:.1}s)",
             predictions as f64 / elapsed
@@ -645,7 +655,7 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
     if let (Some(base), Some(fast)) = (results.first(), results.get(1)) {
         println!();
         println!(
-            "  QUALITY  {:.3} -> {:.3}  ({:+.2}% perplexity)",
+            "  QUALITY  {:.6} -> {:.6}  ({:+.4}% perplexity)",
             base.1,
             fast.1,
             (fast.1 / base.1 - 1.0) * 100.0
@@ -658,7 +668,7 @@ fn run(model_path: &str, vocab_path: &str) -> Result<(), String> {
         );
         for entry in results.iter().skip(2) {
             println!(
-                "  {:<8} {:.2} -> {:.2} tok/s  ({:.2}x over 1 core)   PPL {:.3}",
+                "  {:<8} {:.2} -> {:.2} tok/s  ({:.2}x over 1 core)   PPL {:.6}",
                 entry.0,
                 fast.2,
                 entry.2,

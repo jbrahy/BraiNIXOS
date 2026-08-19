@@ -198,6 +198,30 @@ pub(crate) fn exp(x: f64) -> f64 {
 /// positive arguments, so the overflow branch is live here even though softmax
 /// can never reach it. Removing the branches was measured separately and bought
 /// nothing -- 131.3 to 132.0 M exp/s -- because the polynomial is the cost.
+///
+/// # Why the arithmetic stays `f64`, measured 2026-08-19
+///
+/// The obvious next step is to do the reduction, the polynomial and the scale
+/// in `f32` as well, since the result is stored as `f32` anyway. It was
+/// written and measured. **It is not worth taking.**
+///
+/// | | |
+/// | --- | --- |
+/// | exp alone, interleaved A/B | 1.18x to 1.33x faster |
+/// | worst relative error | `1.95e-6`, about **33x** `f32` unit roundoff |
+/// | end-to-end decode, interleaved A/B over three rounds | 4861 vs 4846 tok/s, **no difference** |
+/// | perplexity, synthetic model, six decimals | `512.203376` both, unchanged |
+///
+/// The accuracy loss is not the polynomial, which is the same degree. It is the
+/// range reduction: `r = (x - k·ln2_hi) - k·ln2_lo` cancels, and in `f32` the
+/// cancellation eats most of the mantissa for large `|x|`. The two-part `ln2`
+/// exists to buy precision that `f32` cannot hold in the first place.
+///
+/// The end-to-end row is the one that settles it. `exp` is faster in isolation
+/// and the model decodes at the same rate, because the forward pass is dominated
+/// by the `Q8_0` matmuls, not by `exp`. Paying 33x the error for a win that does
+/// not survive contact with the whole workload is a bad trade in either
+/// direction of the north star's ranking.
 pub(crate) fn exp_f32(x: f64) -> f64 {
     if x.is_nan() {
         return x;
