@@ -88,9 +88,35 @@ UNCOVERED = re.compile(r"^\s*(\d+)\|\s*0\|")
 SOURCE_HEADER = re.compile(r"^(/.*\.rs):$")
 
 
+def run_instrumented(target: str) -> None:
+    """Execute every crate's tests ONCE, under instrumentation, into one profile.
+
+    This used to be eighteen separate `cargo llvm-cov -p <crate>` runs, one per
+    crate, each of which rebuilds, re-runs and re-reports. That was slow, and
+    worse, it was WRONG about once in every few invocations: the first run after
+    a source edit could report line numbers from the new source against counts
+    from the previous build, inventing uncovered lines that do not exist. It
+    misfired twice on 2026-08-19 -- once landing on comment lines, which is
+    obvious, and once landing on code, which is not.
+
+    Running the tests once and then reading that one profile eighteen times
+    removes the failure mode by construction: every report is a pure read of the
+    same profile, so counts and line numbers cannot come from different builds.
+    """
+    subprocess.run(
+        ["cargo", "llvm-cov", "clean", "--profraw-only"],
+        capture_output=True, text=True, cwd=REPO_ROOT,
+    )
+    command = ["cargo", "llvm-cov", "--no-report", "--target", target]
+    for crate in CRATES:
+        command += ["-p", crate]
+    subprocess.run(command, capture_output=True, text=True, cwd=REPO_ROOT)
+
+
 def text_report(crate: str, target: str) -> str:
+    """The per-crate text report, read from the profile `run_instrumented` made."""
     result = subprocess.run(
-        ["cargo", "llvm-cov", "--target", target, "--text",
+        ["cargo", "llvm-cov", "report", "--target", target, "--text",
          "--ignore-filename-regex", IGNORE_REGEX, "-p", crate],
         capture_output=True, text=True, cwd=REPO_ROOT,
     )
@@ -158,17 +184,7 @@ def main() -> int:
     target = subprocess.run(["rustc", "-vV"], capture_output=True, text=True).stdout
     host = next(l.split()[1] for l in target.splitlines() if l.startswith("host:"))
 
-    # Delete stale raw profiles before measuring. `cargo llvm-cov` MERGES every
-    # .profraw it finds, including ones left by unrelated `cargo test` runs, and
-    # a merged profile reports line numbers from the current source against
-    # coverage from an older build. That misfires as a FAILURE on lines that are
-    # doc comments -- observed on 2026-08-19, where a doc-only edit to math.rs
-    # "uncovered" two comment lines. --profraw-only clears the profiles without
-    # discarding the build, so the gate stays cheap to re-run.
-    subprocess.run(
-        ["cargo", "llvm-cov", "clean", "--profraw-only"],
-        capture_output=True, text=True, cwd=REPO_ROOT,
-    )
+    run_instrumented(host)
 
     unjustified: list[str] = []
     total_exempt = 0
@@ -179,12 +195,9 @@ def main() -> int:
     for crate in CRATES:
         found = uncovered_lines(text_report(crate, host))
         if looks_stale(found):
-            # Re-measure once, from clean profiles. If the second read agrees
-            # with the first, the lines are real and get reported as usual.
-            subprocess.run(
-                ["cargo", "llvm-cov", "clean", "--profraw-only"],
-                capture_output=True, text=True, cwd=REPO_ROOT,
-            )
+            # Belt and braces. `run_instrumented` should make this unreachable,
+            # so reaching it means an assumption about the profile broke.
+            run_instrumented(host)
             found = uncovered_lines(text_report(crate, host))
         exempt = 0
         bad: list[str] = []
