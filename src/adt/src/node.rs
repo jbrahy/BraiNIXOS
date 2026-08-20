@@ -282,11 +282,8 @@ impl<'a> Iterator for PropertyIter<'a> {
         }
         let decoded = match decode_property(self.blob, self.offset) {
             Ok(decoded) => decoded,
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             Err(error) => {
-                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 self.done = true;
-                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 return Some(Err(error));
             }
         };
@@ -294,9 +291,15 @@ impl<'a> Iterator for PropertyIter<'a> {
         self.remaining = match self.remaining.checked_sub(1) {
             Some(remaining) => remaining,
             None => {
-                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+                // Kept although unreachable: the early return and this
+                // subtraction are separated by a decode, so an edit that moves
+                // either one must meet a denial rather than a wrap to
+                // `u32::MAX` and an iterator that never terminates.
+                // COVERAGE-EXEMPT: the `remaining == 0` early return at the top
+                // of `next` leaves `remaining` at least 1 here, so this cannot
+                // borrow. That is a property of this function, not of the tree
+                // having been parsed.
                 self.done = true;
-                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 return Some(Err(AdtError::OffsetOverflow));
             }
         };
@@ -326,35 +329,38 @@ impl<'a> Iterator for ChildIter<'a> {
             return None;
         }
         if self.depth > crate::MAX_TREE_DEPTH {
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+            // COVERAGE-EXEMPT: `children` refuses to hand back an iterator
+            // whose `child_count` is non-zero past the depth limit, and
+            // `ChildIter`'s fields are private, so any cursor that yields
+            // anything already has `depth <= MAX_TREE_DEPTH`. Kept fail-closed
+            // because that refusal lives in the constructor: this is the
+            // second place the limit is enforced, and the buffers sized from
+            // `MAX_PATH_NODES` depend on both.
             self.done = true;
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             return Some(Err(AdtError::DepthLimitExceeded));
         }
         if let Err(error) = decode_node_header(self.blob, self.offset) {
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             self.done = true;
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             return Some(Err(error));
         }
         let node = Node::new(self.blob, self.offset, self.depth);
         let budget = crate::MAX_TREE_DEPTH.saturating_sub(self.depth);
         match walk_node_end(self.blob, self.offset, budget) {
             Ok(end) => self.offset = end,
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
             Err(error) => {
-                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 self.done = true;
-                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 return Some(Err(error));
             }
         }
         self.remaining = match self.remaining.checked_sub(1) {
             Some(remaining) => remaining,
             None => {
-                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+                // COVERAGE-EXEMPT: as in `PropertyIter::next` -- the
+                // `remaining == 0` early return means the subtraction cannot
+                // borrow, which is a property of this function and not of the
+                // tree having been parsed. Kept for the same reason: a wrap
+                // here is an iterator that never terminates.
                 self.done = true;
-                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                 return Some(Err(AdtError::OffsetOverflow));
             }
         };
@@ -500,5 +506,90 @@ mod tests {
             let node = Node::new(blob.as_slice(), 0, 0);
             assert_eq!(node.address_cells(), Ok(good));
         }
+    }
+
+    /// A header that promises more properties than the blob holds.
+    ///
+    /// `PropertyIter` trusts the count in the node header and decodes that many
+    /// records. When the blob ends first, the decode must deny and the iterator
+    /// must stay denied -- yielding `Some(Err(..))` once and `None` after, not
+    /// re-reading the same bad offset forever.
+    #[test]
+    fn a_property_count_larger_than_the_record_run_denies_and_stays_denied() {
+        let mut blob = Blob::new();
+        blob.header(2, 0);
+        blob.property("name", b"leaf\0");
+        // A second record of the right length whose name never terminates, so
+        // the header's count check is satisfied and the decode is not. An
+        // absent record would be caught earlier, by `decode_node_header`.
+        blob.push(&[0xFF; 32]);
+        blob.push(&0u32.to_le_bytes());
+
+        let node = Node::new(blob.as_slice(), 0, 0);
+        let mut properties = node.properties().expect("the header itself is intact");
+
+        let first = properties.next().expect("one record is present");
+        assert_eq!(first.expect("well formed").name(), b"name");
+
+        let denial = properties.next().expect("the iterator must speak once");
+        assert!(
+            denial.is_err(),
+            "a record past the end of the blob must deny, got {denial:?}"
+        );
+        assert!(
+            properties.next().is_none(),
+            "a denied iterator is finished, not retried"
+        );
+    }
+
+    /// A child count that points at a header which is not there.
+    #[test]
+    fn a_child_offset_past_the_blob_denies_and_stays_denied() {
+        let mut blob = Blob::new();
+        blob.header(1, 1);
+        blob.property("name", b"deep\0");
+        // A child header that is present, so the parent's child-count check
+        // passes, but that claims more properties than the blob could hold.
+        blob.header(u32::MAX, 0);
+
+        let node = Node::new(blob.as_slice(), 0, 0);
+        let mut children = node.children().expect("the parent header is intact");
+
+        let denial = children.next().expect("the iterator must speak once");
+        assert!(
+            denial.is_err(),
+            "a child header past the end of the blob must deny, got {denial:?}"
+        );
+        assert!(children.next().is_none(), "and then be finished");
+    }
+
+    /// A child whose header decodes but whose subtree does not.
+    ///
+    /// This is the arm that separates `ChildIter` from a simple offset walk:
+    /// advancing to the next sibling means walking the current child's whole
+    /// subtree, because nothing in the format records a node's size. A child
+    /// that claims a property it does not have makes that walk fail.
+    #[test]
+    fn a_child_whose_subtree_walk_fails_denies_rather_than_advancing() {
+        let mut blob = Blob::new();
+        blob.header(1, 1);
+        blob.property("name", b"deep\0");
+        // A child header that decodes: it claims one property and one property
+        // worth of bytes follows, so the count check is satisfied.
+        blob.header(1, 0);
+        // Those bytes are not a property. The child's header is fine and its
+        // subtree is not, which is the only way to reach the walk.
+        blob.push(&[0xFF; 32]);
+        blob.push(&0u32.to_le_bytes());
+
+        let node = Node::new(blob.as_slice(), 0, 0);
+        let mut children = node.children().expect("the parent header is intact");
+
+        let denial = children.next().expect("the iterator must speak once");
+        assert!(
+            denial.is_err(),
+            "an unwalkable subtree must deny, got {denial:?}"
+        );
+        assert!(children.next().is_none(), "and then be finished");
     }
 }
