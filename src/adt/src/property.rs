@@ -165,7 +165,7 @@ impl<'a> Property<'a> {
         }
         let address = read_cells(self.value, start, cells.address_cells)?;
         let size_offset = start
-            .checked_add(cells.address_bytes()?)
+            .checked_add(cells.address_bytes())
             .ok_or(AdtError::RegContainerOutOfRange)?;
         let size = read_cells(self.value, size_offset, cells.size_cells)?;
         Ok(AddressRange { address, size })
@@ -191,14 +191,13 @@ impl<'a> Property<'a> {
         child: CellCounts,
         parent_address_cells: u32,
     ) -> Result<RangesIter<'a>, AdtError> {
-        if parent_address_cells == 0 || parent_address_cells > 2 {
-            return Err(AdtError::InvalidAddressCells);
-        }
-        let child_address_bytes = child.address_bytes()?;
-        let size_bytes = child.size_bytes()?;
-        let parent_address_bytes = (parent_address_cells as usize)
-            .checked_mul(U32_LEN)
-            .ok_or(AdtError::MalformedRangesEntry)?;
+        let parent_address_cells = match CellWidth::from_declared(parent_address_cells) {
+            Some(CellWidth::Zero) | None => return Err(AdtError::InvalidAddressCells),
+            Some(width) => width,
+        };
+        let child_address_bytes = child.address_bytes();
+        let size_bytes = child.size_bytes();
+        let parent_address_bytes = parent_address_cells.bytes();
         let entry_len = child_address_bytes
             .checked_add(parent_address_bytes)
             .ok_or(AdtError::MalformedRangesEntry)?
@@ -233,44 +232,80 @@ pub struct AddressRange {
 /// spec §8.5 and §9.8. There is no default: a missing declaration denies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CellCounts {
-    /// Cells in an address. Always 1 or 2.
-    address_cells: u32,
+    /// Cells in an address. Always 1 or 2 -- `Zero` is refused by `new`.
+    address_cells: CellWidth,
     /// Cells in a size. 0, 1 or 2.
-    size_cells: u32,
+    size_cells: CellWidth,
+}
+
+/// How many 32-bit cells a field occupies: zero, one or two.
+///
+/// The specification admits exactly these three widths (spec section 8.5), and
+/// this enum is why `read_cells` has no catch-all arm. Before it, `read_cells`
+/// took a `u32` and carried an `_ => Err(InvalidAddressCells)` that no caller
+/// could reach and that therefore needed a coverage exemption to explain. The
+/// invariant now lives in the type: a width outside 0..=2 cannot be built, so
+/// the arm that refused one has nothing left to refuse and is gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellWidth {
+    /// No cells. Legal for `#size-cells`, never for `#address-cells`.
+    Zero,
+    /// One 32-bit cell.
+    One,
+    /// Two 32-bit cells.
+    Two,
+}
+
+impl CellWidth {
+    /// Bytes this width occupies. Total by construction: at most 8.
+    const fn bytes(self) -> usize {
+        match self {
+            Self::Zero => 0,
+            Self::One => U32_LEN,
+            Self::Two => U32_LEN * 2,
+        }
+    }
+
+    /// The width a declared count names, or `None` for one the spec excludes.
+    const fn from_declared(count: u32) -> Option<Self> {
+        match count {
+            0 => Some(Self::Zero),
+            1 => Some(Self::One),
+            2 => Some(Self::Two),
+            _ => None,
+        }
+    }
 }
 
 impl CellCounts {
     /// Validates and constructs a cell-count pair.
     pub fn new(address_cells: u32, size_cells: u32) -> Result<Self, AdtError> {
-        if address_cells == 0 || address_cells > 2 {
-            return Err(AdtError::InvalidAddressCells);
-        }
-        if size_cells > 2 {
+        let address_cells = match CellWidth::from_declared(address_cells) {
+            Some(CellWidth::Zero) | None => return Err(AdtError::InvalidAddressCells),
+            Some(width) => width,
+        };
+        let Some(size_cells) = CellWidth::from_declared(size_cells) else {
             return Err(AdtError::InvalidSizeCells);
-        }
+        };
         Ok(Self {
             address_cells,
             size_cells,
         })
     }
 
-    fn address_bytes(&self) -> Result<usize, AdtError> {
-        (self.address_cells as usize)
-            .checked_mul(U32_LEN)
-            .ok_or(AdtError::RegContainerOutOfRange)
+    const fn address_bytes(&self) -> usize {
+        self.address_cells.bytes()
     }
 
-    fn size_bytes(&self) -> Result<usize, AdtError> {
-        (self.size_cells as usize)
-            .checked_mul(U32_LEN)
-            .ok_or(AdtError::RegContainerOutOfRange)
+    const fn size_bytes(&self) -> usize {
+        self.size_cells.bytes()
     }
 
     /// Bytes in one `reg` container: `(address_cells + size_cells) × 4`.
     pub fn container_len(&self) -> Result<usize, AdtError> {
         let total = self
-            .address_bytes()?
-            .checked_add(self.size_bytes()?)
+            .address_bytes()
+            .checked_add(self.size_bytes())
             .ok_or(AdtError::RegContainerOutOfRange)?;
         if total == 0 {
             // Kept although unreachable: the floor lives in `new` rather than
@@ -292,14 +327,14 @@ impl CellCounts {
 ///
 /// This ordering is the opposite of an FDT's, and each cell is itself
 /// little-endian (spec §8.5, §4.4).
-fn read_cells(bytes: &[u8], offset: usize, count: u32) -> Result<u64, AdtError> {
+fn read_cells(bytes: &[u8], offset: usize, count: CellWidth) -> Result<u64, AdtError> {
     match count {
-        0 => Ok(0),
-        1 => {
+        CellWidth::Zero => Ok(0),
+        CellWidth::One => {
             let low = read_u32_le(bytes, offset).ok_or(AdtError::RegContainerOutOfRange)?;
             Ok(u64::from(low))
         }
-        2 => {
+        CellWidth::Two => {
             let low = read_u32_le(bytes, offset).ok_or(AdtError::RegContainerOutOfRange)?;
             let high_offset = offset
                 .checked_add(U32_LEN)
@@ -310,15 +345,6 @@ fn read_cells(bytes: &[u8], offset: usize, count: u32) -> Result<u64, AdtError> 
                 .ok_or(AdtError::RegContainerOutOfRange)?;
             Ok(u64::from(low) | shifted)
         }
-        // COVERAGE-EXEMPT: `count` is always a `CellCounts` field, whose
-        // constructor rejects anything above 2 and whose fields are private,
-        // so no caller can reach this arm. That bound is machine-checked, not
-        // argued: Kani's `adt_cell_counts_enforce_the_specification_bounds`
-        // proves over every `(u32, u32)` that an accepted pair has
-        // `address_cells` in 1..=2 and `size_cells` in 0..=2. Kept fail-closed
-        // rather than deleted: an unrecognised cell count must deny, not
-        // decode.
-        _ => Err(AdtError::InvalidAddressCells),
     }
 }
 
@@ -459,9 +485,9 @@ pub struct RangesIter<'a> {
     value: &'a [u8],
     position: usize,
     entry_len: usize,
-    child_address_cells: u32,
-    parent_address_cells: u32,
-    size_cells: u32,
+    child_address_cells: CellWidth,
+    parent_address_cells: CellWidth,
+    size_cells: CellWidth,
 }
 
 impl Iterator for RangesIter<'_> {
@@ -485,16 +511,7 @@ impl Iterator for RangesIter<'_> {
             // entry. Kept because both of those facts live in other functions.
             Err(error) => return Some(Err(error)),
         };
-        let child_address_bytes = match (self.child_address_cells as usize).checked_mul(U32_LEN) {
-            Some(value) => value,
-            // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
-            // than by validation of the tree. `ranges` refuses a parent count outside
-            // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
-            // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
-            // unless a whole `entry_len` is present, so each read lands inside the
-            // entry. Kept because both of those facts live in other functions.
-            None => return Some(Err(AdtError::MalformedRangesEntry)),
-        };
+        let child_address_bytes = self.child_address_cells.bytes();
         let parent_offset = match start.checked_add(child_address_bytes) {
             Some(value) => value,
             // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
@@ -516,16 +533,7 @@ impl Iterator for RangesIter<'_> {
             // entry. Kept because both of those facts live in other functions.
             Err(error) => return Some(Err(error)),
         };
-        let parent_address_bytes = match (self.parent_address_cells as usize).checked_mul(U32_LEN) {
-            Some(value) => value,
-            // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
-            // than by validation of the tree. `ranges` refuses a parent count outside
-            // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
-            // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
-            // unless a whole `entry_len` is present, so each read lands inside the
-            // entry. Kept because both of those facts live in other functions.
-            None => return Some(Err(AdtError::MalformedRangesEntry)),
-        };
+        let parent_address_bytes = self.parent_address_cells.bytes();
         let size_offset = match parent_offset.checked_add(parent_address_bytes) {
             Some(value) => value,
             // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
