@@ -359,10 +359,11 @@ fn softmax_every_head<D: Dispatch>(
                             refused.store(true, Ordering::Relaxed);
                         }
                     }
-                    // COVERAGE-EXEMPT: both slices are `context` long by the
-                    // arithmetic directly above, which is why the flag rather
-                    // than a panic: a refactor that breaks that agreement is
-                    // caught loudly instead of half-writing the board.
+                    // `context` is a parameter, so a caller can ask for more
+                    // positions than a score row holds and land here. The flag
+                    // rather than a panic: the board is left alone and the call
+                    // refuses. Pinned by
+                    // `a_context_wider_than_the_score_row_is_a_sizing_error_and_not_a_silent_pass`.
                     _ => mis_sliced.store(true, Ordering::Relaxed),
                 }
             }
@@ -376,7 +377,6 @@ fn softmax_every_head<D: Dispatch>(
             return Err(TransformerError::Kernel(TensorError::NonFiniteInput));
         }
         if mis_sliced.load(Ordering::Relaxed) {
-            // COVERAGE-EXEMPT: as the store above.
             return Err(TransformerError::WorkspaceTooSmall);
         }
         Ok(())
@@ -593,6 +593,42 @@ mod tests {
             softmax_every_head(&Serial, &mut workspace, 4, shape),
             Err(TransformerError::Kernel(TensorError::NonFiniteInput)),
             "an infinite score is a non-finite input, not a workspace sizing error"
+        );
+    }
+
+    /// The other flag, and the reason there are two of them.
+    ///
+    /// `context` is a parameter, so a caller can ask for more positions than a
+    /// score row holds. Then `row.get_mut(..context)` is `None`, nothing is
+    /// written, and the call must say so. Before today both flags reported
+    /// `WorkspaceTooSmall`; the test above pins the other error, and this one
+    /// pins that this case still gives the sizing error rather than inheriting
+    /// the non-finite one now that they are told apart.
+    #[test]
+    fn a_context_wider_than_the_score_row_is_a_sizing_error_and_not_a_silent_pass() {
+        let mut storage = [0.0_f32; FLOATS];
+        let mut quant: [u8; 0] = [];
+        let mut workspace =
+            Workspace::new(&mut storage, &mut quant, &CONFIG, 8).expect("workspace");
+
+        let shape = AttentionShape {
+            head_width: CONFIG.head_width,
+            query_width: CONFIG.query_head_count * CONFIG.head_width,
+            key_value_width: CONFIG.key_value_head_count * CONFIG.head_width,
+            query_head_count: CONFIG.query_head_count,
+            query_heads_per_group: CONFIG.query_head_count / CONFIG.key_value_head_count,
+            scale: 1.0,
+            score_stride: CONFIG.maximum_sequence_length,
+        };
+
+        for slot in workspace.scores.iter_mut() {
+            *slot = 0.0;
+        }
+        let too_wide = CONFIG.maximum_sequence_length + 1;
+        assert_eq!(
+            softmax_every_head(&Serial, &mut workspace, too_wide, shape),
+            Err(TransformerError::WorkspaceTooSmall),
+            "a context past the score stride must refuse, not write a partial board"
         );
     }
 
