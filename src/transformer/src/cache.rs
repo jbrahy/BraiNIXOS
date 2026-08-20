@@ -87,7 +87,9 @@ impl CacheGeometry {
                 maximum_sequence_length: config.maximum_sequence_length,
                 key_value_width,
             }),
-            // COVERAGE-EXEMPT: propagates key_value_width()'s refusal, which ModelConfig::validate has already ruled out before any CacheGeometry is built.
+            // Reached by any caller of this `pub const fn` that has not run
+            // `ModelConfig::validate` first. Pinned by
+            // `a_geometry_whose_key_value_width_overflows_is_refused_not_wrapped`.
             Err(error) => Err(error),
         }
     }
@@ -144,7 +146,10 @@ pub const fn session_cache_floats(
 ) -> Result<usize, TransformerError> {
     match CacheGeometry::for_config(config) {
         Ok(geometry) => scale(geometry.floats_per_session(), session_count),
-        // COVERAGE-EXEMPT: propagates a const-fn size refusal that ModelConfig::validate has already ruled out at runtime.
+        // Same reachability as `for_config`: this is public sizing, and a
+        // caller sizing a region deserves the refusal rather than a wrapped
+        // count. Pinned by
+        // `the_public_sizing_helper_propagates_that_refusal_rather_than_sizing_zero`.
         Err(error) => Err(error),
     }
 }
@@ -388,8 +393,10 @@ impl<'a> SessionCache<'a> {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::{CacheGeometry, KeyValueArena};
+    use super::{session_cache_floats, CacheGeometry, KeyValueArena};
+    use crate::config::ModelConfig;
     use crate::error::TransformerError;
+    use brainix_tensor::RopePairing;
 
     const GEOMETRY: CacheGeometry = CacheGeometry {
         layer_count: 2,
@@ -438,6 +445,47 @@ mod tests {
         assert_eq!(
             session.store(0, 0, &[], &[]),
             Err(TransformerError::WeightShapeMismatch)
+        );
+    }
+
+    /// A config whose key/value width does not fit a `usize`.
+    ///
+    /// Both markers below said the refusal is "ruled out by
+    /// ModelConfig::validate". True of the forward pass, which only sees
+    /// validated configs -- and both of these are `pub const fn` on the crate's
+    /// surface, so a caller reaches them with whatever config it likes and
+    /// nothing validates first. That is the caller the propagation is for.
+    const OVERFLOWING: ModelConfig = ModelConfig {
+        architecture_id: 1,
+        layer_count: 2,
+        model_width: 32,
+        query_head_count: 4,
+        key_value_head_count: usize::MAX,
+        head_width: 2,
+        feed_forward_width: 64,
+        vocabulary_size: 48,
+        maximum_sequence_length: 16,
+        rope_theta: 1.0e4,
+        normalization_epsilon: 1.0e-5,
+        rope_dimensions: 4,
+        rope_pairing: RopePairing::Interleaved,
+    };
+
+    #[test]
+    fn a_geometry_whose_key_value_width_overflows_is_refused_not_wrapped() {
+        assert_eq!(
+            CacheGeometry::for_config(&OVERFLOWING).err(),
+            Some(TransformerError::DimensionOverflow),
+            "usize::MAX x 2 must refuse rather than wrap to a small width"
+        );
+    }
+
+    #[test]
+    fn the_public_sizing_helper_propagates_that_refusal_rather_than_sizing_zero() {
+        assert_eq!(
+            session_cache_floats(&OVERFLOWING, 1).err(),
+            Some(TransformerError::DimensionOverflow),
+            "a caller sizing a region must be told, not handed a wrapped count"
         );
     }
 }
