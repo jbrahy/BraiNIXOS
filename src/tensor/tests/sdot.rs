@@ -14,7 +14,7 @@
 
 use brainix_tensor::{
     matmul_q4_0_q8a, matmul_q4_0_q8a_rows, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows,
-    quantize_activations, quantize_q4_0, MatMulShape, Q4Weights, Q8Weights,
+    matmul_q8_0_q8a_tokens, quantize_activations, quantize_q4_0, MatMulShape, Q4Weights, Q8Weights,
 };
 
 /// Deterministic pseudo-random floats in a range typical of activations.
@@ -314,5 +314,102 @@ fn a_q4_row_range_past_the_end_denies() {
     assert!(
         matmul_q4_0_q8a_rows(shape, &weights, &quantized, 0, 4, &mut out[..3]).is_err(),
         "y must be exactly n_tokens x row_count"
+    );
+}
+
+#[test]
+fn splitting_the_tokens_reproduces_the_whole() {
+    // The prefill counterpart of `splitting_the_output_rows_reproduces_the_whole`,
+    // and the property token-parallel prefill would rest on: N workers each
+    // taking a range of TOKENS produce exactly what one call produces.
+    //
+    // Bit-for-bit, again, and this direction is the one worth checking. A token
+    // range writes `y[t * n_out ..]` for each of its tokens, so an off-by-one in
+    // the destination index moves whole rows rather than perturbing a sum, and
+    // an approximate comparison would not notice.
+    const N_OUT: usize = 96;
+    const N_IN: usize = 128;
+    const N_TOKENS: usize = 12;
+
+    let payload = q8_payload(N_OUT, N_IN, 23);
+    let weights = Q8Weights::new(&payload, N_OUT, N_IN).expect("weights");
+    let x = values(N_TOKENS * N_IN, 7);
+    let shape = MatMulShape {
+        n_tokens: N_TOKENS,
+        n_in: N_IN,
+        n_out: N_OUT,
+    };
+
+    let mut scratch = vec![0u8; Q8Weights::derived_payload_len(N_TOKENS, N_IN).expect("len")];
+    quantize_activations(N_TOKENS, N_IN, &x, &mut scratch).expect("quantize");
+    let quantized = Q8Weights::new(&scratch, N_TOKENS, N_IN).expect("view");
+
+    let mut whole = vec![0.0f32; N_TOKENS * N_OUT];
+    matmul_q8_0_q8a(shape, &weights, &quantized, &mut whole).expect("whole");
+
+    // Every divisor of 12, so the last chunk is full, plus 5, where it is not.
+    for workers in [1usize, 2, 3, 4, 6, 12, 5] {
+        let per_worker = N_TOKENS.div_ceil(workers);
+        let mut split = vec![0.0f32; N_TOKENS * N_OUT];
+        for (index, chunk) in split.chunks_mut(per_worker * N_OUT).enumerate() {
+            let start = index * per_worker;
+            let count = chunk.len() / N_OUT;
+            matmul_q8_0_q8a_tokens(shape, &weights, &quantized, start, count, chunk)
+                .expect("token range");
+        }
+        assert_eq!(
+            split, whole,
+            "{workers} workers disagreed with one call over {N_TOKENS} tokens"
+        );
+    }
+}
+
+#[test]
+fn a_token_range_past_the_end_denies() {
+    const N: usize = 64;
+    const N_TOKENS: usize = 4;
+    let payload = q8_payload(N, N, 3);
+    let weights = Q8Weights::new(&payload, N, N).expect("weights");
+    let mut scratch = vec![0u8; Q8Weights::derived_payload_len(N_TOKENS, N).expect("len")];
+    quantize_activations(N_TOKENS, N, &values(N_TOKENS * N, 4), &mut scratch).expect("quantize");
+    let quantized = Q8Weights::new(&scratch, N_TOKENS, N).expect("view");
+    let shape = MatMulShape {
+        n_tokens: N_TOKENS,
+        n_in: N,
+        n_out: N,
+    };
+
+    // Starts inside, ends outside.
+    let mut y = vec![0.0f32; 2 * N];
+    assert!(matmul_q8_0_q8a_tokens(shape, &weights, &quantized, 3, 2, &mut y).is_err());
+    // Starts outside.
+    assert!(matmul_q8_0_q8a_tokens(shape, &weights, &quantized, N_TOKENS, 1, &mut y[..N]).is_err());
+    // Empty range.
+    assert!(matmul_q8_0_q8a_tokens(shape, &weights, &quantized, 0, 0, &mut y[..0]).is_err());
+    // Right range, wrong destination length.
+    assert!(matmul_q8_0_q8a_tokens(shape, &weights, &quantized, 0, 2, &mut y[..N]).is_err());
+
+    // A shape whose n_out disagrees with the weight view.
+    let wrong_out = MatMulShape {
+        n_tokens: N_TOKENS,
+        n_in: N,
+        n_out: N / 2,
+    };
+    assert!(
+        matmul_q8_0_q8a_tokens(wrong_out, &weights, &quantized, 0, 1, &mut y[..N / 2]).is_err()
+    );
+
+    // A shape whose n_in disagrees with the activation view. The weight view
+    // has to agree with it, or the earlier guard fires first and this one is
+    // never reached -- which is the whole reason they are separate guards.
+    let narrow = q8_payload(N, N / 2, 9);
+    let narrow_weights = Q8Weights::new(&narrow, N, N / 2).expect("narrow weights");
+    let wrong_in = MatMulShape {
+        n_tokens: N_TOKENS,
+        n_in: N / 2,
+        n_out: N,
+    };
+    assert!(
+        matmul_q8_0_q8a_tokens(wrong_in, &narrow_weights, &quantized, 0, 1, &mut y[..N]).is_err()
     );
 }

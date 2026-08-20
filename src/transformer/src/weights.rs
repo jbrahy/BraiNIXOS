@@ -43,7 +43,8 @@
 use crate::dispatch::{chunk_len, Dispatch};
 use brainix_tensor::{
     matmul_f32, matmul_q4_0_q8a, matmul_q4_0_q8a_rows, matmul_q8_0, matmul_q8_0_q8a,
-    matmul_q8_0_q8a_rows, quantize_activations, MatMulShape, Q4Weights, Q8Weights,
+    matmul_q8_0_q8a_rows, matmul_q8_0_q8a_tokens, quantize_activations, MatMulShape, Q4Weights,
+    Q8Weights,
 };
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -207,6 +208,14 @@ impl WeightMatrix<'_> {
                         let weight_bytes =
                             shape.n_out.saturating_mul(shape.n_in).saturating_mul(9) / 8;
                         let worth_splitting = weight_bytes >= dispatch.minimum_split_bytes();
+                        // Prefill is compute-bound, so what decides whether a
+                        // split pays is the arithmetic, and the arithmetic
+                        // scales with the batch while the weight bytes do not.
+                        // Pricing this branch on `weight_bytes` alone would
+                        // leave a 32-token projection unsplit for being "small"
+                        // when it is doing 32 times the work.
+                        let prefill_worth_splitting = weight_bytes.saturating_mul(shape.n_tokens)
+                            >= dispatch.minimum_split_bytes();
                         if shape.n_tokens == 1 && dispatch.chunks() > 1 && worth_splitting {
                             let width = chunk_len(shape.n_out, dispatch.chunks())?;
                             // Chunks run on other threads, so the closure is
@@ -249,6 +258,47 @@ impl WeightMatrix<'_> {
                                 // `Fn` closure shared across threads cannot
                                 // carry a `Result` out without allocating; the
                                 // flag is the most it can set.
+                                return Err(TransformerError::WeightShapeMismatch);
+                            }
+                        } else if shape.n_tokens > 1
+                            && dispatch.chunks() > 1
+                            && prefill_worth_splitting
+                        {
+                            // Prefill: split TOKENS, not output rows.
+                            //
+                            // Each worker streams the whole weight set, which
+                            // is unaffordable at one token -- six would need
+                            // about three times the bus -- and cheap here,
+                            // because past one token the kernel is
+                            // compute-bound. Measured 2026-08-20 at 4096x4096
+                            // over 32 tokens, best of three: 2.13x on two
+                            // workers, 2.99x on four, 3.45x on six, with 39.1
+                            // GB/s of weight traffic at six against a measured
+                            // ~120 GB/s ceiling.
+                            //
+                            // Token `t` owns `[t * n_out, ..)`, so a range of
+                            // tokens is a contiguous range of `destination` and
+                            // `for_each_chunk` expresses it directly.
+                            let per_worker = shape.n_tokens.div_ceil(dispatch.chunks());
+                            let width = checked_product(per_worker, shape.n_out)?;
+                            let failed = AtomicBool::new(false);
+                            dispatch.for_each_chunk(destination, width, |index, chunk| {
+                                let start = index.saturating_mul(per_worker);
+                                // `checked_div` because the workspace denies
+                                // bare arithmetic here. A zero count makes the
+                                // kernel refuse and the flag fire, which is the
+                                // fail-closed answer for a shape this closure
+                                // cannot otherwise report on.
+                                let count = chunk.len().checked_div(shape.n_out).unwrap_or(0);
+                                if matmul_q8_0_q8a_tokens(
+                                    shape, weights, &view, start, count, chunk,
+                                )
+                                .is_err()
+                                {
+                                    failed.store(true, Ordering::Relaxed);
+                                }
+                            });
+                            if failed.load(Ordering::Relaxed) {
                                 return Err(TransformerError::WeightShapeMismatch);
                             }
                         } else {
@@ -566,6 +616,39 @@ mod tests {
             ),
             Err(TransformerError::WeightShapeMismatch),
             "the Q4 split must report a refusal as loudly as the Q8 one"
+        );
+    }
+
+    /// The token split reports a refusal too, on the same terms as the row one.
+    #[test]
+    fn a_kernel_refusal_inside_the_token_split_is_reported_rather_than_swallowed() {
+        const TOKENS: usize = 2;
+        let payload = [0_u8; 4608];
+        let weights = Q8Weights::new(&payload, N_OUT, N_IN).expect("a well formed weight view");
+        let matrix = WeightMatrix::Quantized8(weights);
+
+        let activations = [0.0_f32; TOKENS * N_IN];
+        let mut scratch = [0_u8; 8192];
+        // Twice the batch's output width, so the later chunks ask for tokens
+        // past the end of the batch.
+        let mut destination = [0.0_f32; TOKENS * N_OUT * 2];
+
+        let shape = MatMulShape {
+            n_tokens: TOKENS,
+            n_in: N_IN,
+            n_out: N_OUT,
+        };
+
+        assert_eq!(
+            matrix.project(
+                shape,
+                &activations,
+                &mut scratch,
+                &TwoChunks,
+                &mut destination
+            ),
+            Err(TransformerError::WeightShapeMismatch),
+            "a chunk asking for tokens past the batch must be reported"
         );
     }
 }

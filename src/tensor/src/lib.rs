@@ -153,7 +153,7 @@ pub use crate::error::TensorError;
 pub use crate::math::rsqrt;
 pub use crate::matmul::{
     matmul_f32, matmul_q4_0_q8a, matmul_q4_0_q8a_rows, matmul_q8_0, matmul_q8_0_q8a,
-    matmul_q8_0_q8a_rows, quantize_activations, MatMulShape,
+    matmul_q8_0_q8a_rows, matmul_q8_0_q8a_tokens, quantize_activations, MatMulShape,
 };
 pub use crate::norm::{is_positive_normal, rmsnorm};
 pub use crate::q4::{quantize_q4_0, Q4Weights, Q4_0_BLOCK};

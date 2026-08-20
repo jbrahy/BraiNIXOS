@@ -727,6 +727,127 @@ pub fn matmul_q8_0_q8a_rows(
     Ok(())
 }
 
+/// `y = W xᵀ` for the tokens `token_start .. token_start + token_count`.
+///
+/// The prefill counterpart of [`matmul_q8_0_q8a_rows`]. That one splits the
+/// output rows because at one token it must: six workers each streaming the
+/// whole weight set would need about three times the bus. This one splits the
+/// tokens, which is only affordable once there is more than one.
+///
+/// # Why splitting tokens is the right axis for prefill
+///
+/// Measured 2026-08-20 at 4096x4096, weight-byte throughput, and what six
+/// workers would each need:
+///
+/// | tokens | GB/s | x6 | % of a ~120 GB/s bus |
+/// | --- | --- | --- | --- |
+/// | 1 | 59.81 | 358.9 | 299% |
+/// | 8 | 5.85 | 35.1 | 29% |
+/// | 128 | 0.48 | 2.9 | 2% |
+///
+/// Weight bytes are constant down that column: the loop is weights-outer and
+/// the traffic is amortized. What scales is the arithmetic, so past one token
+/// the kernel is compute-bound, and duplicating the weight stream per worker is
+/// cheap in exactly the regime where dividing the arithmetic is valuable.
+///
+/// # Why the output range is contiguous
+///
+/// Token `t` owns `y[t * n_out .. (t + 1) * n_out]`, so a range of tokens is a
+/// range of `y` and `for_each_chunk` expresses it with a width of
+/// `tokens_per_worker * n_out`. No strided dispatch primitive is required. The
+/// row split needs one, which is why it does not have one.
+///
+/// # Errors
+///
+/// [`TensorError::ZeroDimension`], [`TensorError::ShapeMismatch`],
+/// [`TensorError::DimensionOverflow`] or [`TensorError::MalformedPayload`].
+pub fn matmul_q8_0_q8a_tokens(
+    shape: MatMulShape,
+    weights: &Q8Weights<'_>,
+    activations: &Q8Weights<'_>,
+    token_start: usize,
+    token_count: usize,
+    y: &mut [f32],
+) -> Result<(), TensorError> {
+    if token_count == 0 || shape.n_in == 0 || shape.n_out == 0 {
+        return Err(TensorError::ZeroDimension);
+    }
+    let token_end = token_start
+        .checked_add(token_count)
+        .ok_or(TensorError::DimensionOverflow)?;
+    if token_end > shape.n_tokens || shape.n_tokens != activations.n_out() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    if shape.n_in != weights.n_in() || shape.n_out != weights.n_out() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    if shape.n_in != activations.n_in() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    let required_y = token_count
+        .checked_mul(shape.n_out)
+        .ok_or(TensorError::DimensionOverflow)?;
+    if y.len() != required_y {
+        return Err(TensorError::ShapeMismatch);
+    }
+
+    for (out_index, (weight_scales, weight_quants)) in weights.rows().enumerate() {
+        for (local_token, (x_scales, x_quants)) in activations
+            .rows()
+            .skip(token_start)
+            .take(token_count)
+            .enumerate()
+        {
+            // Byte for byte the body of `matmul_q8_0_q8a`, for the same reason
+            // `matmul_q8_0_q8a_rows` carries a copy of it: the split is
+            // required to reproduce the whole BIT FOR BIT, and changing the
+            // association of one f32 sum here breaks that. Asserted by
+            // `splitting_the_tokens_reproduces_the_whole`.
+            let mut acc = 0.0_f32;
+            let mut wsp = weight_scales.chunks_exact(SCALE_BYTES * 2);
+            let mut wqp = weight_quants.chunks_exact(Q8_0_BLOCK * 2);
+            let mut xsp = x_scales.chunks_exact(SCALE_BYTES * 2);
+            let mut xqp = x_quants.chunks_exact(Q8_0_BLOCK * 2);
+            for (((a, b), c), d) in wsp
+                .by_ref()
+                .zip(wqp.by_ref())
+                .zip(xsp.by_ref())
+                .zip(xqp.by_ref())
+            {
+                let ws0 = read_f32_le(&a[..SCALE_BYTES]).ok_or(TensorError::MalformedPayload)?;
+                let xs0 = read_f32_le(&c[..SCALE_BYTES]).ok_or(TensorError::MalformedPayload)?;
+                let ws1 = read_f32_le(&a[SCALE_BYTES..]).ok_or(TensorError::MalformedPayload)?;
+                let xs1 = read_f32_le(&c[SCALE_BYTES..]).ok_or(TensorError::MalformedPayload)?;
+                let d0 = block_dot_i8(&b[..Q8_0_BLOCK], &d[..Q8_0_BLOCK]) as f32;
+                let d1 = block_dot_i8(&b[Q8_0_BLOCK..], &d[Q8_0_BLOCK..]) as f32;
+                acc += ws0 * xs0 * d0 + ws1 * xs1 * d1;
+            }
+            for (((weight_scale, weight_block), x_scale), x_block) in wsp
+                .remainder()
+                .chunks_exact(SCALE_BYTES)
+                .zip(wqp.remainder().chunks_exact(Q8_0_BLOCK))
+                .zip(xsp.remainder().chunks_exact(SCALE_BYTES))
+                .zip(xqp.remainder().chunks_exact(Q8_0_BLOCK))
+            {
+                let ws = read_f32_le(weight_scale).ok_or(TensorError::MalformedPayload)?;
+                let xs = read_f32_le(x_scale).ok_or(TensorError::MalformedPayload)?;
+                acc += ws * xs * block_dot_i8(weight_block, x_block) as f32;
+            }
+            let slot = y
+                .get_mut(
+                    local_token
+                        .checked_mul(shape.n_out)
+                        .ok_or(TensorError::DimensionOverflow)?
+                        .checked_add(out_index)
+                        .ok_or(TensorError::DimensionOverflow)?,
+                )
+                .ok_or(TensorError::ShapeMismatch)?;
+            *slot = acc;
+        }
+    }
+    Ok(())
+}
+
 /// `y = W xᵀ` for the output rows `row_start .. row_start + row_count`.
 ///
 /// The `Q4_0` counterpart of [`matmul_q8_0_q8a_rows`], and the reason `Q4_0`

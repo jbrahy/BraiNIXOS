@@ -157,22 +157,56 @@ fn a_single_chunk_dispatcher_matches_serial() {
 }
 
 #[test]
-fn prefill_stays_serial_even_when_the_dispatcher_would_split() {
-    // Row-splitting is only sound for a single token: with `n_tokens > 1` the
-    // output is `[n_tokens, n_out]` row-major, so a contiguous range of output
-    // ROWS is not a contiguous range of the destination slice. The kernel
-    // refuses to split rather than producing an interleaved answer.
+fn a_multi_token_batch_is_token_split_and_the_answer_does_not_move() {
+    // This test was named `prefill_stays_serial_even_when_the_dispatcher_would_split`
+    // and its reasoning was that row-splitting is unsound for `n_tokens > 1` --
+    // the output is `[n_tokens, n_out]` row-major, so a contiguous range of
+    // output ROWS is not a contiguous range of the destination. That is still
+    // true, and it was never a reason for prefill to stay serial. It is a
+    // reason for prefill to split on the other axis.
+    //
+    // Token `t` owns `[t * n_out, ..)`, which IS contiguous, so a range of
+    // tokens is a range of the destination. Since 2026-08-20 a multi-token
+    // batch takes `matmul_q8_0_q8a_tokens` across the dispatcher's chunks.
+    //
+    // The assertion is unchanged and is the one that matters either way: the
+    // split must reproduce the serial answer bit for bit, not approximately.
+    // What changed is that it is now checking a decomposition that runs rather
+    // than one that is declined.
+    for chunks in [2_usize, 3, 4, 8] {
+        let tokens = [1_u32, 2, 3];
+        let serial = logits_under(&Serial, &tokens);
+        let split = logits_under(
+            &Chunked {
+                chunks,
+                minimum_bytes: 0,
+            },
+            &tokens,
+        );
+        assert_eq!(
+            split, serial,
+            "{chunks} chunks disagreed with one over a 3-token batch"
+        );
+    }
+}
+
+#[test]
+fn a_prefill_below_the_threshold_stays_on_the_calling_core() {
+    // The prefill threshold prices the arithmetic, which scales with the batch,
+    // rather than the weight bytes, which do not. A ceiling nothing can reach
+    // means the branch is declined and the serial kernel runs -- and the answer
+    // is the same either way, which is the only thing observable from here.
     let tokens = [1_u32, 2, 3];
     let serial = logits_under(&Serial, &tokens);
-    let split = logits_under(
+    let unsplit = logits_under(
         &Chunked {
             chunks: 4,
-            minimum_bytes: 0,
+            minimum_bytes: usize::MAX,
         },
         &tokens,
     );
     assert_eq!(
-        split, serial,
-        "a multi-token batch must not be row-split, whatever the dispatcher says"
+        unsplit, serial,
+        "a prefill under the threshold must match the serial answer"
     );
 }

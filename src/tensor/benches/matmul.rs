@@ -54,9 +54,9 @@
 )]
 
 use brainix_tensor::{
-    matmul_q4_0_q8a, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations,
-    quantize_q4_0, rmsnorm, rope, softmax, swiglu, MatMulShape, Q4Weights, Q8Weights, RopePairing,
-    RopeParams, Q8_0_BLOCK,
+    matmul_q4_0_q8a, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, matmul_q8_0_q8a_tokens,
+    quantize_activations, quantize_q4_0, rmsnorm, rope, softmax, swiglu, MatMulShape, Q4Weights,
+    Q8Weights, RopePairing, RopeParams, Q8_0_BLOCK,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Barrier;
@@ -374,6 +374,112 @@ fn measure_row_split(label: &str, n_in: usize, n_out: usize) {
 /// outliving the call. Each worker owning its rows sidesteps the lifetime
 /// problem entirely and costs one 16 KB copy per projection -- about 0.4% of a
 /// token budget, measured rather than waved at.
+/// The same pool, splitting TOKENS instead of output rows.
+///
+/// `measure_pool` answers "how many cores can a decode use", and the bus bounds
+/// the answer. This answers the same for a prefill, where the bound differs
+/// because the kernel is compute-bound past one token.
+///
+/// Each worker streams the whole weight set, so effective traffic is
+/// `workers x weight_bytes`. That is exactly what makes this unusable for
+/// decode and affordable for prefill: at 8 tokens one core moves 5.85 GB/s of
+/// weight bytes, so six moving their own copies need about 29% of a ~120 GB/s
+/// bus. The speedup column is the number that matters; the traffic column is
+/// what says the speedup is allowed to exist.
+fn measure_pool_tokens(label: &str, n_tokens: usize, n_in: usize, n_out: usize) {
+    let payload = synthetic_payload(n_out, n_in);
+    let weights = Q8Weights::new(&payload, n_out, n_in).expect("payload is well formed");
+    let shape = MatMulShape {
+        n_tokens,
+        n_in,
+        n_out,
+    };
+    let x = vec![0.5_f32; n_tokens * n_in];
+    let mut scratch = vec![0u8; Q8Weights::derived_payload_len(n_tokens, n_in).expect("len")];
+    quantize_activations(n_tokens, n_in, &x, &mut scratch).expect("quantize");
+    let quantized = Q8Weights::new(&scratch, n_tokens, n_in).expect("view");
+
+    let weight_bytes = n_out as f64 * n_in as f64 * BYTES_PER_WEIGHT_ELEMENT;
+    let work = weight_bytes * n_tokens as f64;
+    let iterations = (500_000_000.0 / work).max(5.0) as usize;
+    println!("  {label}");
+
+    let mut single = 0.0f64;
+    let mut previous_live = 0usize;
+    for workers in [1usize, 2, 4, 6] {
+        if workers > n_tokens {
+            continue;
+        }
+        // Asking for six workers over eight tokens gives `per_worker = 2` and
+        // therefore four spans, not six. Report the count that ran and skip the
+        // repeat rather than printing the same row twice under two labels.
+        let per_worker = n_tokens.div_ceil(workers);
+        let spans: Vec<(usize, usize)> = (0..workers)
+            .map(|index| {
+                let start = index * per_worker;
+                (start, per_worker.min(n_tokens.saturating_sub(start)))
+            })
+            .filter(|(_, count)| *count > 0)
+            .collect();
+        let mut outputs: Vec<Vec<f32>> = spans
+            .iter()
+            .map(|(_, count)| vec![0.0_f32; count * n_out])
+            .collect();
+        let live = spans.len();
+        if live == previous_live {
+            continue;
+        }
+        previous_live = live;
+        let start_gate = Barrier::new(live + 1);
+        let finish_gate = Barrier::new(live + 1);
+        let shutting_down = AtomicBool::new(false);
+        let mut seconds = 0.0f64;
+
+        thread::scope(|scope| {
+            for (output, (start, count)) in outputs.iter_mut().zip(spans.iter().copied()) {
+                let (weights, quantized) = (&weights, &quantized);
+                let (start_gate, finish_gate, shutting_down) =
+                    (&start_gate, &finish_gate, &shutting_down);
+                scope.spawn(move || loop {
+                    start_gate.wait();
+                    if shutting_down.load(Ordering::Acquire) {
+                        break;
+                    }
+                    matmul_q8_0_q8a_tokens(shape, weights, quantized, start, count, output)
+                        .expect("token range matmul");
+                    finish_gate.wait();
+                });
+            }
+
+            start_gate.wait();
+            finish_gate.wait();
+
+            let began = Instant::now();
+            for _ in 0..iterations {
+                start_gate.wait();
+                finish_gate.wait();
+            }
+            seconds = began.elapsed().as_secs_f64();
+
+            shutting_down.store(true, Ordering::Release);
+            start_gate.wait();
+        });
+
+        std::hint::black_box(&outputs);
+        let per_call = seconds / iterations as f64;
+        if workers == 1 {
+            single = per_call;
+        }
+        let traffic = weight_bytes * live as f64 / per_call / 1e9;
+        println!(
+            "    {live} worker{}  {:.2}x   ({:.1} us/call, {traffic:6.1} GB/s weight traffic)",
+            if live == 1 { " " } else { "s" },
+            single / per_call,
+            per_call * 1e6
+        );
+    }
+}
+
 fn measure_pool(label: &str, n_in: usize, n_out: usize) {
     let payload = synthetic_payload(n_out, n_in);
     let weights = Q8Weights::new(&payload, n_out, n_in).expect("payload is well formed");
@@ -819,6 +925,12 @@ fn main() {
     measure_sdot("4096x4096, 8 tokens (prefill)", 8, 4096, 4096);
     measure_sdot("4096x4096, 32 tokens (prefill)", 32, 4096, 4096);
     measure_sdot("4096x4096, 128 tokens (prefill)", 128, 4096, 4096);
+
+    println!();
+    println!("  Token-split prefill -- workers own token ranges, not output rows");
+    println!();
+    measure_pool_tokens("4096x4096, 8 tokens", 8, 4096, 4096);
+    measure_pool_tokens("4096x4096, 32 tokens", 32, 4096, 4096);
 
     println!();
     println!("  Multi-core scaling — same weights, SDOT path, 1 token");
