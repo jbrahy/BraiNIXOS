@@ -273,11 +273,15 @@ impl CellCounts {
             .checked_add(self.size_bytes()?)
             .ok_or(AdtError::RegContainerOutOfRange)?;
         if total == 0 {
-            // COVERAGE-EXEMPT: `new` rejects `address_cells == 0` and the
-            // fields are private, so `address_bytes` is at least 4 and the
-            // total cannot be zero. Kept because the floor lives in `new`
-            // rather than in the arithmetic here, so a change to `new` should
-            // meet a denial and not a zero-length container.
+            // Kept although unreachable: the floor lives in `new` rather than
+            // in the arithmetic here, so a change to `new` should meet a
+            // denial and not a zero-length container.
+            // COVERAGE-EXEMPT: proven unreachable rather than argued. Kani's
+            // `adt_cell_counts_enforce_the_specification_bounds` reports the
+            // assertion "a validated pair has no container length" as
+            // UNREACHABLE over every `(u32, u32)`: `new` rejects
+            // `address_cells == 0` and the fields are private, so
+            // `address_bytes` is at least 4 and the total cannot be zero.
             return Err(AdtError::InvalidAddressCells);
         }
         Ok(total)
@@ -308,8 +312,12 @@ fn read_cells(bytes: &[u8], offset: usize, count: u32) -> Result<u64, AdtError> 
         }
         // COVERAGE-EXEMPT: `count` is always a `CellCounts` field, whose
         // constructor rejects anything above 2 and whose fields are private,
-        // so no caller can reach this arm. Kept fail-closed rather than
-        // deleted: an unrecognised cell count must deny, not decode.
+        // so no caller can reach this arm. That bound is machine-checked, not
+        // argued: Kani's `adt_cell_counts_enforce_the_specification_bounds`
+        // proves over every `(u32, u32)` that an accepted pair has
+        // `address_cells` in 1..=2 and `size_cells` in 0..=2. Kept fail-closed
+        // rather than deleted: an unrecognised cell count must deny, not
+        // decode.
         _ => Err(AdtError::InvalidAddressCells),
     }
 }
