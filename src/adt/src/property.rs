@@ -512,16 +512,11 @@ impl Iterator for RangesIter<'_> {
             Err(error) => return Some(Err(error)),
         };
         let child_address_bytes = self.child_address_cells.bytes();
-        let parent_offset = match start.checked_add(child_address_bytes) {
-            Some(value) => value,
-            // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
-            // than by validation of the tree. `ranges` refuses a parent count outside
-            // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
-            // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
-            // unless a whole `entry_len` is present, so each read lands inside the
-            // entry. Kept because both of those facts live in other functions.
-            None => return Some(Err(AdtError::MalformedRangesEntry)),
-        };
+        // `saturating_add`, not `checked_add`: `start` is below `value.len()`
+        // and `bytes()` is at most 8, so the sum cannot reach `usize::MAX` and
+        // saturation is unreachable for the same reason the old `None` arm was.
+        // The difference is that this has no arm to excuse.
+        let parent_offset = start.saturating_add(child_address_bytes);
         let parent_address = match read_cells(self.value, parent_offset, self.parent_address_cells)
         {
             Ok(value) => value,
