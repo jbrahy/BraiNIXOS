@@ -944,6 +944,91 @@ pub fn matmul_q4_0_q8a_rows(
     Ok(())
 }
 
+/// `y = W xᵀ` with `Q4_0` weights over the tokens `token_start .. token_start + token_count`.
+///
+/// The `Q4_0` counterpart of [`matmul_q8_0_q8a_tokens`], and it exists for the
+/// same reason: past one token this kernel is compute-bound, so dividing the
+/// arithmetic across workers pays even though each worker streams its own copy
+/// of the weight set.
+///
+/// `Q4_0` moves 0.625 bytes per element against `Q8_0`'s 1.125, so the traffic
+/// a token split duplicates is 1.8x smaller here. The headroom argument is
+/// therefore strictly easier to satisfy than the one measured for `Q8_0`, where
+/// six workers over 32 tokens needed 39.1 GB/s of a ~120 GB/s ceiling.
+///
+/// # Errors
+///
+/// [`TensorError::ZeroDimension`], [`TensorError::ShapeMismatch`],
+/// [`TensorError::DimensionOverflow`] or [`TensorError::MalformedPayload`].
+pub fn matmul_q4_0_q8a_tokens(
+    shape: MatMulShape,
+    weights: &crate::q4::Q4Weights<'_>,
+    activations: &Q8Weights<'_>,
+    token_start: usize,
+    token_count: usize,
+    y: &mut [f32],
+) -> Result<(), TensorError> {
+    if token_count == 0 || shape.n_in == 0 || shape.n_out == 0 {
+        return Err(TensorError::ZeroDimension);
+    }
+    let token_end = token_start
+        .checked_add(token_count)
+        .ok_or(TensorError::DimensionOverflow)?;
+    if token_end > shape.n_tokens || shape.n_tokens != activations.n_out() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    if shape.n_in != weights.n_in() || shape.n_out != weights.n_out() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    if shape.n_in != activations.n_in() {
+        return Err(TensorError::ShapeMismatch);
+    }
+    let required_y = token_count
+        .checked_mul(shape.n_out)
+        .ok_or(TensorError::DimensionOverflow)?;
+    if y.len() != required_y {
+        return Err(TensorError::ShapeMismatch);
+    }
+
+    let mut unpacked = [0u8; Q8_0_BLOCK];
+    for (out_index, (weight_scales, weight_packed)) in weights.rows().enumerate() {
+        for (local_token, (x_scales, x_quants)) in activations
+            .rows()
+            .skip(token_start)
+            .take(token_count)
+            .enumerate()
+        {
+            // Byte for byte the body of `matmul_q4_0_q8a`, for the reason the
+            // `Q8_0` kernels carry copies of each other: the split must
+            // reproduce the whole BIT FOR BIT. Asserted by
+            // `splitting_the_q4_tokens_reproduces_the_whole`.
+            let mut acc = 0.0_f32;
+            for (((weight_scale, packed_block), x_scale), x_block) in weight_scales
+                .chunks_exact(SCALE_BYTES)
+                .zip(weight_packed.chunks_exact(Q8_0_BLOCK / 2))
+                .zip(x_scales.chunks_exact(SCALE_BYTES))
+                .zip(x_quants.chunks_exact(Q8_0_BLOCK))
+            {
+                let ws = read_f32_le(weight_scale).ok_or(TensorError::MalformedPayload)?;
+                let xs = read_f32_le(x_scale).ok_or(TensorError::MalformedPayload)?;
+                crate::q4::unpack_block(packed_block, &mut unpacked);
+                acc += ws * xs * block_dot_i8(&unpacked, x_block) as f32;
+            }
+            let slot = y
+                .get_mut(
+                    local_token
+                        .checked_mul(shape.n_out)
+                        .ok_or(TensorError::DimensionOverflow)?
+                        .checked_add(out_index)
+                        .ok_or(TensorError::DimensionOverflow)?,
+                )
+                .ok_or(TensorError::ShapeMismatch)?;
+            *slot = acc;
+        }
+    }
+    Ok(())
+}
+
 /// `y = W xᵀ` with `Q4_0` weights and `Q8_0` activations.
 ///
 /// Each 16-byte weight block is unpacked to 32 signed bytes and then fed to the

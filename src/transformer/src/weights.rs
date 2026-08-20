@@ -42,9 +42,9 @@
 
 use crate::dispatch::{chunk_len, Dispatch};
 use brainix_tensor::{
-    matmul_f32, matmul_q4_0_q8a, matmul_q4_0_q8a_rows, matmul_q8_0, matmul_q8_0_q8a,
-    matmul_q8_0_q8a_rows, matmul_q8_0_q8a_tokens, quantize_activations, MatMulShape, Q4Weights,
-    Q8Weights,
+    matmul_f32, matmul_q4_0_q8a, matmul_q4_0_q8a_rows, matmul_q4_0_q8a_tokens, matmul_q8_0,
+    matmul_q8_0_q8a, matmul_q8_0_q8a_rows, matmul_q8_0_q8a_tokens, quantize_activations,
+    MatMulShape, Q4Weights, Q8Weights,
 };
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -326,6 +326,10 @@ impl WeightMatrix<'_> {
                 // moves, not on the ones `Q8_0` would have moved.
                 let weight_bytes = shape.n_out.saturating_mul(shape.n_in).saturating_mul(5) / 8;
                 let worth_splitting = weight_bytes >= dispatch.minimum_split_bytes();
+                // As the Q8_0 arm: prefill is compute-bound, so the threshold
+                // prices the arithmetic rather than the bytes.
+                let prefill_worth_splitting =
+                    weight_bytes.saturating_mul(shape.n_tokens) >= dispatch.minimum_split_bytes();
                 if shape.n_tokens == 1 && dispatch.chunks() > 1 && worth_splitting {
                     let width = chunk_len(shape.n_out, dispatch.chunks())?;
                     // As the `Q8_0` split above: a `Fn` closure cannot carry a
@@ -339,6 +343,27 @@ impl WeightMatrix<'_> {
                         // shape is `project`'s parameter. Pinned by
                         // `the_q4_split_reports_a_kernel_refusal_too`.
                         if matmul_q4_0_q8a_rows(shape, weights, &view, start, chunk.len(), chunk)
+                            .is_err()
+                        {
+                            failed.store(true, Ordering::Relaxed);
+                        }
+                    });
+                    if failed.load(Ordering::Relaxed) {
+                        return Err(TransformerError::WeightShapeMismatch);
+                    }
+                } else if shape.n_tokens > 1 && dispatch.chunks() > 1 && prefill_worth_splitting {
+                    // The `Q4_0` prefill split, on the same terms as the `Q8_0`
+                    // one above. Easier to justify, not harder: `Q4_0` moves
+                    // 0.625 bytes per element against 1.125, so the traffic a
+                    // token split duplicates is 1.8x smaller, against the same
+                    // ~120 GB/s ceiling.
+                    let per_worker = shape.n_tokens.div_ceil(dispatch.chunks());
+                    let width = checked_product(per_worker, shape.n_out)?;
+                    let failed = AtomicBool::new(false);
+                    dispatch.for_each_chunk(destination, width, |index, chunk| {
+                        let start = index.saturating_mul(per_worker);
+                        let count = chunk.len().checked_div(shape.n_out).unwrap_or(0);
+                        if matmul_q4_0_q8a_tokens(shape, weights, &view, start, count, chunk)
                             .is_err()
                         {
                             failed.store(true, Ordering::Relaxed);
@@ -649,6 +674,37 @@ mod tests {
             ),
             Err(TransformerError::WeightShapeMismatch),
             "a chunk asking for tokens past the batch must be reported"
+        );
+    }
+
+    /// The Q4 prefill split reports a refusal on the same terms as the Q8 one.
+    #[test]
+    fn a_kernel_refusal_inside_the_q4_token_split_is_reported_rather_than_swallowed() {
+        const TOKENS: usize = 2;
+        let payload = [0_u8; 2560];
+        let weights = Q4Weights::new(&payload, N_OUT, N_IN).expect("a well formed Q4 view");
+        let matrix = WeightMatrix::Quantized4(weights);
+
+        let activations = [0.0_f32; TOKENS * N_IN];
+        let mut scratch = [0_u8; 8192];
+        let mut destination = [0.0_f32; TOKENS * N_OUT * 2];
+
+        let shape = MatMulShape {
+            n_tokens: TOKENS,
+            n_in: N_IN,
+            n_out: N_OUT,
+        };
+
+        assert_eq!(
+            matrix.project(
+                shape,
+                &activations,
+                &mut scratch,
+                &TwoChunks,
+                &mut destination
+            ),
+            Err(TransformerError::WeightShapeMismatch),
+            "the Q4 prefill split must report a refusal as loudly as the Q8 one"
         );
     }
 }

@@ -159,6 +159,21 @@ fn logits_under<D: Dispatch>(
     quantized_to_four_bits: bool,
     scratch_bytes: usize,
 ) -> Result<Vec<f32>, ()> {
+    logits_under_batch(dispatch, quantized_to_four_bits, scratch_bytes, &[2_u32])
+}
+
+/// The same, for a batch of more than one token.
+///
+/// Every test in this file decoded exactly one token until 2026-08-20, which
+/// meant the Q4_0 prefill split had no coverage at all: planting a bug in it --
+/// making every worker start at token zero -- left the whole file green. The
+/// single-token path is a different branch entirely.
+fn logits_under_batch<D: Dispatch>(
+    dispatch: &D,
+    quantized_to_four_bits: bool,
+    scratch_bytes: usize,
+    tokens: &[u32],
+) -> Result<Vec<f32>, ()> {
     let fixture = Fixture::new(common::fixture_config(RopePairing::HalfSplit), 0x0451_0451);
     let config = fixture.config;
 
@@ -194,7 +209,7 @@ fn logits_under<D: Dispatch>(
 
     let mut logits = vec![0.0_f32; config.vocabulary_size];
     model
-        .forward(dispatch, &mut workspace, &mut cache, &[2_u32], &mut logits)
+        .forward(dispatch, &mut workspace, &mut cache, tokens, &mut logits)
         .map_err(|_| ())?;
     Ok(logits)
 }
@@ -324,4 +339,41 @@ fn four_bit_work_below_the_threshold_stays_on_the_calling_core() {
     )
     .expect("unsplit");
     assert_eq!(unsplit, serial);
+}
+
+#[test]
+fn splitting_four_bit_tokens_reproduces_the_serial_answer() {
+    // The Q4_0 prefill split, added 2026-08-20 alongside the Q8_0 one.
+    //
+    // This test exists because the mutation check found nothing to catch a bug
+    // in that branch: every other test here decodes one token, which takes the
+    // ROW-split path, and a deliberate off-by-worker in the token split left
+    // the file green. A branch nothing exercises is a branch nothing protects,
+    // however carefully its kernel is tested in isolation.
+    //
+    // Equality, not a tolerance. Worker k computes whole tokens, so an
+    // off-by-one in the token offset moves entire rows of the output rather
+    // than perturbing a sum -- and a tolerance loose enough for rounding would
+    // not notice.
+    let config = common::fixture_config(RopePairing::HalfSplit);
+    let scratch = quantized_activation_bytes(&config, MAXIMUM_BATCH).unwrap();
+    let tokens = [1_u32, 2, 3];
+    let serial = logits_under_batch(&Serial, true, scratch, &tokens).expect("Q4_0 prefill serial");
+
+    for chunks in [2_usize, 3, 4, 8] {
+        let split = logits_under_batch(
+            &Chunked {
+                chunks,
+                minimum_bytes: 0,
+            },
+            true,
+            scratch,
+            &tokens,
+        )
+        .expect("Q4_0 prefill split");
+        assert_eq!(
+            split, serial,
+            "{chunks} chunks disagreed with one over a 3-token Q4_0 batch"
+        );
+    }
 }
