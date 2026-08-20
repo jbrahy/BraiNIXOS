@@ -53,10 +53,10 @@
 //! than a plan. A gated proof nobody has watched pass is worth less than an
 //! honest note saying what was tried and what it cost.
 //!
-//! ## Two routes that look open and are not
+//! ## Three routes that look open and are not
 //!
-//! Written down because both are the obvious next thought and both cost
-//! nothing to rule out once stated:
+//! Each was tried or ruled out on 2026-08-20, and each is the obvious next
+//! thought, so all three are written down:
 //!
 //! - **A harness over `header::decode` alone.** `mod header` is private in
 //!   `brainix-bxw1`; only the `Header` type is re-exported, not the decoder.
@@ -65,12 +65,28 @@
 //! - **A shorter blob that still reaches the table decoder.** There is none.
 //!   `parse` refuses anything below `BXW1_HEADER_BYTES`, so 256 IS the floor,
 //!   and it is the length that does not finish.
+//! - **A smaller symbolic surface.** A 256-byte blob with only the four magic
+//!   bytes arbitrary -- 2^32 inputs rather than 2^2048 -- still unwinds
+//!   SHA-256, because Kani unwinds what is COMPILED and the hash is in the call
+//!   graph whether or not a wrong magic reaches it. Stubbed, it stopped
+//!   unwinding the hash and started unwinding `table::decode_name` instead.
 //!
-//! What remains is to shrink the symbolic surface rather than the length: fix
-//! most of the header to a well-formed value and leave one field arbitrary.
-//! That proves something strictly weaker -- a statement about one field rather
-//! than about every 256-byte string -- and it should be written to say so, not
-//! left to read like the headline property.
+//! ## What that last one actually established
+//!
+//! **The cost is the compiled call graph, not the symbolic input.** Shrinking
+//! the input from 2^2048 to 2^32 changed nothing; stubbing one expensive
+//! function moved the cost to the next one. `parse` reaches the header
+//! decoder, the table decoder, the name decoder and the digest check, and a
+//! harness that calls it pays for all of them.
+//!
+//! That is why the two harnesses here are the ones where the LENGTH guard
+//! denies: at 0 and 8 bytes `parse` returns before entering any of that graph,
+//! which is the only place it is currently cheap to stand.
+//!
+//! A proof about the header's fields therefore needs `brainix-bxw1` to expose
+//! a smaller unit than `parse` -- not a cleverer harness. That is a change to
+//! the crate under test, which is a decision about its API rather than about
+//! its proofs, and it is not made here.
 //!
 //! **The 22 GiB ceiling.** `BXW1_MAX_BLOB_BYTES` is about 22 GiB. No bounded
 //! harness can construct a blob past it, so the guard that refuses one is
