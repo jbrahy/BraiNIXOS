@@ -295,12 +295,27 @@ fn blend_one_head(
 /// every other caller is a matmul. Softmax moves almost no memory and is
 /// entirely `exp`, so the comparison has to be made in a common currency: time.
 ///
-/// `benches/matmul.rs` measures the `Q8_0` kernel at ~47 GB/s of weight bytes on
-/// one core, and `softmax` at ~236 M elements/s. One softmax element therefore
-/// occupies a core for as long as `47e9 / 236e6 ~= 199` weight bytes do. The
-/// constant is rounded to 200 because it is a ratio of two measurements, not a
+/// `benches/matmul.rs` measures the `Q8_0` kernel at ~57 GB/s of weight bytes on
+/// one core, and `softmax` at ~231 M elements/s. One softmax element therefore
+/// occupies a core for as long as `57e9 / 231e6 ~= 246` weight bytes do. The
+/// constant is rounded to 250 because it is a ratio of two measurements, not a
 /// definition, and a third significant figure would be a lie.
-const WEIGHT_BYTES_PER_SOFTMAX_ELEMENT: usize = 200;
+///
+/// # It was 200, from `47e9 / 236e6`
+///
+/// Both figures were re-measured on 2026-08-20, best of three. The softmax side
+/// barely moved -- 236 to 231 M elements/s, which is load on the machine rather
+/// than a change in the code. The whole error was the matmul side: 47 GB/s was
+/// measured before the two-blocks-per-iteration unroll landed in
+/// `matmul_q8_0_q8a` and was never revisited, so this ratio inherited a stale
+/// numerator through `SINGLE_CORE_BYTES_PER_MICROSECOND`'s twin.
+///
+/// The direction matters here in a way it did not for that constant.
+/// Under-valuing a softmax element under-values the whole board, so the split
+/// was being declined on work that clears the threshold once the element is
+/// priced correctly. The head-parallel path measured 1.40x end to end; a fifth
+/// of the boards that should have taken it were staying serial.
+const WEIGHT_BYTES_PER_SOFTMAX_ELEMENT: usize = 250;
 
 /// Softmaxes every head's score row, splitting the board across workers when
 /// there is enough of it to be worth a round trip.
