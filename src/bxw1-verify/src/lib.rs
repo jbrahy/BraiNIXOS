@@ -35,11 +35,26 @@
 //! written, ran into `Sha256::update`, and did not finish in 550 seconds. The
 //! two harnesses that remain deny on length before any of it.
 //!
-//! The way out is the one that worked for the handshake: stub `Sha256::update`
-//! and `Sha256::finalize`, which is sound for a no-panic property because it
-//! does not depend on what the hash computes. That harness belongs behind
-//! `long-proofs` and is **not written**, because a gated proof nobody has
-//! watched pass is worth less than an honest note saying so.
+//! The obvious way out is the one that worked for `transport-crypto-verify`'s
+//! handshake proof: stub `Sha256::update` and `Sha256::finalize`, which is
+//! sound for a no-panic property because it cannot depend on what the hash
+//! computes. **That was tried on 2026-08-20 and it is not enough here.**
+//! Stubbed, behind `long-proofs`, at `unwind(257)`, with `region_capacity`
+//! symbolic, the harness produced no output at all in roughly fifty minutes --
+//! not a verdict, not an unwinding failure, nothing.
+//!
+//! The difference from the handshake is what remains after the hash is gone.
+//! There the phase guard denies immediately and the rest of the call graph is
+//! dead; here 256 symbolic bytes are a header the decoder reads field by field,
+//! and every field feeds the extent arithmetic that follows. Removing SHA-256
+//! removes a cost that was never the dominant one at this length.
+//!
+//! So the harness is **not shipped**, and this is a record of an attempt rather
+//! than a plan. Something cheaper than "stub the hash" is needed: a shorter
+//! blob that still reaches the table decoder, or a harness over
+//! `header::decode` alone rather than the whole of `parse`. A gated proof
+//! nobody has watched pass is worth less than an honest note saying what was
+//! tried and what it cost.
 //!
 //! **The 22 GiB ceiling.** `BXW1_MAX_BLOB_BYTES` is about 22 GiB. No bounded
 //! harness can construct a blob past it, so the guard that refuses one is
