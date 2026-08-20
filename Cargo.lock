@@ -310,6 +310,7 @@ name = "brainix-transport-crypto-verify"
 version = "0.1.0"
 dependencies = [
  "brainix-bsp",
+ "brainix-sha256",
  "brainix-transport-crypto",
 ]
 

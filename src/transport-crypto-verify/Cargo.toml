@@ -14,6 +14,9 @@ long-proofs = []
 
 [dependencies]
 brainix-bsp = { path = "../bsp" }
+# Stub target only: the handshake harness replaces `Sha256::update`/`finalize`
+# so Kani need not unwind 64 rounds of a hash the property does not depend on.
+brainix-sha256 = { path = "../sha256" }
 brainix-transport-crypto = { path = "../transport-crypto" }
 
 [lints]

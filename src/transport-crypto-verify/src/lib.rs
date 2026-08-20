@@ -1,3 +1,38 @@
+//! # The handshake state guards ARE proved, behind `long-proofs` and a stub
+//!
+//! `commit_chain` and `establish` in `handshake.rs` each carry a coverage
+//! exemption saying they run only after row H5 passed, so their `None` arms
+//! cannot be reached. Both are private; what is publicly checkable is the
+//! statement that implies, and
+//! [`proofs::transport_crypto_a_fresh_handshake_refuses_every_client_auth`]
+//! checks it: a server that has sent no `ServerHello` refuses every
+//! `ClientAuth`, with `WrongState`, because `require_phase` denies before a
+//! byte is read.
+//!
+//! **793 checks, 0 failed, 9 unreachable, 482 seconds.** Slower than the
+//! 700-second cap allows for CI by a comfortable margin only because it is
+//! stubbed; unstubbed it does not finish at all.
+//!
+//! ## The stub, and why it is sound here and nowhere else
+//!
+//! Kani unwinds what is COMPILED, not what executes. `accept_client_auth`
+//! pulls SHA-256's 64-round compression into the call graph whether or not the
+//! guard reaches it, and the first attempt did not finish in ten minutes at
+//! `unwind(65)`. Shrinking the symbolic input did not help -- the cost is the
+//! crypto in the graph, not the input, which is worth stating because "use a
+//! smaller input" is the obvious next idea and it is wrong.
+//!
+//! `Sha256::update` and `Sha256::finalize` are replaced by a no-op and a fixed
+//! digest. That is sound **for this property only**: the denial happens before
+//! any hashing, so every statement the harness asserts about is reachable
+//! without a real hash. Stubbing the first attempt's target, the `hmac_sha256`
+//! free function, did nothing -- the handshake reaches `Sha256` through
+//! `HmacSha256::new` directly, so the stub sat off the path.
+//!
+//! A harness about confirm-tag agreement could not do this, and none does. The
+//! stub is named for the harness that uses it so it cannot drift into one that
+//! must not.
+//!
 //! Kani proof harnesses for the BSP v2 transport cryptography
 //! (`brainix-transport-crypto`).
 //!
@@ -54,7 +89,7 @@
 //!    instead, with seeds whose `key_selector` genuinely matches an enrolled
 //!    credential.
 //!
-//! # The cost bound: six harnesses are behind `long-proofs` and not in CI
+//! # The cost bound: seven harnesses are behind `long-proofs` and not in CI
 //!
 //! The bounds above were chosen to keep these harnesses "in reach". Measured,
 //! they are not. Every harness in this crate was run on an M2 Pro with a
@@ -68,6 +103,7 @@
 //! | `ratchet_resolve_lands_at_the_declared_position` | no verdict in 700s |
 //! | `ratchet_commit_advances_by_exactly_one` | no verdict in 700s |
 //! | `ratchet_advance_is_monotone_and_erases_the_retired_key` | no verdict in 700s |
+//! | `a_fresh_handshake_refuses_every_client_auth` | **482s, stubbed** |
 //! | [`proofs::transport_crypto_ratchet_window_denies_outside_the_catch_up_bound`] | **4.6s** |
 //! | [`proofs::transport_crypto_ratchet_commit_refuses_to_move_backwards`] | passes |
 //! | [`proofs::transport_crypto_constant_time_eq_agrees_with_equality`] | passes |
@@ -209,7 +245,11 @@ mod proofs {
     #[cfg(feature = "long-proofs")]
     use brainix_bsp::LEN_DIR_KEYS;
     use brainix_bsp::{LEN_CHAIN_KEY, MAX_CHAIN_CATCHUP};
-    use brainix_transport_crypto::{constant_time_eq, ChainState, Secret, TransportCryptoError};
+    use brainix_bsp::{LEN_KEY_ID, MAX_ENROLLED_KEYS};
+    use brainix_transport_crypto::{
+        constant_time_eq, ChainState, CredentialTable, Secret, ServerHandshake,
+        TransportCryptoError,
+    };
     #[cfg(feature = "long-proofs")]
     use brainix_transport_crypto::{
         DirectionKeys, RecordOpener, RecordSealer, MAX_SEALED_RECORD_BYTES,
@@ -689,6 +729,67 @@ mod proofs {
         kani::assert(
             secret.ct_eq_bytes(&[0u8; LEN_CHAIN_KEY]),
             "a zeroized secret does not compare equal to zero",
+        );
+    }
+
+    /// Hash-shaped stand-ins for `Sha256`, for the harness below only.
+    ///
+    /// `update` absorbs nothing and `finalize` returns a fixed digest. Sound
+    /// for the property they are used to prove and unsound for anything else,
+    /// which is why they are named for the one harness that stubs them: the
+    /// phase guard denies before a byte is hashed, so no reachable statement
+    /// in that proof depends on what these return.
+    #[cfg(feature = "long-proofs")]
+    fn stubbed_sha256_update(_state: &mut brainix_sha256::Sha256, _input: &[u8]) {}
+
+    #[cfg(feature = "long-proofs")]
+    fn stubbed_sha256_finalize(_state: brainix_sha256::Sha256) -> [u8; 32] {
+        [0u8; 32]
+    }
+
+    /// **A fresh handshake refuses every `ClientAuth`.**
+    ///
+    /// `commit_chain` and `establish` in `handshake.rs` each carry a coverage
+    /// exemption saying they run only after row H5 passed, so their `None` arms
+    /// cannot be reached. Both are private; what is publicly checkable is the
+    /// statement that implies: a server that has sent no `ServerHello` is in
+    /// `WaitHello` with `secrets` and `matched` both `None` -- exactly the
+    /// state those arms defend -- and `require_phase` denies before
+    /// `accept_client_auth` reads a byte.
+    ///
+    /// # Why this stubs the HMAC
+    ///
+    /// Kani unwinds what is COMPILED, not what executes. `accept_client_auth`
+    /// pulls SHA-256's 64-round compression into the call graph whether or not
+    /// the guard reaches it, and an unstubbed harness did not finish in ten
+    /// minutes at `unwind(65)`. Shrinking the input did not help: the cost is
+    /// the crypto in the graph, not the input.
+    ///
+    /// Stubbing is sound **here specifically** because the property does not
+    /// depend on what the hash computes. The denial happens before any hashing,
+    /// so every statement this harness asserts about is reachable without it.
+    /// A harness about confirm-tag agreement could not do this, and none does.
+    #[cfg(feature = "long-proofs")]
+    #[kani::proof]
+    #[kani::stub(brainix_sha256::Sha256::update, stubbed_sha256_update)]
+    #[kani::stub(brainix_sha256::Sha256::finalize, stubbed_sha256_finalize)]
+    #[kani::unwind(65)]
+    fn transport_crypto_a_fresh_handshake_refuses_every_client_auth() {
+        let bytes: [u8; 8] = kani::any();
+        let mut filler = [[0u8; LEN_KEY_ID]; MAX_ENROLLED_KEYS];
+        let mut table = CredentialTable::new(&mut filler);
+        let mut handshake = ServerHandshake::new();
+
+        let outcome = handshake.accept_client_auth(&bytes, &mut table);
+
+        kani::assert(
+            outcome.is_err(),
+            "a handshake that has sent no ServerHello established a session",
+        );
+        kani::assert(
+            matches!(outcome, Err(TransportCryptoError::WrongState)),
+            "the refusal must be the phase guard, not a later failure that \
+             happens to deny",
         );
     }
 }
