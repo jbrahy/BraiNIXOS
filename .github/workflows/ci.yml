@@ -363,6 +363,13 @@ jobs:
             args: --package brainix-bsp-verify
           - name: transport-crypto
             args: --package brainix-transport-crypto-verify
+          # The BXW1 weight-blob loader. The third untrusted input this system
+          # parses with authority, after firmware bytes and the wire: a served
+          # model is a file, and a file is whatever wrote it. Both harnesses
+          # deny on length before `verify_table_digest` hashes anything, which
+          # is what keeps them under a second.
+          - name: bxw1
+            args: --package brainix-bxw1-verify
           # Replaces the former Prusti job. That job pointed at
           # src/brainix-ipc-core/, a shim whose contracts were tautologies about
           # a hand-written copy of the IPC path that nothing in the tree called

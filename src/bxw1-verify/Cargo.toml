@@ -1,0 +1,12 @@
+[package]
+name = "brainix-bxw1-verify"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Kani proof harnesses for the BXW1 weight-blob loader"
+
+[dependencies]
+brainix-bxw1 = { path = "../bxw1" }
+
+[lints]
+workspace = true

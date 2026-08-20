@@ -9,6 +9,7 @@ members = [
     "src/aarch64-mmu",
     "src/aarch64-mmu-verify",
     "src/adt-verify",
+    "src/bxw1-verify",
     "src/bsp",
     "src/bsp-verify",
     "src/transport-crypto",

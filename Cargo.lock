@@ -108,6 +108,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainix-bxw1-verify"
+version = "0.1.0"
+dependencies = [
+ "brainix-bxw1",
+]
+
+[[package]]
 name = "brainix-capability-verify"
 version = "0.1.0"
 dependencies = [
