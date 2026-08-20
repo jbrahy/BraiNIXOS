@@ -257,6 +257,15 @@ pub enum CellWidth {
 }
 
 impl CellWidth {
+    /// How many cells this width is: 0, 1 or 2.
+    const fn cells(self) -> usize {
+        match self {
+            Self::Zero => 0,
+            Self::One => 1,
+            Self::Two => 2,
+        }
+    }
+
     /// Bytes this width occupies. Total by construction: at most 8.
     const fn bytes(self) -> usize {
         match self {
@@ -476,6 +485,25 @@ impl RangesEntry {
     }
 }
 
+/// Consumes `count` little-endian 32-bit words and assembles them, least
+/// significant cell first.
+///
+/// Total by construction. The caller has already established that the words
+/// exist -- they come from `as_chunks` over a slice whose length the entry
+/// bound fixed -- so a short iterator cannot occur, and if one somehow did this
+/// yields the cells it was given rather than reading past them.
+///
+/// This ordering is the opposite of an FDT's, and each cell is itself
+/// little-endian (spec sections 8.5 and 4.4).
+fn take_cells<'a>(words: &mut impl Iterator<Item = &'a [u8; U32_LEN]>, count: CellWidth) -> u64 {
+    let mut value = 0u64;
+    for (index, word) in words.take(count.cells()).enumerate() {
+        let cell = u64::from(u32::from_le_bytes(*word));
+        value |= cell << (32 * index);
+    }
+    value
+}
+
 /// Iterator over the entries of a `ranges` property.
 ///
 /// Yields only whole entries; a trailing partial entry is ignored. Terminates
@@ -495,53 +523,26 @@ impl Iterator for RangesIter<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let end = self.position.checked_add(self.entry_len)?;
-        if end > self.value.len() {
-            return None;
-        }
         let start = self.position;
+
+        // One bounds check for the whole entry, and it IS the termination
+        // condition -- `get` returning `None` is exactly "no whole entry left",
+        // which is what the separate `end > value.len()` test used to say. The
+        // three reads below then work on a slice that is known long enough, so
+        // none of them can fail and none needs an arm.
+        let entry = self.value.get(start..end)?;
         self.position = end;
 
-        let child_address = match read_cells(self.value, start, self.child_address_cells) {
-            Ok(value) => value,
-            // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
-            // than by validation of the tree. `ranges` refuses a parent count outside
-            // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
-            // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
-            // unless a whole `entry_len` is present, so each read lands inside the
-            // entry. Kept because both of those facts live in other functions.
-            Err(error) => return Some(Err(error)),
-        };
-        let child_address_bytes = self.child_address_cells.bytes();
-        // `saturating_add`, not `checked_add`: `start` is below `value.len()`
-        // and `bytes()` is at most 8, so the sum cannot reach `usize::MAX` and
-        // saturation is unreachable for the same reason the old `None` arm was.
-        // The difference is that this has no arm to excuse.
-        let parent_offset = start.saturating_add(child_address_bytes);
-        let parent_address = match read_cells(self.value, parent_offset, self.parent_address_cells)
-        {
-            Ok(value) => value,
-            // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
-            // than by validation of the tree. `ranges` refuses a parent count outside
-            // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
-            // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
-            // unless a whole `entry_len` is present, so each read lands inside the
-            // entry. Kept because both of those facts live in other functions.
-            Err(error) => return Some(Err(error)),
-        };
-        let parent_address_bytes = self.parent_address_cells.bytes();
-        // Same reasoning as `parent_offset`: bounded operands, so saturation is
-        // unreachable and the arm that asked about it is gone.
-        let size_offset = parent_offset.saturating_add(parent_address_bytes);
-        let child_size = match read_cells(self.value, size_offset, self.size_cells) {
-            Ok(value) => value,
-            // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
-            // than by validation of the tree. `ranges` refuses a parent count outside
-            // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
-            // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
-            // unless a whole `entry_len` is present, so each read lands inside the
-            // entry. Kept because both of those facts live in other functions.
-            Err(error) => return Some(Err(error)),
-        };
+        // An entry is a contiguous run of cells: the child address, then the
+        // parent address, then the size. `as_chunks` splits it into 32-bit
+        // words once and `take_cells` walks them in order, so the offsets that
+        // used to be computed and bounds-checked three times over are now the
+        // iterator's position.
+        let (words, _) = entry.as_chunks::<U32_LEN>();
+        let mut words = words.iter();
+        let child_address = take_cells(&mut words, self.child_address_cells);
+        let parent_address = take_cells(&mut words, self.parent_address_cells);
+        let child_size = take_cells(&mut words, self.size_cells);
 
         Some(Ok(RangesEntry {
             child_address,
