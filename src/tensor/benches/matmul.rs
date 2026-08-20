@@ -68,12 +68,19 @@ const BYTES_PER_WEIGHT_ELEMENT: f64 = 1.125;
 
 /// Approximate unified-memory bandwidth of the reference machine, in GB/s.
 ///
-/// **Read the machine name before the number.** Every figure in this file's
-/// documentation says "M2 Pro", which is the `Mac14,12` deployment mini. Runs
-/// taken on 2026-08-19 and 2026-08-20 were on a `Mac15,6` M3 Pro development
-/// laptop, because the mini was not reachable. Same ISA, different core count
-/// and memory system. Re-run on the mini before quoting any of it as a
-/// property of the deployment.
+/// **Read the machine name before the number.** Figures here say "M2 Pro",
+/// which is the `Mac14,12` deployment mini. Some runs on 2026-08-19 and
+/// 2026-08-20 were taken on a `Mac15,6` M3 Pro development laptop while the
+/// mini was unreachable, and were briefly written up as if they were the
+/// target's. They are not: the M3 Pro reads about 57 GB/s single-core against
+/// the mini's 49, and is the more contended machine under load.
+///
+/// The constants in `src/transformer/` were re-measured over ssh on the mini on
+/// 2026-08-20 and now carry its numbers. Anything measured on the laptop should
+/// say so, or be taken again here:
+///
+///     ssh baby-jesus.local 'cd ~/OtherProjects/brainix && \
+///         cargo bench -p brainix-tensor --bench matmul --target aarch64-apple-darwin'
 ///
 /// Vendor figure for the M2 Pro, used only to express the result as a fraction
 /// of the ceiling. It is not measured here and is labelled as vendor-supplied

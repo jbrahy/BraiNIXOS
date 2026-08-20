@@ -1,0 +1,40 @@
+
+=== BraiNIX boot object install — Mon Aug 17 22:34:04 PDT 2026 ===
+log: /Users/Shared/brainix-boot/install-20260817-223404.log
+
+=== 1. environment ===
+ProductName:		macOS
+ProductVersion:		15.3.1
+BuildVersion:		24D70
+booted volume: Macintosh HD
+no credential file; fine unless the policy needs downgrading
+
+=== 2. payload ===
+name:   brainix-kernel
+path:   /Users/Shared/brainix-boot/brainix-kernel-aarch64.bin
+entry:  0
+low VA: 0
+bytes:  192657 (manifest says 192657)
+sha256: f1dc79ea26b0b0b4857ae023ce04ebb2f6743d7dbe6931e23566f7e346497a2f
+hash VERIFIED against the manifest
+
+=== 3. volume group UUID ===
+BraiNIX volume group: 5B900D83-DAE3-482F-96F4-3281E8A59B72
+
+=== 4. security policy -> Permissive (NO -k) ===
+already Permissive; skipping bputil and the credential it would need
+
+=== 5. verify the policy actually changed ===
+Operating on Volume Group UUID 5B900D83-DAE3-482F-96F4-3281E8A59B72
+Volume Group UUID                       (vuid): 5B900D83-DAE3-482F-96F4-3281E8A59B72
+Security Mode:               Permissive (smb0 && smb1): 1
+Kernel CTRR Status:          Disabled   (sip2): 1
+confirmed Permissive
+
+=== 6. install the boot object (once, last) ===
+target volume: /Volumes/BraiNIX
+target volume group: 5B900D83-DAE3-482F-96F4-3281E8A59B72
+error: configure-boot must be run from macOS Recovery. Please power off your Mac and then hold the power button to startup macOS Recovery
+
+FAILED: kmutil configure-boot failed -- see the log, and do NOT retry blindly
+log: /Users/Shared/brainix-boot/install-20260817-223404.log

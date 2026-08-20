@@ -149,52 +149,32 @@ pub trait Dispatch {
 
 /// Single-core `Q8_0` weight-byte throughput, in bytes per microsecond.
 ///
-/// 57 GB/s -- but **measured on the wrong machine, and provisional until it is
-/// taken again on the target.** See the warning below.
-///
-/// Measured by `benches/matmul.rs`, best of three runs across the three shapes
-/// a decode uses:
+/// **49 GB/s, measured on the deployment target** -- the `Mac14,12` Mac mini
+/// M2 Pro, over ssh on 2026-08-20, best of three runs across the three shapes a
+/// decode uses:
 ///
 /// | shape | GB/s |
 /// | --- | --- |
-/// | 4096x4096 | 57.95 |
-/// | 4096x11008 (ffn) | 57.29 |
-/// | 2048x2048 | 56.11 |
+/// | 4096x4096 | 48.76 |
+/// | 4096x11008 (ffn) | 49.31 |
+/// | 2048x2048 | 48.57 |
 ///
 /// Stated as bytes per microsecond so [`split_threshold_bytes`] needs no
-/// floating point: 57 GB/s is 57000 bytes/us.
+/// floating point: 49 GB/s is 49000 bytes/us.
 ///
-/// # PROVISIONAL: this figure is from an M3 Pro, not the M2 Pro deployment
+/// # It was 47000, then briefly 57000, and 57000 was the wrong machine
 ///
-/// The development laptop is a `Mac15,6` (M3 Pro). The deployment target is a
-/// `Mac14,12` Mac mini (M2 Pro), and it was not reachable when this was
-/// measured. Different core counts and a different memory system, so this
-/// number is the right shape and quite possibly the wrong value.
+/// The original 47000 was close to right. On 2026-08-20 I "corrected" it to
+/// 57000 on the strength of a benchmark run I had not checked the provenance
+/// of: it came from a `Mac15,6` M3 Pro development laptop, not from this
+/// machine. The mini measures 48-49, so the original figure was within a few
+/// percent and the correction was off by a fifth in the direction that makes
+/// the threshold too high, leaving work unsplit that is worth splitting.
 ///
-/// The 47000 it replaced may well have been correct **for the mini**. If it
-/// was, this commit swapped a target measurement for a development one and put
-/// the target's name on it. Re-measure on the mini and correct or confirm; the
-/// procedure is `cargo bench -p brainix-tensor --bench matmul` and the figure
-/// wanted is the best-of-three single-core `Q8_0` row.
-///
-/// # It was 47000, and that was stale rather than wrong
-///
-/// The 47 GB/s figure was measured on 2026-08-18, before the
-/// two-blocks-per-iteration unroll landed in `matmul_q8_0_q8a` the same day and
-/// took that kernel 1.30x faster. The constant was never revisited, so the
-/// threshold was being computed from a throughput the kernel had already
-/// stopped having -- underestimating the rate by a fifth, which underestimates
-/// the threshold, which splits work that is faster left alone.
-///
-/// It changed no decision in practice, and that is worth saying rather than
-/// leaving implied: in the reference model (LiteLlama-460M-1T, 24 layers,
-/// `d_model` 1024, `d_ffn` 4096, 2 key/value heads) a layer's `k` and `v`
-/// projections are ~0.15 MB against ~4.7 MB for `gate`, `up` and `down`. A
-/// factor of thirty separates the two groups, so a fifth either way moves the
-/// boundary nowhere near either of them. The number is corrected because a constant
-/// whose doc comment says "measured" should be, not because a decode was
-/// mis-dispatched.
-pub const SINGLE_CORE_BYTES_PER_MICROSECOND: usize = 57_000;
+/// The lesson is cheap to state and was expensive to learn: a performance
+/// constant is a property of a machine, so the machine belongs in the same
+/// sentence as the number. `sysctl -n hw.model` before quoting a figure.
+pub const SINGLE_CORE_BYTES_PER_MICROSECOND: usize = 49_000;
 
 /// The smallest work worth splitting, from a dispatcher's own round trip.
 ///
@@ -250,9 +230,9 @@ pub const SINGLE_CORE_BYTES_PER_MICROSECOND: usize = 57_000;
 /// ```
 /// # use brainix_transformer::dispatch::split_threshold_bytes;
 /// // A pooled dispatcher that timed its barrier pair at 26 us, four workers.
-/// assert_eq!(split_threshold_bytes(26, 4), 1_976_000);
+/// assert_eq!(split_threshold_bytes(26, 4), 1_698_666);
 /// // The kernel's own IPI round trip is far cheaper, so it splits far more.
-/// assert_eq!(split_threshold_bytes(2, 4), 152_000);
+/// assert_eq!(split_threshold_bytes(2, 4), 130_666);
 /// // One worker never splits, whatever the round trip.
 /// assert_eq!(split_threshold_bytes(26, 1), usize::MAX);
 /// ```
@@ -457,11 +437,11 @@ mod threshold_tests {
         // Literal rather than recomputed from the formula: recomputing would
         // restate the implementation and pass however the arithmetic drifted.
         // These are `round_trip * SINGLE_CORE_BYTES_PER_MICROSECOND * workers /
-        // (workers - 1)` at 57000 bytes/us, and re-measuring that constant is
+        // (workers - 1)` at 49000 bytes/us, and re-measuring that constant is
         // supposed to change them -- which is the point at which someone should
         // look at these two numbers rather than update them reflexively.
-        assert_eq!(host, 1_976_000);
-        assert_eq!(target, 152_000);
+        assert_eq!(host, 1_698_666);
+        assert_eq!(target, 130_666);
     }
 
     #[test]

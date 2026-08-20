@@ -270,11 +270,16 @@ impl WeightMatrix<'_> {
                             // is unaffordable at one token -- six would need
                             // about three times the bus -- and cheap here,
                             // because past one token the kernel is
-                            // compute-bound. Measured 2026-08-20 at 4096x4096
-                            // over 32 tokens, best of three: 2.13x on two
-                            // workers, 2.99x on four, 3.45x on six, with 39.1
-                            // GB/s of weight traffic at six against a measured
-                            // ~120 GB/s ceiling.
+                            // compute-bound. Measured on the deployment target
+                            // (Mac14,12 M2 Pro) 2026-08-20 at 4096x4096 over 32
+                            // tokens, best of three: 2.02x on two workers, 3.96x
+                            // on four, 5.19x on six, with 49.4 GB/s of weight
+                            // traffic at six against a ~120 GB/s ceiling.
+                            //
+                            // An earlier revision of this comment said 3.45x on
+                            // six. That was an M3 Pro laptop, which is the more
+                            // contended machine; the target scales better, not
+                            // worse.
                             //
                             // Token `t` owns `[t * n_out, ..)`, so a range of
                             // tokens is a contiguous range of `destination` and

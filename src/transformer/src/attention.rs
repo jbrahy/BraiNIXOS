@@ -295,33 +295,28 @@ fn blend_one_head(
 /// every other caller is a matmul. Softmax moves almost no memory and is
 /// entirely `exp`, so the comparison has to be made in a common currency: time.
 ///
-/// **PROVISIONAL: both figures are from an M3 Pro development laptop
-/// (`Mac15,6`), not the `Mac14,12` M2 Pro deployment target, which was not
-/// reachable when they were taken.** The ratio is a ratio of two measurements
-/// on the same machine, so it is more robust to the swap than either figure
-/// alone -- but re-measure on the mini before trusting the third digit.
-///
-/// `benches/matmul.rs` measures the `Q8_0` kernel at ~57 GB/s of weight bytes on
-/// one core, and `softmax` at ~231 M elements/s. One softmax element therefore
-/// occupies a core for as long as `57e9 / 231e6 ~= 246` weight bytes do. The
-/// constant is rounded to 250 because it is a ratio of two measurements, not a
+/// Measured on the deployment target -- the `Mac14,12` Mac mini M2 Pro, over
+/// ssh on 2026-08-20, best of three. `benches/matmul.rs` puts the `Q8_0` kernel
+/// at ~49 GB/s of weight bytes on one core and `softmax` at ~186 M elements/s.
+/// One softmax element therefore
+/// occupies a core for as long as `49e9 / 186e6 ~= 264` weight bytes do. The
+/// constant is rounded to 260 because it is a ratio of two measurements, not a
 /// definition, and a third significant figure would be a lie.
 ///
-/// # It was 200, from `47e9 / 236e6`
+/// # It was 200, then 250, and 250 was measured on the wrong machine
 ///
-/// Both figures were re-measured on 2026-08-20, best of three. The softmax side
-/// barely moved -- 236 to 231 M elements/s, which is load on the machine rather
-/// than a change in the code. The whole error was the matmul side: 47 GB/s was
-/// measured before the two-blocks-per-iteration unroll landed in
-/// `matmul_q8_0_q8a` and was never revisited, so this ratio inherited a stale
-/// numerator through `SINGLE_CORE_BYTES_PER_MICROSECOND`'s twin.
+/// Both figures in the 250 version came from a `Mac15,6` M3 Pro development
+/// laptop rather than from this mini, which was unreachable that morning. The
+/// M3 Pro reads 57 GB/s and 231 M elements/s; the M2 Pro reads 49 and 186. The
+/// ratio moves less than either figure -- 246 against 264 -- because it divides
+/// two measurements from the same machine, which is the one thing that went
+/// right about the earlier attempt.
 ///
-/// The direction matters here in a way it did not for that constant.
-/// Under-valuing a softmax element under-values the whole board, so the split
-/// was being declined on work that clears the threshold once the element is
-/// priced correctly. The head-parallel path measured 1.40x end to end; a fifth
-/// of the boards that should have taken it were staying serial.
-const WEIGHT_BYTES_PER_SOFTMAX_ELEMENT: usize = 250;
+/// The original 200 came from `47e9 / 236e6`. Its numerator was about right for
+/// this machine and its denominator was not: nothing here measures softmax at
+/// 236 M elements/s.
+///
+const WEIGHT_BYTES_PER_SOFTMAX_ELEMENT: usize = 260;
 
 /// Softmaxes every head's score row, splitting the board across workers when
 /// there is enough of it to be worth a round trip.
