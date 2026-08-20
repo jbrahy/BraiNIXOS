@@ -50,11 +50,27 @@
 //! removes a cost that was never the dominant one at this length.
 //!
 //! So the harness is **not shipped**, and this is a record of an attempt rather
-//! than a plan. Something cheaper than "stub the hash" is needed: a shorter
-//! blob that still reaches the table decoder, or a harness over
-//! `header::decode` alone rather than the whole of `parse`. A gated proof
-//! nobody has watched pass is worth less than an honest note saying what was
-//! tried and what it cost.
+//! than a plan. A gated proof nobody has watched pass is worth less than an
+//! honest note saying what was tried and what it cost.
+//!
+//! ## Two routes that look open and are not
+//!
+//! Written down because both are the obvious next thought and both cost
+//! nothing to rule out once stated:
+//!
+//! - **A harness over `header::decode` alone.** `mod header` is private in
+//!   `brainix-bxw1`; only the `Header` type is re-exported, not the decoder.
+//!   Reaching it means widening a crate's API purely to enable a proof, which
+//!   is a worse trade than the missing proof.
+//! - **A shorter blob that still reaches the table decoder.** There is none.
+//!   `parse` refuses anything below `BXW1_HEADER_BYTES`, so 256 IS the floor,
+//!   and it is the length that does not finish.
+//!
+//! What remains is to shrink the symbolic surface rather than the length: fix
+//! most of the header to a well-formed value and leave one field arbitrary.
+//! That proves something strictly weaker -- a statement about one field rather
+//! than about every 256-byte string -- and it should be written to say so, not
+//! left to read like the headline property.
 //!
 //! **The 22 GiB ceiling.** `BXW1_MAX_BLOB_BYTES` is about 22 GiB. No bounded
 //! harness can construct a blob past it, so the guard that refuses one is
