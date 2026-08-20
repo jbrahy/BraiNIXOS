@@ -538,12 +538,74 @@ mod tests {
     use crate::dispatch::Dispatch;
     use crate::error::TransformerError;
     use brainix_tensor::{Q4Weights, Q8Weights};
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     /// A dispatcher that splits, so the row-split branch is taken.
     ///
     /// `Serial` reports one chunk and never splits, which is why nothing in the
     /// crate had ever executed the branch below. The chunks run in sequence
     /// here -- the point is the split arithmetic, not concurrency.
+    /// A dispatcher that records whether it was asked to split at all.
+    ///
+    /// `TwoChunks` proves a split produces the right answer. This proves the
+    /// split HAPPENED. Those are different properties and only the first was
+    /// pinned: silently forcing every `worth_splitting` to `false` leaves the
+    /// answers correct and the decode serial, and the only tests that noticed
+    /// were three refusal tests that noticed by accident of their fixture.
+    ///
+    /// That is the same shape of blind spot `bin/sdot-gate.sh` exists for -- a
+    /// performance property no assertion covers, where the code stays correct
+    /// and quietly gets slower.
+    struct CountingChunks {
+        chunks: usize,
+        minimum: usize,
+        bodies_run: AtomicUsize,
+    }
+
+    impl CountingChunks {
+        /// Splits everything, so a projection that declines is the code's doing.
+        fn eager(chunks: usize) -> Self {
+            Self {
+                chunks,
+                minimum: 0,
+                bodies_run: AtomicUsize::new(0),
+            }
+        }
+
+        /// Splits nothing, so a projection that dispatches is the code's doing.
+        fn never() -> Self {
+            Self {
+                chunks: 4,
+                minimum: usize::MAX,
+                bodies_run: AtomicUsize::new(0),
+            }
+        }
+
+        fn bodies(&self) -> usize {
+            self.bodies_run.load(Ordering::Relaxed)
+        }
+    }
+
+    impl Dispatch for CountingChunks {
+        fn chunks(&self) -> usize {
+            self.chunks
+        }
+
+        fn minimum_split_bytes(&self) -> usize {
+            self.minimum
+        }
+
+        fn for_each_chunk<F>(&self, out: &mut [f32], chunk_len: usize, body: F)
+        where
+            F: Fn(usize, &mut [f32]) + Sync,
+        {
+            for (index, chunk) in out.chunks_mut(chunk_len.max(1)).enumerate() {
+                self.bodies_run.fetch_add(1, Ordering::Relaxed);
+                body(index, chunk);
+            }
+        }
+    }
+
     struct TwoChunks;
 
     impl Dispatch for TwoChunks {
@@ -705,6 +767,87 @@ mod tests {
             ),
             Err(TransformerError::WeightShapeMismatch),
             "the Q4 prefill split must report a refusal as loudly as the Q8 one"
+        );
+    }
+
+    /// A projection above the threshold must actually reach the dispatcher.
+    #[test]
+    fn a_projection_above_the_threshold_is_really_split_and_not_merely_correct() {
+        let payload = [0_u8; 4608];
+        let weights = Q8Weights::new(&payload, N_OUT, N_IN).expect("weights");
+        let matrix = WeightMatrix::Quantized8(weights);
+        let mut scratch = [0_u8; 8192];
+
+        // Decode: one token, so the row split.
+        let activations = [0.0_f32; N_IN];
+        let mut destination = [0.0_f32; N_OUT];
+        let decode = CountingChunks::eager(4);
+        let shape = MatMulShape {
+            n_tokens: 1,
+            n_in: N_IN,
+            n_out: N_OUT,
+        };
+        matrix
+            .project(shape, &activations, &mut scratch, &decode, &mut destination)
+            .expect("decode projection");
+        let decode_chunks = decode.bodies();
+        assert!(
+            decode_chunks > 1,
+            "a decode above the threshold ran on {decode_chunks} chunk(s): the \
+             row split was declined and nothing else would have said so"
+        );
+
+        // Prefill: several tokens, so the token split.
+        const TOKENS: usize = 4;
+        let batch = [0.0_f32; TOKENS * N_IN];
+        let mut wide = [0.0_f32; TOKENS * N_OUT];
+        let prefill = CountingChunks::eager(4);
+        let batched = MatMulShape {
+            n_tokens: TOKENS,
+            n_in: N_IN,
+            n_out: N_OUT,
+        };
+        matrix
+            .project(batched, &batch, &mut scratch, &prefill, &mut wide)
+            .expect("prefill projection");
+        let prefill_chunks = prefill.bodies();
+        assert!(
+            prefill_chunks > 1,
+            "a prefill above the threshold ran on {prefill_chunks} chunk(s): \
+             the token split was declined"
+        );
+    }
+
+    /// And the same projection below the threshold must NOT reach it.
+    #[test]
+    fn a_projection_below_the_threshold_never_reaches_the_dispatcher() {
+        let payload = [0_u8; 4608];
+        let weights = Q8Weights::new(&payload, N_OUT, N_IN).expect("weights");
+        let matrix = WeightMatrix::Quantized8(weights);
+        let mut scratch = [0_u8; 8192];
+        let activations = [0.0_f32; N_IN];
+        let mut destination = [0.0_f32; N_OUT];
+
+        let dispatch = CountingChunks::never();
+        let shape = MatMulShape {
+            n_tokens: 1,
+            n_in: N_IN,
+            n_out: N_OUT,
+        };
+        matrix
+            .project(
+                shape,
+                &activations,
+                &mut scratch,
+                &dispatch,
+                &mut destination,
+            )
+            .expect("serial projection");
+        assert_eq!(
+            dispatch.bodies(),
+            0,
+            "work under the threshold must stay on the calling core, and a \
+             synchronisation paid 168 times a token is what that saves"
         );
     }
 }
