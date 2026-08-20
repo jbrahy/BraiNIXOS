@@ -210,14 +210,14 @@ impl Sha256 {
         self.update_unbounded(&length_bits.to_be_bytes());
 
         let mut digest = [0u8; DIGEST_LEN];
-        for (index, word) in self.state.iter().enumerate() {
-            let at = index.saturating_mul(4);
-            // COVERAGE-EXEMPT: `state` is 8 words and `digest` is 32 bytes,
-            // so `at` runs 0, 4, .. 28 and every 4-byte window fits.
-            let Some(slot) = digest.get_mut(at..at.saturating_add(4)) else {
-                break;
-            };
-            slot.copy_from_slice(&word.to_be_bytes());
+        // `as_chunks_mut` hands back `&mut [[u8; 4]]`, so each write is a whole
+        // array assignment: no range to compute, no length for
+        // `copy_from_slice` to disagree with, and no unreachable `else` arm to
+        // excuse. DIGEST_LEN is 32 and the state is 8 words, so the chunk count
+        // and the word count agree by construction and `zip` needs no bound.
+        let (words, _) = digest.as_chunks_mut::<4>();
+        for (slot, word) in words.iter_mut().zip(self.state.iter()) {
+            *slot = word.to_be_bytes();
         }
         digest
     }
@@ -236,19 +236,13 @@ impl Sha256 {
     fn compress(&mut self, block: &[u8; BLOCK_LEN]) {
         let mut schedule = [0u32; 64];
 
-        for (index, slot) in schedule.iter_mut().take(16).enumerate() {
-            let at = index.saturating_mul(4);
-            // COVERAGE-EXEMPT: `block` is `[u8; BLOCK_LEN]` with BLOCK_LEN 64
-            // and the loop takes 16 iterations, so `at` runs 0, 4, .. 60.
-            let Some(bytes) = block.get(at..at.saturating_add(4)) else {
-                return;
-            };
-            // COVERAGE-EXEMPT: `bytes` is a 4-byte slice by the line above, so
-            // the conversion cannot fail.
-            let Ok(word) = <[u8; 4]>::try_from(bytes) else {
-                return;
-            };
-            *slot = u32::from_be_bytes(word);
+        // The block read as 16 four-byte arrays rather than 16 fallible
+        // four-byte ranges. `zip` supplies the bound that `take(16)` used to
+        // spell out, and the element type is already `[u8; 4]`, so the
+        // conversion that needed an unreachable error arm is now infallible.
+        let (chunks, _) = block.as_chunks::<4>();
+        for (slot, bytes) in schedule.iter_mut().zip(chunks) {
+            *slot = u32::from_be_bytes(*bytes);
         }
 
         for index in 16usize..64 {
@@ -274,15 +268,10 @@ impl Sha256 {
 
         let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = self.state;
 
-        for index in 0usize..64 {
-            let (Some(word), Some(constant)) = (
-                schedule.get(index).copied(),
-                ROUND_CONSTANTS.get(index).copied(),
-                // COVERAGE-EXEMPT: `index` runs 0..64; `schedule` is 64 long and
-                // `ROUND_CONSTANTS` is the 64 constants of FIPS 180-4 §4.2.2.
-            ) else {
-                return;
-            };
+        // Both are `[u32; 64]`, so zipping runs exactly the 64 rounds the
+        // index form ran, with the pair of unreachable `None` arms deleted
+        // instead of justified.
+        for (word, constant) in schedule.iter().copied().zip(ROUND_CONSTANTS) {
             let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
             let choose = (e & f) ^ ((!e) & g);
             let temp1 = h
