@@ -516,7 +516,10 @@ impl<'a> Model<'a> {
             workspace.quant_scratch,
             dispatch,
             prefix_mut(workspace.gate, inner)?,
-            // COVERAGE-EXEMPT: nothing on this line can refuse for a `Model` that exists. The slice helpers, the size arithmetic and the tensor kernels are all handed extents derived from the one `ModelConfig` that `Model::new` validated and the one `Workspace` that `Workspace::new` sized for it, and a batch too large for that workspace is refused earlier with `BatchExceedsWorkspace`. The `?` stays so a shape reaching this path unvalidated cannot be ignored.
+            // Reachable: `layer` is this method's parameter, and `Model::new`
+            // validates the layers it stores, not the one handed in here.
+            // Pinned by
+            // `a_layer_whose_matrices_do_not_match_the_geometry_is_refused_by_the_projection`.
         )?;
         layer.up_projection.project(
             shape,
@@ -631,4 +634,195 @@ fn rotate_row(
         .ok_or(TransformerError::WorkspaceTooSmall)?;
     rope(input, params, output)?;
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::arithmetic_side_effects)]
+mod tests {
+    use super::{Model, ModelConfig};
+    use crate::dispatch::Serial;
+    use crate::error::TransformerError;
+    use crate::weights::{LayerWeights, LogitProjection, ModelWeights, WeightMatrix};
+    use crate::workspace::{workspace_floats, Workspace};
+    use brainix_tensor::RopePairing;
+
+    /// The smallest model the config validator accepts, in the shape the
+    /// workspace documentation uses.
+    const CONFIG: ModelConfig = ModelConfig {
+        architecture_id: 1,
+        layer_count: 1,
+        model_width: 32,
+        query_head_count: 4,
+        key_value_head_count: 2,
+        head_width: 8,
+        feed_forward_width: 64,
+        vocabulary_size: 48,
+        maximum_sequence_length: 16,
+        rope_theta: 1.0e4,
+        normalization_epsilon: 1.0e-5,
+        rope_dimensions: 4,
+        rope_pairing: RopePairing::Interleaved,
+    };
+
+    const BATCH: usize = 8;
+    const FLOATS: usize = match workspace_floats(&CONFIG, BATCH) {
+        Ok(floats) => floats,
+        Err(_) => 0,
+    };
+
+    // Zeros throughout: these tests exercise refusal, not arithmetic, and a
+    // weight's value cannot change whether a slice is long enough.
+    static NORM: [f32; 32] = [0.0; 32];
+    static SQUARE: [f32; 1024] = [0.0; 1024]; // wq and wo, [32, 32]
+    static NARROW: [f32; 512] = [0.0; 512]; // wk and wv, [16, 32]
+    static WIDE: [f32; 2048] = [0.0; 2048]; // gate, up and down
+    static VOCAB: [f32; 1536] = [0.0; 1536]; // embeddings and output, [48, 32]
+
+    fn layer() -> LayerWeights<'static> {
+        LayerWeights {
+            attention_norm: &NORM,
+            query_projection: WeightMatrix::Float32(&SQUARE),
+            key_projection: WeightMatrix::Float32(&NARROW),
+            value_projection: WeightMatrix::Float32(&NARROW),
+            attention_output_projection: WeightMatrix::Float32(&SQUARE),
+            feed_forward_norm: &NORM,
+            gate_projection: WeightMatrix::Float32(&WIDE),
+            up_projection: WeightMatrix::Float32(&WIDE),
+            down_projection: WeightMatrix::Float32(&WIDE),
+        }
+    }
+
+    /// A token count larger than the workspace was cut for.
+    ///
+    /// Eleven markers in this file say nothing on their line "can refuse for a
+    /// `Model` that exists", because every extent descends from a validated
+    /// `ModelConfig` and a `Workspace` sized for it, and an oversized batch is
+    /// refused earlier with `BatchExceedsWorkspace`.
+    ///
+    /// That earlier refusal is in `admit_batch`, which `forward` calls. These
+    /// are private methods and they take `token_count` as a parameter -- so the
+    /// guarantee belongs to `forward`, not to them. Called directly with a
+    /// count past the batch ceiling, the `prefix`/`prefix_mut` cuts refuse and
+    /// the `?` carries it out, which is precisely what the markers say the `?`
+    /// is kept for.
+    #[test]
+    fn a_token_count_past_the_batch_ceiling_is_refused_by_every_projection() {
+        let layers = [layer()];
+        let weights = ModelWeights {
+            token_embeddings: &VOCAB,
+            layers: &layers,
+            final_norm: &NORM,
+            logit_projection: LogitProjection::Separate(WeightMatrix::Float32(&VOCAB)),
+        };
+        let model = Model::new(CONFIG, weights).expect("a valid model");
+
+        let mut storage = [0.0_f32; FLOATS];
+        let mut quant: [u8; 0] = [];
+        let mut workspace =
+            Workspace::new(&mut storage, &mut quant, &CONFIG, BATCH).expect("workspace");
+
+        let layer = layer();
+        let past = BATCH + 1;
+
+        assert!(
+            model
+                .project_branches(&Serial, &mut workspace, &layer, past)
+                .is_err(),
+            "the gate and up cuts are sized for {BATCH} tokens, not {past}"
+        );
+        assert!(
+            model
+                .project_down(&Serial, &mut workspace, &layer, past)
+                .is_err(),
+            "the down cut is sized for {BATCH} tokens, not {past}"
+        );
+
+        // And the batch ceiling itself is fine, or the assertions above would
+        // pass for the wrong reason.
+        assert!(model
+            .project_branches(&Serial, &mut workspace, &layer, BATCH)
+            .is_ok());
+        assert!(model
+            .project_down(&Serial, &mut workspace, &layer, BATCH)
+            .is_ok());
+    }
+
+    /// `forward` is the entry point that does make the guarantee, and it holds.
+    #[test]
+    fn the_public_entry_point_refuses_the_same_batch_before_any_arithmetic() {
+        let layers = [layer()];
+        let weights = ModelWeights {
+            token_embeddings: &VOCAB,
+            layers: &layers,
+            final_norm: &NORM,
+            logit_projection: LogitProjection::Separate(WeightMatrix::Float32(&VOCAB)),
+        };
+        let model = Model::new(CONFIG, weights).expect("a valid model");
+
+        let mut storage = [0.0_f32; FLOATS];
+        let mut quant: [u8; 0] = [];
+        let mut workspace =
+            Workspace::new(&mut storage, &mut quant, &CONFIG, BATCH).expect("workspace");
+
+        let mut arena_storage = [0.0_f32; 4096];
+        let mut logits = [0.0_f32; CONFIG.vocabulary_size];
+        let tokens = [0_u32; BATCH + 1];
+
+        let geometry = crate::cache::CacheGeometry::for_config(&CONFIG).expect("geometry");
+        let mut arena =
+            crate::cache::KeyValueArena::new(&mut arena_storage, geometry).expect("arena");
+        let mut session = arena.issue_session().expect("session");
+
+        assert_eq!(
+            model.forward(&Serial, &mut workspace, &mut session, &tokens, &mut logits),
+            Err(TransformerError::BatchExceedsWorkspace),
+            "the entry point refuses the batch the private methods do not check"
+        );
+    }
+
+    /// A layer whose weights do not match the model's geometry.
+    ///
+    /// The previous test refuses at the workspace cut, one step before the
+    /// projections these markers actually sit on. To reach those, the cut has
+    /// to succeed and the projection has to fail -- which needs a weight matrix
+    /// of the wrong shape.
+    ///
+    /// `Model::new` validates the layers it stores. It does not validate the
+    /// `layer` these private methods take as a parameter, which is the whole
+    /// reason the `?` is there.
+    #[test]
+    fn a_layer_whose_matrices_do_not_match_the_geometry_is_refused_by_the_projection() {
+        let layers = [layer()];
+        let weights = ModelWeights {
+            token_embeddings: &VOCAB,
+            layers: &layers,
+            final_norm: &NORM,
+            logit_projection: LogitProjection::Separate(WeightMatrix::Float32(&VOCAB)),
+        };
+        let model = Model::new(CONFIG, weights).expect("a valid model");
+
+        let mut storage = [0.0_f32; FLOATS];
+        let mut quant: [u8; 0] = [];
+        let mut workspace =
+            Workspace::new(&mut storage, &mut quant, &CONFIG, BATCH).expect("workspace");
+
+        // Every extent the workspace needs is fine; only the weights are wrong.
+        let mut wrong = layer();
+        wrong.gate_projection = WeightMatrix::Float32(&NORM);
+        assert!(
+            model
+                .project_branches(&Serial, &mut workspace, &wrong, 1)
+                .is_err(),
+            "a 32-element matrix cannot be the [64, 32] gate projection"
+        );
+
+        let mut wrong_down = layer();
+        wrong_down.down_projection = WeightMatrix::Float32(&NORM);
+        assert!(
+            model
+                .project_down(&Serial, &mut workspace, &wrong_down, 1)
+                .is_err(),
+            "a 32-element matrix cannot be the [32, 64] down projection"
+        );
+    }
 }
