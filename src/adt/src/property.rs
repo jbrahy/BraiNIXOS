@@ -496,12 +496,16 @@ impl RangesEntry {
 /// This ordering is the opposite of an FDT's, and each cell is itself
 /// little-endian (spec sections 8.5 and 4.4).
 fn take_cells<'a>(words: &mut impl Iterator<Item = &'a [u8; U32_LEN]>, count: CellWidth) -> u64 {
-    let mut value = 0u64;
-    for (index, word) in words.take(count.cells()).enumerate() {
-        let cell = u64::from(u32::from_le_bytes(*word));
-        value |= cell << (32 * index);
+    // Least-significant cell first is little-endian across the whole field, so
+    // the cells are copied into the low bytes of a `u64` and read back in one
+    // conversion. No shift, no multiply, and nothing to get wrong about the
+    // order beyond the order they are written in.
+    let mut assembled = [0u8; 8];
+    let (cells, _) = assembled.as_chunks_mut::<U32_LEN>();
+    for (slot, word) in cells.iter_mut().zip(words.take(count.cells())) {
+        *slot = *word;
     }
-    value
+    u64::from_le_bytes(assembled)
 }
 
 /// Iterator over the entries of a `ranges` property.

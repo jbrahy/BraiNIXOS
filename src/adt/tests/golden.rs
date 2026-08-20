@@ -353,3 +353,42 @@ fn ranges_denies_a_parent_address_cell_count_outside_the_spec_range() {
         Some(AdtError::InvalidAddressCells)
     );
 }
+
+/// A `ranges` entry whose widths are one cell and zero cells.
+///
+/// `CellWidth::cells()` has an arm per legal width, and until this test only
+/// the two-cell arm ran: every fixture in the tree describes a 2/2 bus. Zero
+/// and one are equally legal -- `#size-cells = 0` is how a bus with no sizes
+/// is spelled -- and a `ranges` decode that got them wrong would mis-translate
+/// every address behind such a bus rather than fail.
+///
+/// The golden `reg` value is reused as a `ranges` value: 16 bytes read as
+/// 1 child cell + 1 parent cell + 0 size cells is a 4-entry table, which is a
+/// well-formed shape whatever the bytes mean elsewhere.
+#[test]
+fn a_ranges_entry_of_one_cell_each_and_no_size_decodes_every_entry() {
+    let tree = DeviceTree::parse(&GOLDEN).expect("parse");
+    let path = tree.resolve(b"/uart0").expect("resolve");
+    let reg = path.node().property(b"reg").expect("reg property");
+    let child = CellCounts::new(1, 0).expect("one address cell, no size cells");
+
+    let entries: Vec<_> = reg
+        .ranges(child, 1)
+        .expect("a 1/1/0 ranges table")
+        .collect::<Result<_, _>>()
+        .expect("every entry decodes");
+
+    // 4 bytes child + 4 bytes parent + 0 bytes size = 8 per entry, over 16.
+    assert_eq!(entries.len(), 2, "16 bytes at 8 per entry is two entries");
+
+    // The four little-endian words of the fixture, paired up.
+    assert_eq!(entries[0].child_address, 0x7920_0000);
+    assert_eq!(entries[0].parent_address, 0);
+    assert_eq!(
+        entries[0].child_size, 0,
+        "no size cells means every size is zero"
+    );
+    assert_eq!(entries[1].child_address, 0x4000);
+    assert_eq!(entries[1].parent_address, 0);
+    assert_eq!(entries[1].child_size, 0);
+}
