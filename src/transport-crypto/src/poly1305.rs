@@ -271,51 +271,45 @@ fn column(accumulated: &[u32; 5], multipliers: &[u32; 5]) -> u64 {
 
 /// `r`, clamped per RFC 8439, in five 26-bit limbs.
 fn clamp_r(key: &[u8; POLY1305_KEY_BYTES]) -> [u32; 5] {
+    // Named rather than indexed. The limbs overlap -- RFC 8439 reads at byte 0,
+    // 3, 6, 9 and 12 -- so there is no chunking that expresses them, but an
+    // array pattern on a fixed-size key names every byte the split needs and
+    // cannot be out of range. That is what retires `load_le32`'s unreachable
+    // arm, which returned 0 on a failed read: a MAC that silently substitutes
+    // zero bytes is the wrong failure mode to keep merely because it is
+    // unreachable today.
+    let [b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, ..] = *key;
+    let word = |a: u8, b: u8, c: u8, d: u8| u32::from_le_bytes([a, b, c, d]);
     [
-        load_le32(key, 0) & 0x3ff_ffff,
-        (load_le32(key, 3) >> 2) & 0x3ff_ff03,
-        (load_le32(key, 6) >> 4) & 0x3ff_c0ff,
-        (load_le32(key, 9) >> 6) & 0x3f0_3fff,
-        (load_le32(key, 12) >> 8) & 0x00f_ffff,
+        word(b0, b1, b2, b3) & 0x3ff_ffff,
+        (word(b3, b4, b5, b6) >> 2) & 0x3ff_ff03,
+        (word(b6, b7, b8, b9) >> 4) & 0x3ff_c0ff,
+        (word(b9, b10, b11, b12) >> 6) & 0x3f0_3fff,
+        (word(b12, b13, b14, b15) >> 8) & 0x00f_ffff,
     ]
 }
 
 /// `s = key[16..32]` as four little-endian words.
 fn load_s(key: &[u8; POLY1305_KEY_BYTES]) -> [u32; 4] {
-    [
-        load_le32(key, 16),
-        load_le32(key, 20),
-        load_le32(key, 24),
-        load_le32(key, 28),
-    ]
+    // The upper half as four aligned words. `skip` rather than `split_at`,
+    // which panics on a bad midpoint and would put back the panic path this
+    // whole change is removing.
+    let (chunks, _) = key.as_chunks::<4>();
+    let mut words = [0u32; 4];
+    for (slot, chunk) in words.iter_mut().zip(chunks.iter().skip(BLOCK_BYTES / 4)) {
+        *slot = u32::from_le_bytes(*chunk);
+    }
+    words
 }
 
 /// The block as four little-endian words.
 fn load_block(block: &[u8; BLOCK_BYTES]) -> [u32; 4] {
-    [
-        load_le32(block, 0),
-        load_le32(block, 4),
-        load_le32(block, 8),
-        load_le32(block, 12),
-    ]
-}
-
-/// A little-endian `u32` at `offset`, or zero if it does not fit — total by
-/// construction, so no index can panic.
-fn load_le32(bytes: &[u8], offset: usize) -> u32 {
-    let end = offset.saturating_add(4);
-    match bytes.get(offset..end) {
-        Some([first, second, third, fourth]) => {
-            u32::from_le_bytes([*first, *second, *third, *fourth])
-        }
-        // COVERAGE-EXEMPT: every call site passes a literal offset into a
-        // fixed-size array, and the largest read is `28..32` of a 32-byte key
-        // and `12..16` of a 16-byte block, so the slice is always present.
-        // Not "16-byte-aligned offsets": `clamp_r` reads at 3, 6, 9 and 12,
-        // which is RFC 8439's limb split and is deliberately unaligned.
-        // Returning 0 keeps this total instead of indexing.
-        _ => 0,
+    let (chunks, _) = block.as_chunks::<4>();
+    let mut words = [0u32; 4];
+    for (slot, chunk) in words.iter_mut().zip(chunks) {
+        *slot = u32::from_le_bytes(*chunk);
     }
+    words
 }
 
 /// Copies up to one block out of `message` at `offset`, zero-filling the rest.
