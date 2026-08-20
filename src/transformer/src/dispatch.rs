@@ -47,9 +47,14 @@ pub trait Dispatch {
     /// left alone, and a decode makes 168 of them per token, so the loss is paid
     /// 168 times.
     ///
-    /// The sizes are not close to each other. In the reference model a layer's
-    /// `k` and `v` projections are ~0.15 MB apiece while `gate`, `up` and `down`
-    /// are ~4.7 MB -- a factor of thirty. A single threshold cleanly separates
+    /// The sizes are not close to each other. In the reference model --
+    /// LiteLlama-460M-1T, the weights checked out under
+    /// `tools/bxw1-convert/models/`: 24 layers, `d_model` 1024, `d_ffn` 4096,
+    /// 16 query heads over 2 key/value heads -- a layer's `k` and `v`
+    /// projections are ~0.15 MB apiece while `gate`, `up` and `down` are
+    /// ~4.7 MB, a factor of thirty. Those follow from the config: `2 x 64 x
+    /// 1024 x 1.125` and `4096 x 1024 x 1.125`, and the 168 above is `24 x 7`.
+    /// A single threshold cleanly separates
     /// them, which is why this is one number rather than a policy.
     ///
     /// # How to choose it, rather than guess it
@@ -166,10 +171,11 @@ pub trait Dispatch {
 /// the threshold, which splits work that is faster left alone.
 ///
 /// It changed no decision in practice, and that is worth saying rather than
-/// leaving implied: in the reference model a layer's `k` and `v` projections
-/// are ~0.15 MB against ~4.7 MB for `gate`, `up` and `down`. A factor of
-/// thirty separates the two groups, so a fifth either way moves the boundary
-/// nowhere near either of them. The number is corrected because a constant
+/// leaving implied: in the reference model (LiteLlama-460M-1T, 24 layers,
+/// `d_model` 1024, `d_ffn` 4096, 2 key/value heads) a layer's `k` and `v`
+/// projections are ~0.15 MB against ~4.7 MB for `gate`, `up` and `down`. A
+/// factor of thirty separates the two groups, so a fifth either way moves the
+/// boundary nowhere near either of them. The number is corrected because a constant
 /// whose doc comment says "measured" should be, not because a decode was
 /// mis-dispatched.
 pub const SINGLE_CORE_BYTES_PER_MICROSECOND: usize = 57_000;
