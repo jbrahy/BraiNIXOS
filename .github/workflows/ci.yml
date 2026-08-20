@@ -65,6 +65,15 @@ jobs:
       - name: cargo clippy (host target)
         run: cargo clippy --workspace --exclude brainix-capability-verify --exclude brainix-kernel --exclude brainix-bootloader --exclude brainix-ipc-verify --exclude brainix-bootloader-verify --target x86_64-unknown-linux-gnu -- -D warnings
 
+      # The step above omits --all-targets, so it compiles libs and bins and
+      # never looks at `#[cfg(test)]` modules, tests/, benches/ or examples/.
+      # Between 2026-08-18 and 2026-08-19 eight test files were added that each
+      # violated the workspace's own denied lints, and this job stayed green
+      # through all of them. A lint that does not compile the code is not a lint
+      # that guards it.
+      - name: Clippy on the targets the step above never compiles
+        run: ./bin/clippy-all-targets-gate.sh
+
   # ---------------------------------------------------------------------------
   # 1. Supply chain audit — runs after style gate
   # ---------------------------------------------------------------------------
@@ -200,6 +209,10 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      # Enforces both halves in one instrumentation pass: every uncovered line
+      # carries a reason, AND every reason still excuses an uncovered line. The
+      # second half used to need a separate `--stale` invocation, which cost a
+      # second full minute to re-derive identical data and could be forgotten.
       - name: Coverage gate
         run: ./bin/coverage-gate.py
 

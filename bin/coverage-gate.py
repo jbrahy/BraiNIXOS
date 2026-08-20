@@ -378,9 +378,29 @@ def main() -> int:
             print(f"  ... and {len(unjustified) - 40} more", file=sys.stderr)
         return 1
 
+    # The stale audit runs here too, not only under `--stale`. Instrumenting the
+    # whole workspace costs about a minute, and the two checks read the SAME
+    # data -- so making callers invoke this twice bought nothing but a second
+    # minute and the chance to forget the second call. A marker that no longer
+    # excuses anything is a defect of the same kind as a line with no marker,
+    # and the gate should not need to be asked twice to say so.
+    stale = stale_markers(all_uncovered)
+    if stale:
+        print("\nCOVERAGE GATE FAILED — these markers no longer excuse anything.",
+              file=sys.stderr)
+        for path, number, text in stale:
+            print(f"  {path}:{number}", file=sys.stderr)
+            print(f"      {text[:100]}", file=sys.stderr)
+        print("\nEach is a licence with nothing left to license. Delete it, or the",
+              file=sys.stderr)
+        print("next uncovered line that drifts into its window inherits it.",
+              file=sys.stderr)
+        return 1
+
     print(f"\ncoverage gate: PASS — 100% of reachable lines, "
           f"{total_exempt} exempt with stated reasons, "
-          f"{len(CRATES) - len(CODELESS_CRATES)} crates measured")
+          f"{len(CRATES) - len(CODELESS_CRATES)} crates measured, "
+          f"no stale markers")
     return 0
 
 

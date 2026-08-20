@@ -22,15 +22,15 @@ it could not see them at all.
 
 | Script | Asks | Runs where |
 | --- | --- | --- |
-| `coverage-gate.py` | is every uncovered line explained? | any host |
-| `coverage-gate.py --stale` | does every explanation still excuse something? | any host |
+| `coverage-gate.py` | is every uncovered line explained, and every explanation still needed? | any host |
+| `coverage-gate.py --stale` | the second half alone, for a focused local check | any host |
 | `sdot-gate.sh` | do the `Q8_0` matmuls still compile to `SDOT`? | **aarch64 only** |
 | `lint-suppressions.py` | is every lint suppression justified? | any host |
 | `clippy-all-targets-gate.sh` | do tests, benches and examples lint clean? | any host |
 | `reproducible-build.sh` | are the bare-metal artifacts byte-identical twice? | any host |
 
 ```sh
-./bin/coverage-gate.py                # enforce: 100% of reachable lines
+./bin/coverage-gate.py                # enforce: 100% of reachable lines, no stale markers
 ./bin/coverage-gate.py --list         # every unjustified line, with its source
 ./bin/coverage-gate.py --stale        # markers that no longer excuse anything
 ./bin/sdot-gate.sh                    # skips loudly on non-aarch64, never passes quietly
@@ -53,6 +53,12 @@ test that fails a run. Test code does legitimately need `expect` and `unwrap`;
 those are written down as `#[allow(..)]` on the module, which `lint-suppressions.py`
 deliberately does not count, because its subject is production code. The two
 gates cover disjoint sets and neither alone is the whole picture.
+
+**Why the stale audit runs by default.** It reads the same instrumentation the
+coverage check does, so requiring a second invocation bought nothing but a
+second full minute and the chance to forget it. A marker that no longer excuses
+anything is a defect of the same kind as a line with no marker. `--stale` is
+still available on its own when that is the only question.
 
 **Why `--stale` exists.** An exemption is granted once and then never re-read.
 When the line it excused becomes covered, the marker stays behind and licenses
