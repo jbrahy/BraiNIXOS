@@ -68,6 +68,13 @@ const BYTES_PER_WEIGHT_ELEMENT: f64 = 1.125;
 
 /// Approximate unified-memory bandwidth of the reference machine, in GB/s.
 ///
+/// **Read the machine name before the number.** Every figure in this file's
+/// documentation says "M2 Pro", which is the `Mac14,12` deployment mini. Runs
+/// taken on 2026-08-19 and 2026-08-20 were on a `Mac15,6` M3 Pro development
+/// laptop, because the mini was not reachable. Same ISA, different core count
+/// and memory system. Re-run on the mini before quoting any of it as a
+/// property of the deployment.
+///
 /// Vendor figure for the M2 Pro, used only to express the result as a fraction
 /// of the ceiling. It is not measured here and is labelled as vendor-supplied
 /// wherever it is printed.

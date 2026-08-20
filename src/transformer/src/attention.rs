@@ -295,6 +295,12 @@ fn blend_one_head(
 /// every other caller is a matmul. Softmax moves almost no memory and is
 /// entirely `exp`, so the comparison has to be made in a common currency: time.
 ///
+/// **PROVISIONAL: both figures are from an M3 Pro development laptop
+/// (`Mac15,6`), not the `Mac14,12` M2 Pro deployment target, which was not
+/// reachable when they were taken.** The ratio is a ratio of two measurements
+/// on the same machine, so it is more robust to the swap than either figure
+/// alone -- but re-measure on the mini before trusting the third digit.
+///
 /// `benches/matmul.rs` measures the `Q8_0` kernel at ~57 GB/s of weight bytes on
 /// one core, and `softmax` at ~231 M elements/s. One softmax element therefore
 /// occupies a core for as long as `57e9 / 231e6 ~= 246` weight bytes do. The

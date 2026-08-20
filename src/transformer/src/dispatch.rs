@@ -149,8 +149,11 @@ pub trait Dispatch {
 
 /// Single-core `Q8_0` weight-byte throughput, in bytes per microsecond.
 ///
-/// 57 GB/s, measured by `benches/matmul.rs` on an M2 Pro performance core, best
-/// of three runs across the three shapes a decode uses:
+/// 57 GB/s -- but **measured on the wrong machine, and provisional until it is
+/// taken again on the target.** See the warning below.
+///
+/// Measured by `benches/matmul.rs`, best of three runs across the three shapes
+/// a decode uses:
 ///
 /// | shape | GB/s |
 /// | --- | --- |
@@ -160,6 +163,19 @@ pub trait Dispatch {
 ///
 /// Stated as bytes per microsecond so [`split_threshold_bytes`] needs no
 /// floating point: 57 GB/s is 57000 bytes/us.
+///
+/// # PROVISIONAL: this figure is from an M3 Pro, not the M2 Pro deployment
+///
+/// The development laptop is a `Mac15,6` (M3 Pro). The deployment target is a
+/// `Mac14,12` Mac mini (M2 Pro), and it was not reachable when this was
+/// measured. Different core counts and a different memory system, so this
+/// number is the right shape and quite possibly the wrong value.
+///
+/// The 47000 it replaced may well have been correct **for the mini**. If it
+/// was, this commit swapped a target measurement for a development one and put
+/// the target's name on it. Re-measure on the mini and correct or confirm; the
+/// procedure is `cargo bench -p brainix-tensor --bench matmul` and the figure
+/// wanted is the best-of-three single-core `Q8_0` row.
 ///
 /// # It was 47000, and that was stale rather than wrong
 ///
