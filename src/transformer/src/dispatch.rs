@@ -144,11 +144,35 @@ pub trait Dispatch {
 
 /// Single-core `Q8_0` weight-byte throughput, in bytes per microsecond.
 ///
-/// 47 GB/s, measured by `benches/matmul.rs` on an M2 Pro performance core and
-/// stable across the shapes a decode uses. It appears here as bytes per
-/// microsecond so [`split_threshold_bytes`] needs no floating point: 47 GB/s is
-/// 47000 bytes/us.
-pub const SINGLE_CORE_BYTES_PER_MICROSECOND: usize = 47_000;
+/// 57 GB/s, measured by `benches/matmul.rs` on an M2 Pro performance core, best
+/// of three runs across the three shapes a decode uses:
+///
+/// | shape | GB/s |
+/// | --- | --- |
+/// | 4096x4096 | 57.95 |
+/// | 4096x11008 (ffn) | 57.29 |
+/// | 2048x2048 | 56.11 |
+///
+/// Stated as bytes per microsecond so [`split_threshold_bytes`] needs no
+/// floating point: 57 GB/s is 57000 bytes/us.
+///
+/// # It was 47000, and that was stale rather than wrong
+///
+/// The 47 GB/s figure was measured on 2026-08-18, before the
+/// two-blocks-per-iteration unroll landed in `matmul_q8_0_q8a` the same day and
+/// took that kernel 1.30x faster. The constant was never revisited, so the
+/// threshold was being computed from a throughput the kernel had already
+/// stopped having -- underestimating the rate by a fifth, which underestimates
+/// the threshold, which splits work that is faster left alone.
+///
+/// It changed no decision in practice, and that is worth saying rather than
+/// leaving implied: in the reference model a layer's `k` and `v` projections
+/// are ~0.15 MB against ~4.7 MB for `gate`, `up` and `down`. A factor of
+/// thirty separates the two groups, so a fifth either way moves the boundary
+/// nowhere near either of them. The number is corrected because a constant
+/// whose doc comment says "measured" should be, not because a decode was
+/// mis-dispatched.
+pub const SINGLE_CORE_BYTES_PER_MICROSECOND: usize = 57_000;
 
 /// The smallest work worth splitting, from a dispatcher's own round trip.
 ///
@@ -204,9 +228,9 @@ pub const SINGLE_CORE_BYTES_PER_MICROSECOND: usize = 47_000;
 /// ```
 /// # use brainix_transformer::dispatch::split_threshold_bytes;
 /// // A pooled dispatcher that timed its barrier pair at 26 us, four workers.
-/// assert_eq!(split_threshold_bytes(26, 4), 1_629_333);
+/// assert_eq!(split_threshold_bytes(26, 4), 1_976_000);
 /// // The kernel's own IPI round trip is far cheaper, so it splits far more.
-/// assert_eq!(split_threshold_bytes(2, 4), 125_333);
+/// assert_eq!(split_threshold_bytes(2, 4), 152_000);
 /// // One worker never splits, whatever the round trip.
 /// assert_eq!(split_threshold_bytes(26, 1), usize::MAX);
 /// ```
@@ -408,8 +432,14 @@ mod threshold_tests {
             "26 us gives {host} and 2 us gives {target}; the ratio should track \
              the round trips"
         );
-        assert_eq!(host, 1_629_333);
-        assert_eq!(target, 125_333);
+        // Literal rather than recomputed from the formula: recomputing would
+        // restate the implementation and pass however the arithmetic drifted.
+        // These are `round_trip * SINGLE_CORE_BYTES_PER_MICROSECOND * workers /
+        // (workers - 1)` at 57000 bytes/us, and re-measuring that constant is
+        // supposed to change them -- which is the point at which someone should
+        // look at these two numbers rather than update them reflexively.
+        assert_eq!(host, 1_976_000);
+        assert_eq!(target, 152_000);
     }
 
     #[test]
