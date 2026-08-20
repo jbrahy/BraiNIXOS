@@ -99,6 +99,52 @@ exception **INV-BOOT/AS**, now the rule). Full detail:
 Third-party reverse-engineering work (notably [Asahi Linux](https://asahilinux.org/)) is **reference-only**:
 published documentation in, clean-room implementation out. No code is copied, regardless of license.
 
+## Help wanted — Apple Silicon
+
+**If you have an M-series Mac and want to work on an operating system, this is a good place to start,
+and I would genuinely like the help.**
+
+The hard part is done. BraiNIX boots on an M2 Pro, gets itself from EL2 to EL1, walks its own page
+tables, takes syscalls, enforces PAC-BTI, and brings a second core out of reset — all verified on the
+machine rather than in an emulator. What is missing is breadth: the device drivers between "a kernel
+runs" and "a model serves".
+
+**What you would need**
+
+| | |
+|---|---|
+| Hardware | Any Apple Silicon Mac. The reference is a Mac mini M2 Pro (`Mac14,12`, `T6020`) but the core is not model-specific. |
+| Cable | One USB-C cable for the serial console. |
+| Host | Any Mac or Linux box running `picocom`/`screen` and m1n1's proxy tooling. |
+| Time to first boot | [`docs/operations/APPLE_SILICON_BRINGUP_RIG.md`](docs/operations/APPLE_SILICON_BRINGUP_RIG.md) is the wiring guide. It requires physical presence once, for a security downgrade that cannot be done over SSH. |
+
+**The iteration loop is fast, which is the thing that usually is not.** `bin/as-kernel-probe.sh` builds,
+loads, runs and reports in about forty seconds with nobody in the room. AS-1b sat unfinished for two days
+against a ten-minute-per-attempt physical loop; five subsystems landed in one session once that was
+replaced. You will not be walking to a machine to read one bit.
+
+**Where the work is**, roughly in dependency order:
+
+- **AIC** — the interrupt controller. Nothing above it can be interrupt-driven until it exists.
+- **DART** — the IOMMU. [`src/dart/`](src/dart/) has the window model and Kani proofs; the hardware
+  backend is unwritten.
+- **RTKit / ANS2** — the NVMe path, and therefore persistence.
+- **PCIe / Ethernet** — [`src/pcie-config/`](src/pcie-config/) has a capability walker a hostile device
+  cannot hang. Everything past enumeration is open.
+- **AGX GPU** — the largest single piece, and the one the serving performance argument eventually rests on.
+
+**Two rules that are not negotiable**, both in [`CONTRIBUTING.md`](CONTRIBUTING.md):
+
+1. **Clean-room only.** Third-party reverse-engineering work — notably [Asahi Linux](https://asahilinux.org/)
+   — is *reference-only*: published documentation in, independent implementation out. No code is copied,
+   whatever its licence says.
+2. **No external crates in the kernel.** The dependency floor is a permanent, named exception list, not a
+   budget to spend.
+
+Read [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md) and [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) first —
+they are the contract, and a change that crosses one of the hard lines will be refused however good the
+code is. Then open an issue describing what you want to take, so two people do not write the same driver.
+
 ## Status
 
 Early, actively developed. BraiNIX pivoted from an internal-only hardened microkernel to a
@@ -129,8 +175,12 @@ other, and none of it is reachable from a running system yet:**
 **Cancelled:**
 - ⛔ Multi-arch HAL ([`HAL.md`](docs/architecture/HAL.md), SUPERSEDED) — one platform needs no abstraction layer over one backend. Its proof obligations moved to the aarch64 MMU and the DART backend.
 
+**Running on the hardware:**
+- ✅ **AS-1a — first light, ran on an M2 Pro 2026-08-16.** The boot stub reaches the s5l UART and prints.
+- ✅ **AS-1b — the aarch64 core, complete 2026-08-17, every item verified on the machine.** EL2→EL1, MMU with the hardware walking tables this repository built, exception vectors, timer, SVC entry, PAC-BTI enforcement, kernel-chosen entropy on a part with no RNG, and a second CPU out of reset.
+
 **Not started:**
-- ⬜ **The Apple Silicon platform from AS-1b on** — EL2→EL1, MMU, exception vectors, timer, SVC entry, PAC-BTI, then AIC, DART, RTKit/ANS2, PCIe, Ethernet, AGX GPU. There is still not one aarch64 source file in the *kernel* tree.
+- ⬜ **The Apple Silicon platform above AS-1b** — AIC, DART, RTKit/ANS2, PCIe, Ethernet, AGX GPU. See [help wanted](#help-wanted--apple-silicon) below.
 - ⬜ Userspace FP/SIMD enablement; the adversarial-prompt confinement suite; fuzz execution in CI (the targets are committed but **CI never runs them** — only the Kani proofs run).
 
 Proof coverage is **62.5%** (5 of 8 invariants, 40 Kani proofs, 11 fuzz targets); INV-AUDIT, INV-GPU, and
@@ -211,6 +261,9 @@ bin/, docker/          build + live-boot tooling
 Contributions are welcome — please read [CONTRIBUTING.md](CONTRIBUTING.md) first. BraiNIX holds a high
 bar: full-word names, small functions, no unjustified `unsafe`, and every security-relevant change tied
 to a named invariant.
+
+**If you have an M-series Mac, [Help wanted — Apple Silicon](#help-wanted--apple-silicon) is where the
+work is and what it needs.** The kernel already boots there; what is missing is drivers.
 
 ## Security
 
