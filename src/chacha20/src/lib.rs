@@ -76,19 +76,15 @@ fn quarter_round(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) 
 /// fire for the fixed-size arrays this is called with — a short read simply
 /// leaves the remaining words at their initialized value.
 fn load_words(state: &mut [u32; 16], at: usize, bytes: &[u8]) {
-    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
-        // COVERAGE-EXEMPT: `chunks_exact(4)` yields chunks of exactly 4, so
-        // the conversion cannot fail and this arm cannot run. It exists so the
-        // function needs no indexing, which is what lets the crate hold
-        // `deny(unsafe_code)` and the workspace's `indexing_slicing` lint at
-        // the same time. The alternative is `chunk[0..4]`, which is a panic
-        // path in a crypto primitive.
-        let Ok(word) = <[u8; 4]>::try_from(chunk) else {
-            break;
-        };
-        if let Some(slot) = state.get_mut(at.saturating_add(index)) {
-            *slot = u32::from_le_bytes(word);
-        }
+    // `as_chunks` yields `[u8; 4]` rather than a 4-byte slice, so there is no
+    // conversion to fail and no arm to excuse. `chunks_exact` guaranteed the
+    // same length and still handed back a slice, which is why the old form
+    // needed a `try_from` it could prove would always succeed. Zipping against
+    // the state's tail bounds the write, so a short read still leaves the
+    // remaining words at their initialised value. No indexing, no panic path.
+    let (words, _) = bytes.as_chunks::<4>();
+    for (slot, word) in state.iter_mut().skip(at).zip(words) {
+        *slot = u32::from_le_bytes(*word);
     }
 }
 

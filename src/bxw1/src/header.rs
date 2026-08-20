@@ -584,13 +584,10 @@ fn require_zero_field(blob: &[u8], at: usize, length: usize) -> Result<(), Bxw1E
 
 /// Copies a 32-byte digest field into an owned array without indexing.
 fn copy_digest(field: &[u8]) -> Result<[u8; DIGEST_LEN], Bxw1Error> {
-    if field.len() != DIGEST_LEN {
-        // COVERAGE-EXEMPT: every caller passes a slice from read_field(.., DIGEST_LEN), which already guarantees the length. Kept so copy_digest is total for any slice.
-        return Err(Bxw1Error::TruncatedHeader);
-    }
-    let mut digest = [0_u8; DIGEST_LEN];
-    for (slot, byte) in digest.iter_mut().zip(field.iter()) {
-        *slot = *byte;
-    }
-    Ok(digest)
+    // `try_from` is the length check and the copy in one, and it enforces
+    // *exactly* DIGEST_LEN rather than at-least -- the same reason `le_bits`
+    // in payload.rs uses it over `first_chunk`. The hand-written check and the
+    // zip it guarded were an unreachable branch this crate had to keep
+    // explaining; the branch is now inside the conversion.
+    <[u8; DIGEST_LEN]>::try_from(field).map_err(|_| Bxw1Error::TruncatedHeader)
 }
