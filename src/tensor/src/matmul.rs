@@ -234,26 +234,21 @@ const DOT_LANES: usize = 4;
 /// only the additions round at all.
 fn block_dot(quant_block: &[u8], x_block: &[f32]) -> f32 {
     let mut lanes = [0.0_f32; DOT_LANES];
-    for (quant_lane, x_lane) in quant_block
-        .chunks_exact(DOT_LANES)
-        .zip(x_block.chunks_exact(DOT_LANES))
-    {
-        // Indexed rather than zipped: the fixed-width chunk lets the compiler
-        // see four independent accumulator updates with no loop-carried
-        // dependency between them, which is the whole point of the function.
-        for lane in 0..DOT_LANES {
-            let quant = quant_lane.get(lane).copied().unwrap_or(0);
-            let activation = x_lane.get(lane).copied().unwrap_or(0.0);
-            // COVERAGE-EXEMPT: `lanes` is `[_; DOT_LANES]` and `lane` runs
-            // `0..DOT_LANES`, so this arm cannot be reached. Indexing instead
-            // would be shorter and would introduce a panic path into the
-            // hottest loop in the crate; the guard stays and the arm is named.
-            let slot = match lanes.get_mut(lane) {
-                Some(slot) => slot,
-                None => continue,
-            };
-            *slot += f32::from(quant as i8) * activation;
-        }
+    // Four independent accumulator updates with no loop-carried dependency
+    // between them, which is the whole point of the function -- stated by
+    // destructuring rather than by a runtime index whose bound check had to be
+    // excused. `as_chunks` gives `[_; DOT_LANES]` on both sides, so the lanes
+    // come out by name and the constant subscripts below are the same ones the
+    // reduction already uses.
+    let (quant_lanes, _) = quant_block.as_chunks::<DOT_LANES>();
+    let (activation_lanes, _) = x_block.as_chunks::<DOT_LANES>();
+    for (quant_lane, activation_lane) in quant_lanes.iter().zip(activation_lanes) {
+        let [q0, q1, q2, q3] = *quant_lane;
+        let [a0, a1, a2, a3] = *activation_lane;
+        lanes[0] += f32::from(q0 as i8) * a0;
+        lanes[1] += f32::from(q1 as i8) * a1;
+        lanes[2] += f32::from(q2 as i8) * a2;
+        lanes[3] += f32::from(q3 as i8) * a3;
     }
     // Pairwise, not left-to-right: one fewer step in the dependency chain, and
     // it mirrors how the lanes were accumulated. Written out for the measured
@@ -364,23 +359,21 @@ pub fn matmul_q8_0(
 /// there is nothing for the attribute to buy.
 fn block_dot_i8(quant_block: &[u8], x_block: &[u8]) -> i32 {
     let mut lanes = [0i32; DOT_LANES];
-    for (quant_lane, x_lane) in quant_block
-        .chunks_exact(DOT_LANES)
-        .zip(x_block.chunks_exact(DOT_LANES))
-    {
-        for lane in 0..DOT_LANES {
-            let weight = quant_lane.get(lane).copied().unwrap_or(0) as i8;
-            let activation = x_lane.get(lane).copied().unwrap_or(0) as i8;
-            // COVERAGE-EXEMPT: `lanes` is `[_; DOT_LANES]` and `lane` runs
-            // `0..DOT_LANES`, so this arm cannot be reached. Indexing instead
-            // would be shorter and would introduce a panic path into the
-            // hottest loop in the crate; the guard stays and the arm is named.
-            let slot = match lanes.get_mut(lane) {
-                Some(slot) => slot,
-                None => continue,
-            };
-            *slot = slot.saturating_add(i32::from(weight).saturating_mul(i32::from(activation)));
-        }
+    // `as_chunks` yields `[u8; DOT_LANES]`, so each lane comes out of a
+    // destructuring bind rather than a runtime index. That removes the `get_mut`
+    // whose `None` arm no input could reach, and it states the four independent
+    // accumulator updates that were the point of indexing in the first place --
+    // the constant subscripts below are the same ones the reduction already
+    // uses, and a constant subscript on a fixed array is not a panic path.
+    let (weight_lanes, _) = quant_block.as_chunks::<DOT_LANES>();
+    let (activation_lanes, _) = x_block.as_chunks::<DOT_LANES>();
+    for (weight_lane, activation_lane) in weight_lanes.iter().zip(activation_lanes) {
+        let [w0, w1, w2, w3] = *weight_lane;
+        let [a0, a1, a2, a3] = *activation_lane;
+        lanes[0] = lanes[0].saturating_add(i32::from(w0 as i8).saturating_mul(i32::from(a0 as i8)));
+        lanes[1] = lanes[1].saturating_add(i32::from(w1 as i8).saturating_mul(i32::from(a1 as i8)));
+        lanes[2] = lanes[2].saturating_add(i32::from(w2 as i8).saturating_mul(i32::from(a2 as i8)));
+        lanes[3] = lanes[3].saturating_add(i32::from(w3 as i8).saturating_mul(i32::from(a3 as i8)));
     }
     (lanes[0].saturating_add(lanes[1])).saturating_add(lanes[2].saturating_add(lanes[3]))
 }
