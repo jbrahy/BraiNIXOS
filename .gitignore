@@ -124,3 +124,7 @@ brainix-disk.img
 # regenerates one whenever it is imported as a module for testing.
 __pycache__/
 *.pyc
+
+# Session resume pointer, written per the operator's CLAUDE.md. Local only:
+# this repository has a public remote and a session id is noise there.
+.claude-resume
