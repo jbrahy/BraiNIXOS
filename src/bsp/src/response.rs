@@ -306,7 +306,14 @@ fn write_error(
 /// Row R4, applied on the way out.
 fn check_response_bound(written: usize) -> Result<(), BspError> {
     if written > BSP_MAX_RECORD_PLAINTEXT {
-        // COVERAGE-EXEMPT: every response variant carries a tighter cap of its own -- MAX_TOKEN_CHUNK 512, MAX_AUDIT_CHUNK 1024, both far under this 4096 -- so a per-variant check always denies first. Pinned by the_per_variant_cap_denies_before_the_record_bound_is_reached.
+        // COVERAGE-EXEMPT: every response variant carries a tighter cap of
+        // its own -- MAX_TOKEN_CHUNK 512, MAX_AUDIT_CHUNK 1024, both far under
+        // this 4096 -- so a per-variant check always denies first. Pinned
+        // twice: at run time by
+        // `the_per_variant_cap_denies_before_the_record_bound_is_reached`, and
+        // at BUILD time by the `const _: () = assert!(..)` beside it in
+        // tests/valid.rs, which fails compilation if either cap ever reaches
+        // the record plaintext.
         return Err(BspError::ResponseExceedsRecordPlaintext);
     }
     Ok(())

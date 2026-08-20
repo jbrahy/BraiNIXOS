@@ -426,7 +426,16 @@ fn check_running_total(total: u32, declared: u32) -> Result<(), BspError> {
         return Err(BspError::PromptChunkExceedsDeclaredLength);
     }
     if total > MAX_PROMPT_BYTES {
-        // COVERAGE-EXEMPT: unreachable today and the comment above says why: the declared-length bound is tighter than the buffer bound, so it always denies first. Kept because the cap is the buffer size, never `len`.
+        // Kept although unreachable: the cap here is the buffer size, never
+        // `len`, so a future path that reaches this function with an
+        // unvalidated `declared` must still be refused rather than trusted.
+        // COVERAGE-EXEMPT: `declared` is an `InferBegin`'s
+        // `prompt_total_length`, which `check_limits` in message.rs refuses
+        // above `MAX_PROMPT_BYTES` -- and that bound is machine-checked, not
+        // argued: `bsp-verify`'s `check_client_request` asserts
+        // `prompt_total_length <= MAX_PROMPT_BYTES` for every 5- and 17-byte
+        // payload. With `total <= declared <= MAX_PROMPT_BYTES`, this cannot
+        // fire.
         return Err(BspError::PromptChunkExceedsPromptBuffer);
     }
     Ok(())
