@@ -267,7 +267,13 @@ impl<'a> Vocabulary<'a> {
             return Err(VocabularyError::TokenIdOutOfRange);
         }
         let base = record_base(
-            // COVERAGE-EXEMPT: token_id was just bounds-checked against token_count, and parse() sized the token table to hold exactly that many records.
+            // `record_base` computes `stride x index` where `stride` is a
+            // crate constant of at most 16 and `index` is a u32, so the product
+            // is under 2^36 and the section base it is added to is a byte
+            // offset into a blob that exists. The bounds check above does not
+            // supply this and never did.
+            // COVERAGE-EXEMPT: no index the header can express overflows a
+            // 64-bit usize here. The check earns its place on a 32-bit target.
             self.sections.token_table,
             BXV1_TOKEN_RECORD_BYTES,
             token_id,
@@ -282,7 +288,13 @@ impl<'a> Vocabulary<'a> {
             return Err(VocabularyError::MergeIndexOutOfRange);
         }
         let base = record_base(
-            // COVERAGE-EXEMPT: merge_id was just bounds-checked against merge_count, and parse() sized the merge table to hold exactly that many records.
+            // `record_base` computes `stride x index` where `stride` is a
+            // crate constant of at most 16 and `index` is a u32, so the product
+            // is under 2^36 and the section base it is added to is a byte
+            // offset into a blob that exists. The bounds check above does not
+            // supply this and never did.
+            // COVERAGE-EXEMPT: no index the header can express overflows a
+            // 64-bit usize here. The check earns its place on a 32-bit target.
             self.sections.merge_table,
             BXV1_MERGE_RECORD_BYTES,
             merge_id,
@@ -297,7 +309,13 @@ impl<'a> Vocabulary<'a> {
     /// table lookup rather than a claim.
     pub fn byte_token(&self, byte: u8) -> Result<u32, VocabularyError> {
         let base = record_base(
-            // COVERAGE-EXEMPT: byte_token indexes a fixed 256-entry table whose extent parse() checked.
+            // `record_base` computes `stride x index` where `stride` is a
+            // crate constant of at most 16 and `index` is a u32, so the product
+            // is under 2^36 and the section base it is added to is a byte
+            // offset into a blob that exists. The bounds check above does not
+            // supply this and never did.
+            // COVERAGE-EXEMPT: no index the header can express overflows a
+            // 64-bit usize here. The check earns its place on a 32-bit target.
             self.sections.byte_token_table,
             BXV1_INDEX_ENTRY_BYTES,
             byte as u32,
@@ -309,7 +327,13 @@ impl<'a> Vocabulary<'a> {
     /// The `position`-th entry of the token sort index.
     pub(crate) fn token_index_entry(&self, position: u32) -> Result<u32, VocabularyError> {
         let base = record_base(
-            // COVERAGE-EXEMPT: unreachable for the same reason as merge_index_entry below: the section layout was validated at parse time.
+            // `record_base` computes `stride x index` where `stride` is a
+            // crate constant of at most 16 and `index` is a u32, so the product
+            // is under 2^36 and the section base it is added to is a byte
+            // offset into a blob that exists. The bounds check above does not
+            // supply this and never did.
+            // COVERAGE-EXEMPT: no index the header can express overflows a
+            // 64-bit usize here. The check earns its place on a 32-bit target.
             self.sections.token_index,
             BXV1_INDEX_ENTRY_BYTES,
             position,
@@ -321,7 +345,13 @@ impl<'a> Vocabulary<'a> {
     /// The `position`-th entry of the merge sort index.
     pub(crate) fn merge_index_entry(&self, position: u32) -> Result<u32, VocabularyError> {
         let base = record_base(
-            // COVERAGE-EXEMPT: record_base cannot fail on a parsed Vocabulary: parse() validated that every section holds its declared record count. Kept because 'validated upstream' is exactly the assumption a refactor breaks.
+            // `record_base` computes `stride x index` where `stride` is a
+            // crate constant of at most 16 and `index` is a u32, so the product
+            // is under 2^36 and the section base it is added to is a byte
+            // offset into a blob that exists. The bounds check above does not
+            // supply this and never did.
+            // COVERAGE-EXEMPT: no index the header can express overflows a
+            // 64-bit usize here. The check earns its place on a 32-bit target.
             self.sections.merge_index,
             BXV1_INDEX_ENTRY_BYTES,
             position,
