@@ -268,7 +268,10 @@ pub(crate) fn derive_sections(blob: &[u8], header: Header) -> Result<Sections, V
 
 /// Lays the six sections out back to back with checked arithmetic.
 fn build_sections(blob: &[u8], header: Header) -> Result<Sections, VocabularyError> {
-    // COVERAGE-EXEMPT: advance() cannot overflow here: token_count and merge_count were both ceiling-checked before build_sections runs. Defence in depth against a future caller that skips that check.
+    // COVERAGE-EXEMPT: this call takes no count from the blob. All three
+    // arguments are crate constants -- 64 + 1024 x 1 -- so it cannot overflow
+    // on any target width. Kept in the same form as the four below so the
+    // layout reads as one chain rather than one special case and four rules.
     let token_table = advance(
         crate::BXV1_HEADER_BYTES,
         crate::BXV1_BYTE_TOKEN_TABLE_BYTES,
@@ -278,22 +281,22 @@ fn build_sections(blob: &[u8], header: Header) -> Result<Sections, VocabularyErr
         token_table,
         crate::BXV1_TOKEN_RECORD_BYTES,
         header.token_count,
-    )?; // COVERAGE-EXEMPT: advance() cannot overflow here; the counts were ceiling-checked before build_sections runs.
+    )?; // COVERAGE-EXEMPT: unreachable on a 64-bit target. `count` is a u32 and `stride` is a crate constant of at most 16, so the product is under 2^36 and the running base under 2^39 -- both far inside usize. The check earns its place on a 32-bit target, where 16 x count overflows above 2^28.
     let merge_table = advance(
         token_index,
         crate::BXV1_INDEX_ENTRY_BYTES,
         header.token_count,
-    )?; // COVERAGE-EXEMPT: advance() cannot overflow here; the counts were ceiling-checked before build_sections runs.
+    )?; // COVERAGE-EXEMPT: unreachable on a 64-bit target. `count` is a u32 and `stride` is a crate constant of at most 16, so the product is under 2^36 and the running base under 2^39 -- both far inside usize. The check earns its place on a 32-bit target, where 16 x count overflows above 2^28.
     let merge_index = advance(
         merge_table,
         crate::BXV1_MERGE_RECORD_BYTES,
         header.merge_count,
-    )?; // COVERAGE-EXEMPT: advance() cannot overflow here; the counts were ceiling-checked before build_sections runs.
+    )?; // COVERAGE-EXEMPT: unreachable on a 64-bit target. `count` is a u32 and `stride` is a crate constant of at most 16, so the product is under 2^36 and the running base under 2^39 -- both far inside usize. The check earns its place on a 32-bit target, where 16 x count overflows above 2^28.
     let token_bytes = advance(
         merge_index,
         crate::BXV1_INDEX_ENTRY_BYTES,
         header.merge_count,
-    )?; // COVERAGE-EXEMPT: advance() cannot overflow here; the counts were ceiling-checked before build_sections runs.
+    )?; // COVERAGE-EXEMPT: unreachable on a 64-bit target. `count` is a u32 and `stride` is a crate constant of at most 16, so the product is under 2^36 and the running base under 2^39 -- both far inside usize. The check earns its place on a 32-bit target, where 16 x count overflows above 2^28.
     Ok(Sections {
         byte_token_table: crate::BXV1_HEADER_BYTES,
         token_table,

@@ -129,7 +129,11 @@ impl Vocabulary<'_> {
     ) -> Result<EncodeCursor, VocabularyError> {
         let end = self.pretokenizer().segment_end(input, cursor.position)?;
         if end <= cursor.position || end > input.len() {
-            // COVERAGE-EXEMPT: requires an in-tree pretokenizer to return an end outside the input or at or before the cursor. All three implementations are exhaustively tested against this; the guard exists so a fourth cannot silently break encode.
+            // COVERAGE-EXEMPT: `Pretokenizer` is a closed enum, not a trait, so
+            // no out-of-tree splitter can reach this and the three variants are
+            // each tested for progress and for staying inside the input. A
+            // fourth variant would be a source change in this crate; this guard
+            // is what makes that change deny rather than mis-encode.
             return Err(VocabularyError::SplitterMadeNoProgress);
         }
         let segment = input
