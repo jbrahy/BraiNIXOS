@@ -54,7 +54,12 @@ impl<'a> Property<'a> {
         match self.name_field.iter().position(|byte| *byte == 0) {
             Some(index) => match self.name_field.get(..index) {
                 Some(slice) => slice,
-                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+                // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
+                // than by validation of the tree. `ranges` refuses a parent count outside
+                // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
+                // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
+                // unless a whole `entry_len` is present, so each read lands inside the
+                // entry. Kept because both of those facts live in other functions.
                 None => self.name_field,
             },
             None => self.name_field,
@@ -464,38 +469,73 @@ impl Iterator for RangesIter<'_> {
 
         let child_address = match read_cells(self.value, start, self.child_address_cells) {
             Ok(value) => value,
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+            // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
+            // than by validation of the tree. `ranges` refuses a parent count outside
+            // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
+            // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
+            // unless a whole `entry_len` is present, so each read lands inside the
+            // entry. Kept because both of those facts live in other functions.
             Err(error) => return Some(Err(error)),
         };
         let child_address_bytes = match (self.child_address_cells as usize).checked_mul(U32_LEN) {
             Some(value) => value,
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+            // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
+            // than by validation of the tree. `ranges` refuses a parent count outside
+            // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
+            // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
+            // unless a whole `entry_len` is present, so each read lands inside the
+            // entry. Kept because both of those facts live in other functions.
             None => return Some(Err(AdtError::MalformedRangesEntry)),
         };
         let parent_offset = match start.checked_add(child_address_bytes) {
             Some(value) => value,
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+            // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
+            // than by validation of the tree. `ranges` refuses a parent count outside
+            // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
+            // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
+            // unless a whole `entry_len` is present, so each read lands inside the
+            // entry. Kept because both of those facts live in other functions.
             None => return Some(Err(AdtError::MalformedRangesEntry)),
         };
         let parent_address = match read_cells(self.value, parent_offset, self.parent_address_cells)
         {
             Ok(value) => value,
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+            // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
+            // than by validation of the tree. `ranges` refuses a parent count outside
+            // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
+            // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
+            // unless a whole `entry_len` is present, so each read lands inside the
+            // entry. Kept because both of those facts live in other functions.
             Err(error) => return Some(Err(error)),
         };
         let parent_address_bytes = match (self.parent_address_cells as usize).checked_mul(U32_LEN) {
             Some(value) => value,
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+            // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
+            // than by validation of the tree. `ranges` refuses a parent count outside
+            // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
+            // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
+            // unless a whole `entry_len` is present, so each read lands inside the
+            // entry. Kept because both of those facts live in other functions.
             None => return Some(Err(AdtError::MalformedRangesEntry)),
         };
         let size_offset = match parent_offset.checked_add(parent_address_bytes) {
             Some(value) => value,
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+            // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
+            // than by validation of the tree. `ranges` refuses a parent count outside
+            // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
+            // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
+            // unless a whole `entry_len` is present, so each read lands inside the
+            // entry. Kept because both of those facts live in other functions.
             None => return Some(Err(AdtError::MalformedRangesEntry)),
         };
         let child_size = match read_cells(self.value, size_offset, self.size_cells) {
             Ok(value) => value,
-            // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+            // COVERAGE-EXEMPT: unreachable by construction of this iterator rather
+            // than by validation of the tree. `ranges` refuses a parent count outside
+            // 1..=2 and `CellCounts::new` bounds the child pair, so every `count` here
+            // is at most 2 and every `x U32_LEN` fits; and `next` returns `None`
+            // unless a whole `entry_len` is present, so each read lands inside the
+            // entry. Kept because both of those facts live in other functions.
             Err(error) => return Some(Err(error)),
         };
 
