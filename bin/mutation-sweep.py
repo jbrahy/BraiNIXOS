@@ -108,6 +108,38 @@ MUTATIONS = [
         "i32::from(w3 as i8).saturating_mul(i32::from(a3 as i8)));",
         "        lanes[3] = lanes[3];",
     ),
+    (
+        "RoPE: interleaved pairing reads the half-split layout",
+        "src/tensor/src/rope.rs",
+        "            Self::Interleaved => {\n                let lo = pair_index\n"
+        "                    .checked_mul(2)",
+        "            Self::Interleaved => {\n                let lo = pair_index\n"
+        "                    .checked_mul(1)",
+    ),
+    (
+        "ChaCha20: the block counter never reaches the state",
+        "src/chacha20/src/lib.rs",
+        "    if let Some(slot) = state.get_mut(12) {\n        *slot = counter;\n    }",
+        "    if let Some(slot) = state.get_mut(12) {\n        *slot = 0;\n    }",
+    ),
+    (
+        "SHA-256: reuse the first round constant for every round",
+        "src/sha256/src/lib.rs",
+        "        for (word, constant) in schedule.iter().copied().zip(ROUND_CONSTANTS) {",
+        "        for (word, constant) in schedule.iter().copied().zip([ROUND_CONSTANTS[0]; 64]) {",
+    ),
+    (
+        "Poly1305: drop the r clamp",
+        "src/transport-crypto/src/poly1305.rs",
+        "        word(b0, b1, b2, b3) & 0x3ff_ffff,",
+        "        word(b0, b1, b2, b3),",
+    ),
+    (
+        "quantize_activations: use the wrong Q8_0 scale divisor",
+        "src/tensor/src/matmul.rs",
+        "    let scale = peak / 127.0;",
+        "    let scale = peak / 128.0;",
+    ),
     # The two that escaped on 2026-08-20. Kept so they cannot escape again.
     (
         "REGRESSION: Q4_0 prefill workers all start at token zero",

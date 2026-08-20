@@ -49,7 +49,14 @@ green. Separately, forcing every `worth_splitting` to `false` -- so nothing
 splits and the decode quietly runs on one core -- leaves every answer correct.
 Three tests failed, all refusal tests failing by accident of fixture shape.
 
-Both are in the catalogue now as REGRESSION entries. The sweep is not in CI: a
+Both are in the catalogue now as REGRESSION entries, alongside thirteen others
+spanning the crypto, parser, quantization and dispatch paths -- the AEAD tag and
+a first-byte-only comparison of it, the ChaCha20 block counter, a SHA-256 round
+constant, the Poly1305 `r` clamp, the ADT depth bound, the attention head
+grouping, the RoPE pairing layout, the `Q4_0` nibble order, the `Q8_0` scale
+divisor, softmax's max shift, swiglu's two branches and a dropped SDOT lane. All
+fifteen are caught, which is a statement about the suite rather than about the
+sweep. The sweep is not in CI: a
 full test run per mutation is minutes, and CI already runs nine gates. Run it
 when touching a kernel, a split, or anything else in the catalogue's blast
 radius. Every mutation is restored in a `finally`, so an interrupted run leaves
