@@ -326,15 +326,20 @@ impl<'a> Iterator for StringIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.done {
-                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+                // Reached on a LATER call, after the value ran out and set
+                // the flag. Pinned by
+                // `an_exhausted_string_iterator_keeps_returning_none`.
                 return None;
             }
             let rest = match self.value.get(self.position..) {
                 Some(rest) => rest,
                 None => {
-                    // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+                    // COVERAGE-EXEMPT: `position` only ever becomes
+                    // `terminator + 1`, and `terminator` indexes inside `rest`,
+                    // so it tops out at exactly `value.len()`, where
+                    // `get(len..)` is `Some("")` and the emptiness check below
+                    // handles it. A fact about this loop, not about the tree.
                     self.done = true;
-                    // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                     return None;
                 }
             };
@@ -353,9 +358,12 @@ impl<'a> Iterator for StringIter<'a> {
             let entry = match rest.get(..terminator) {
                 Some(entry) => entry,
                 None => {
-                    // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+                    // COVERAGE-EXEMPT: `terminator` is the index `position`
+                    // just found inside `rest`, so it is strictly less than
+                    // `rest.len()` and the cut is always present. Kept because
+                    // the search and the cut are separate statements: an edit
+                    // to what is searched must meet a denial.
                     self.done = true;
-                    // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                     return None;
                 }
             };
@@ -366,15 +374,21 @@ impl<'a> Iterator for StringIter<'a> {
             self.position = match advanced {
                 Some(next) => next,
                 None => {
-                    // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+                    // COVERAGE-EXEMPT: `position + terminator + 1` overflows
+                    // only near `usize::MAX`, and both are offsets into a slice
+                    // that exists, so their sum is bounded by its length.
+                    // `checked_add` because this value advances the cursor, and
+                    // a wrap here is an iterator that restarts instead of
+                    // ending.
                     self.done = true;
-                    // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
                     return None;
                 }
             };
             if entry.is_empty() {
-                // Zero padding, not an entry.
-                // COVERAGE-EXEMPT: DeviceTree::parse validates the whole structure up front -- the crate's own contract, stated at lib.rs: 'no caller ever holds a cursor into an unvalidated' tree -- so an iterator walking a parsed tree cannot meet a malformed record. Kept so the iterator is fail-closed if a future constructor skips that walk.
+                // Zero padding, not an entry. Ordinary data: spec section 8.1
+                // pads values to a 4-byte boundary, so two NULs in a row is the
+                // common case and this is the normal path. Pinned by
+                // `empty_entries_between_terminators_are_skipped_rather_than_yielded`.
                 continue;
             }
             return Some(entry);
@@ -571,5 +585,55 @@ mod tests {
         }
         let over = Property::new(&named, &long);
         assert_eq!(over.as_u64(), Err(AdtError::PropertyLengthMismatch));
+    }
+
+    /// Empty entries between NULs are padding, which is normal data.
+    ///
+    /// The `continue` that skips them carried a marker saying a parsed tree
+    /// "cannot meet a malformed record". Padding is not malformed -- spec
+    /// section 8.1 has values NUL-padded to a 4-byte boundary, so a run of two
+    /// NULs in a row is the ordinary case, and the branch that skips it is on
+    /// the normal path rather than a defensive one.
+    #[test]
+    fn empty_entries_between_terminators_are_skipped_rather_than_yielded() {
+        let name = field(b"compatible");
+        let property = Property::new(&name, b"first\0\0second\0\0\0");
+        let mut strings = property.strings();
+        assert_eq!(strings.next(), Some(&b"first"[..]));
+        assert_eq!(
+            strings.next(),
+            Some(&b"second"[..]),
+            "the empty entry between them is padding, not a third string"
+        );
+        assert_eq!(strings.next(), None);
+    }
+
+    /// An exhausted iterator stays exhausted.
+    ///
+    /// `done` is set when the value runs out, and the check for it at the top
+    /// of the loop only runs on a LATER call. Nothing reached it because every
+    /// test collects, and `collect` stops at the first `None` and never asks
+    /// again. A caller that does ask again must get `None`, not a re-read of
+    /// the tail.
+    #[test]
+    fn an_exhausted_string_iterator_keeps_returning_none() {
+        let name = field(b"compatible");
+        let property = Property::new(&name, b"only\0");
+        let mut strings = property.strings();
+        assert_eq!(strings.next(), Some(&b"only"[..]));
+        assert_eq!(strings.next(), None, "the value is spent");
+        assert_eq!(strings.next(), None, "and asking again changes nothing");
+        assert_eq!(strings.next(), None);
+    }
+
+    /// The same for a value whose tail has no terminator at all.
+    #[test]
+    fn an_unterminated_tail_ends_the_iterator_and_keeps_it_ended() {
+        let name = field(b"compatible");
+        let property = Property::new(&name, b"good\0trailing");
+        let mut strings = property.strings();
+        assert_eq!(strings.next(), Some(&b"good"[..]));
+        assert_eq!(strings.next(), None, "a tail with no NUL is not an entry");
+        assert_eq!(strings.next(), None);
     }
 }
