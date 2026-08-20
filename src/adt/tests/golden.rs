@@ -272,3 +272,84 @@ fn a_resolved_path_always_holds_at_least_the_root() {
         Some(tree.root().offset())
     );
 }
+
+// The three tests below exist because `read_cells`' 0- and 1-cell arms and
+// `ranges`' parent-count guard were carrying a COVERAGE-EXEMPT marker that said
+// "a count outside 0..=2 never reaches here". Zero and one are *inside* that
+// range, and `parent_address_cells` is a bare `u32` parameter that no
+// constructor validates. The markers were describing a test gap, not a
+// defence-in-depth guard, and a firmware parser that has never decoded a
+// 1-cell address is a parser with an untested decode path.
+//
+// The golden `reg` value is 16 bytes -- two address cells then two size cells,
+// each cell little-endian and least-significant cell first -- so reading the
+// same bytes under narrower cell counts exercises the narrow arms without
+// needing a second fixture. Under 2/2 it is one container; the counts below
+// re-cut those bytes into more, smaller ones.
+
+/// One address cell and no size cells: the `1 =>` and `0 =>` arms together.
+#[test]
+fn a_one_cell_address_with_no_size_cells_decodes_each_word_on_its_own() {
+    let tree = DeviceTree::parse(&GOLDEN).expect("parse");
+    let path = tree.resolve(b"/uart0").expect("resolve");
+    let reg = path.node().property(b"reg").expect("reg property");
+    let cells = CellCounts::new(1, 0).expect("one address cell, no size cells");
+
+    // 4 bytes per container over a 16-byte value.
+    assert_eq!(reg.reg_container_count(cells).expect("count"), 4);
+
+    // The four little-endian words of the 2/2 encoding, now read singly:
+    // address low, address high, size low, size high.
+    let expected = [0x7920_0000u64, 0, 0x4000, 0];
+    for (index, address) in expected.iter().enumerate() {
+        let range = reg.reg_container(cells, index).expect("container");
+        assert_eq!(range.address, *address, "container {index} address");
+        // `#size-cells = 0` means every size is zero, read by the `0 =>` arm
+        // rather than by any byte of the value.
+        assert_eq!(range.size, 0, "container {index} size");
+    }
+}
+
+/// One address cell and one size cell: the `1 =>` arm on both halves.
+#[test]
+fn one_address_cell_and_one_size_cell_split_the_value_into_two_containers() {
+    let tree = DeviceTree::parse(&GOLDEN).expect("parse");
+    let path = tree.resolve(b"/uart0").expect("resolve");
+    let reg = path.node().property(b"reg").expect("reg property");
+    let cells = CellCounts::new(1, 1).expect("one address cell, one size cell");
+
+    assert_eq!(reg.reg_container_count(cells).expect("count"), 2);
+
+    let first = reg.reg_container(cells, 0).expect("container 0");
+    assert_eq!(first.address, 0x7920_0000);
+    assert_eq!(first.size, 0);
+
+    let second = reg.reg_container(cells, 1).expect("container 1");
+    assert_eq!(second.address, 0x4000);
+    assert_eq!(second.size, 0);
+}
+
+/// `ranges` validates its own parent count, which arrives as a bare `u32`.
+#[test]
+fn ranges_denies_a_parent_address_cell_count_outside_the_spec_range() {
+    let tree = DeviceTree::parse(&GOLDEN).expect("parse");
+    let path = tree.resolve(b"/uart0").expect("resolve");
+    let reg = path.node().property(b"reg").expect("reg property");
+    let cells = CellCounts::new(2, 2).expect("cells");
+
+    // Zero denies: an address needs at least one cell (spec §8.5).
+    assert_eq!(
+        reg.ranges(cells, 0).err(),
+        Some(AdtError::InvalidAddressCells)
+    );
+    // So does anything past two, which is the widest address the fixed-size
+    // `AddressRange` can hold.
+    assert_eq!(
+        reg.ranges(cells, 3).err(),
+        Some(AdtError::InvalidAddressCells)
+    );
+    assert_eq!(
+        reg.ranges(cells, u32::MAX).err(),
+        Some(AdtError::InvalidAddressCells)
+    );
+}

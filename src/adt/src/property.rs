@@ -187,7 +187,6 @@ impl<'a> Property<'a> {
         parent_address_cells: u32,
     ) -> Result<RangesIter<'a>, AdtError> {
         if parent_address_cells == 0 || parent_address_cells > 2 {
-            // COVERAGE-EXEMPT: #address-cells and #size-cells are validated by CellCounts::new when the tree is parsed, so a count outside 0..=2 never reaches here.
             return Err(AdtError::InvalidAddressCells);
         }
         let child_address_bytes = child.address_bytes()?;
@@ -230,9 +229,9 @@ pub struct AddressRange {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CellCounts {
     /// Cells in an address. Always 1 or 2.
-    pub address_cells: u32,
+    address_cells: u32,
     /// Cells in a size. 0, 1 or 2.
-    pub size_cells: u32,
+    size_cells: u32,
 }
 
 impl CellCounts {
@@ -269,7 +268,11 @@ impl CellCounts {
             .checked_add(self.size_bytes()?)
             .ok_or(AdtError::RegContainerOutOfRange)?;
         if total == 0 {
-            // COVERAGE-EXEMPT: #address-cells and #size-cells are validated by CellCounts::new when the tree is parsed, so a count outside 0..=2 never reaches here.
+            // COVERAGE-EXEMPT: `new` rejects `address_cells == 0` and the
+            // fields are private, so `address_bytes` is at least 4 and the
+            // total cannot be zero. Kept because the floor lives in `new`
+            // rather than in the arithmetic here, so a change to `new` should
+            // meet a denial and not a zero-length container.
             return Err(AdtError::InvalidAddressCells);
         }
         Ok(total)
@@ -282,12 +285,9 @@ impl CellCounts {
 /// little-endian (spec §8.5, §4.4).
 fn read_cells(bytes: &[u8], offset: usize, count: u32) -> Result<u64, AdtError> {
     match count {
-        // COVERAGE-EXEMPT: #address-cells and #size-cells are validated by CellCounts::new when the tree is parsed, so a count outside 0..=2 never reaches here.
         0 => Ok(0),
         1 => {
-            // COVERAGE-EXEMPT: #address-cells and #size-cells are validated by CellCounts::new when the tree is parsed, so a count outside 0..=2 never reaches here.
             let low = read_u32_le(bytes, offset).ok_or(AdtError::RegContainerOutOfRange)?;
-            // COVERAGE-EXEMPT: #address-cells and #size-cells are validated by CellCounts::new when the tree is parsed, so a count outside 0..=2 never reaches here.
             Ok(u64::from(low))
         }
         2 => {
@@ -301,7 +301,10 @@ fn read_cells(bytes: &[u8], offset: usize, count: u32) -> Result<u64, AdtError> 
                 .ok_or(AdtError::RegContainerOutOfRange)?;
             Ok(u64::from(low) | shifted)
         }
-        // COVERAGE-EXEMPT: #address-cells and #size-cells are validated by CellCounts::new when the tree is parsed, so a count outside 0..=2 never reaches here.
+        // COVERAGE-EXEMPT: `count` is always a `CellCounts` field, whose
+        // constructor rejects anything above 2 and whose fields are private,
+        // so no caller can reach this arm. Kept fail-closed rather than
+        // deleted: an unrecognised cell count must deny, not decode.
         _ => Err(AdtError::InvalidAddressCells),
     }
 }
