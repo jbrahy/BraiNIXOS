@@ -141,6 +141,29 @@
 //!   closed by anything in this repository, and is recorded here rather than
 //!   glossed. Closing it needs a timing-analysis tool over the emitted machine
 //!   code, which is a different instrument from a model checker.
+//!
+//! # The handshake state guards are **not** proved here, and what stopped it
+//!
+//! `commit_chain` and `establish` in `handshake.rs` each carry a coverage
+//! exemption saying they run only after row H5 passed, so their `None` arms
+//! cannot be reached. Both are private, so the claim is only expressible
+//! through the public statement it implies: a server still in `WaitHello` must
+//! refuse every `ClientAuth`, because `require_phase` denies before a byte is
+//! read.
+//!
+//! That harness was written on 2026-08-20 and **removed rather than shipped
+//! failing**. Kani unwinds what is COMPILED, not what executes, and
+//! `accept_client_auth` pulls SHA-256's 64-round compression, HMAC's 64-byte
+//! `xor_pad` and `CredentialTable::new`'s 32 slots into the call graph whether
+//! or not the phase guard reaches any of them. At `unwind(65)` it did not
+//! finish in ten minutes with a 64-byte input, and shrinking the input to four
+//! bytes did not help -- the cost is the crypto in the graph, not the input.
+//!
+//! The route that would work is `kani::stub` over the hash, which is
+//! legitimate here precisely because the property does not depend on what the
+//! hash computes. It is not done, so it is not claimed. Recorded because the
+//! dead end cost ten minutes and the next attempt should start from the stub
+//! rather than from the unwind bound.
 
 #![deny(unsafe_code)]
 // kani is a cfg set by the Kani verification tool's dedicated CI image.
