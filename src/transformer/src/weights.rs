@@ -155,20 +155,51 @@ impl WeightMatrix<'_> {
                         // contains no dispatch call at all, so every projection
                         // of a multi-token batch runs on the calling core.
                         //
-                        // The obvious fix is wrong. Splitting by TOKENS is
-                        // contiguous -- token `t` owns `[t * n_out, ..)` -- but
-                        // this loop is weights-outer precisely so the weight
-                        // bytes are streamed once for the whole batch, and
-                        // giving each worker its own tokens makes each of them
-                        // stream the whole weight set. That multiplies the
-                        // traffic by the worker count on a kernel already at
-                        // the memory ceiling: 116.5 GB/s of a measured ~120.
+                        // I wrote here that splitting by TOKENS is wrong
+                        // because it makes each worker stream the whole weight
+                        // set, "multiplying the traffic by the worker count on
+                        // a kernel already at the memory ceiling: 116.5 GB/s of
+                        // a measured ~120". That is decode's arithmetic applied
+                        // to prefill, and prefill is nowhere near the ceiling.
                         //
-                        // The sound split is by output rows, which needs a
-                        // dispatch primitive handing out STRIDED chunks rather
-                        // than contiguous ones. `for_each_chunk` cannot express
-                        // that, and inventing it before a prefill workload
-                        // exists to measure would be guessing.
+                        // Measured 2026-08-20, 4096x4096, weight-byte
+                        // throughput, and what six workers would each need:
+                        //
+                        //     tokens   GB/s    x6      % of a ~120 GB/s bus
+                        //          1  59.81  358.9                   299%
+                        //          8   5.85   35.1                    29%
+                        //         32   1.88   11.3                     9%
+                        //        128   0.48    2.9                     2%
+                        //
+                        // Weight bytes are CONSTANT across those rows -- the
+                        // loop really is weights-outer and the traffic really
+                        // is amortized. What scales is the arithmetic, so past
+                        // one token the kernel stops being memory-bound and
+                        // becomes compute-bound. At 128 tokens per-token cost
+                        // is 0.307 ms against 0.315 ms for a lone token: the
+                        // batch buys nothing in TIME, which is precisely why
+                        // more cores would.
+                        //
+                        // So the ceiling argument holds for decode and only
+                        // decode. At one token six workers would need 299% of
+                        // the bus, which is why this branch splits by output
+                        // rows and is gated on `n_tokens == 1`. At eight tokens
+                        // they would need 29%, and token-splitting is both
+                        // sound and contiguous -- token `t` owns
+                        // `[t * n_out, ..)`, which `for_each_chunk` already
+                        // expresses with a width of `tokens_per_worker * n_out`.
+                        //
+                        // What is still missing is a kernel taking a token
+                        // range, the way `matmul_q8_0_q8a_rows` takes an output
+                        // range: the activation `Q8Weights` holds its scale and
+                        // quant planes separately, so a sub-range of tokens is
+                        // not a sub-slice of the payload and cannot be viewed
+                        // by slicing. That kernel is the work; the measurement
+                        // above is what says it is worth doing.
+                        //
+                        // **Prefill is serial until then.** `forward.rs`
+                        // contains no dispatch call at all, so every projection
+                        // of a multi-token batch runs on the calling core.
                         // Weight bytes this projection moves: `Q8_0` costs 1.125 per
                         // element. Compared against the dispatcher's threshold
                         // so that work smaller than a synchronization stays on

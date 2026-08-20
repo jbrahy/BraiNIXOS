@@ -813,6 +813,12 @@ fn main() {
     measure_sdot("4096x4096, 1 token", 1, 4096, 4096);
     measure_sdot("4096x11008 (ffn), 1 token", 1, 4096, 11008);
     measure_sdot("2048x2048, 1 token", 1, 2048, 2048);
+    // Prefill shapes. The loop is weights-outer, so a batch streams the weight
+    // bytes ONCE and multiplies only the arithmetic -- which is the whole
+    // question about whether prefill is worth splitting across cores.
+    measure_sdot("4096x4096, 8 tokens (prefill)", 8, 4096, 4096);
+    measure_sdot("4096x4096, 32 tokens (prefill)", 32, 4096, 4096);
+    measure_sdot("4096x4096, 128 tokens (prefill)", 128, 4096, 4096);
 
     println!();
     println!("  Multi-core scaling — same weights, SDOT path, 1 token");
