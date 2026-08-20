@@ -180,4 +180,63 @@ mod proofs {
             "a deny-all holder was granted a non-empty range by narrowing",
         );
     }
+
+    /// **Every constructible window has an end page.** Unbounded.
+    ///
+    /// `DmaWindow::contains` carries a coverage exemption saying that no
+    /// constructible window has a `None` `end_page`, because `granted` returns
+    /// `deny_all` when `base_page + pages` would overflow and `deny_all` is
+    /// 0/0. That was an argument about today's constructors. This makes it a
+    /// fact about every `(u64, u64, bool)` there is.
+    ///
+    /// It matters because `contains` is the containment test the IOMMU's
+    /// widening check is built on, and its `None` arm returns `false` -- a
+    /// window that could not name its end would report "does not contain",
+    /// which is fail-closed and therefore silent. Proving the arm unreachable
+    /// is what keeps that silence from ever mattering.
+    #[kani::proof]
+    fn dart_every_constructible_window_has_an_end_page() {
+        let base_page: u64 = kani::any();
+        let pages: u64 = kani::any();
+        let writable: bool = kani::any();
+
+        let window = DmaWindow::granted(base_page, pages, writable);
+        kani::assert(
+            window.end_page().is_some(),
+            "a granted window could not compute its end page",
+        );
+
+        kani::assert(
+            DmaWindow::deny_all().end_page().is_some(),
+            "the deny-all window could not compute its end page",
+        );
+    }
+
+    /// And containment agrees with the arithmetic for every pair of them.
+    ///
+    /// The proof above removes the `None` arm as a possibility; this one says
+    /// what `contains` does with the arm that remains, over every pair of
+    /// constructible windows rather than the handful a test can name.
+    #[kani::proof]
+    fn dart_containment_matches_the_page_arithmetic_for_every_pair() {
+        let outer = DmaWindow::granted(kani::any(), kani::any(), kani::any());
+        let inner = DmaWindow::granted(kani::any(), kani::any(), kani::any());
+
+        let (Some(outer_end), Some(inner_end)) = (outer.end_page(), inner.end_page()) else {
+            // Unreachable by the proof above; stated so this harness cannot
+            // pass vacuously if that ever stops holding.
+            kani::assert(false, "a constructible window had no end page");
+            return;
+        };
+
+        let expected = inner.is_empty()
+            || (!outer.is_empty()
+                && outer.base_page() <= inner.base_page()
+                && inner_end <= outer_end);
+
+        kani::assert(
+            outer.contains(&inner) == expected,
+            "containment disagreed with the page arithmetic it is defined by",
+        );
+    }
 }

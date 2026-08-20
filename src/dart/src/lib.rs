@@ -153,11 +153,14 @@ impl DmaWindow {
         if self.is_empty() {
             return false;
         }
-        // COVERAGE-EXEMPT: no constructible window has a `None` end page.
-        // `granted` returns `deny_all` when `base_page + pages` would overflow,
-        // and `deny_all` is 0/0, so `checked_add` always succeeds here. The
-        // guard stays because that is a property of today's constructors, and
-        // a new one that forgets the check should fail closed rather than wrap.
+        // The guard stays although unreachable: that is a property of today's
+        // constructors, and a new one that forgets the overflow check should
+        // fail closed rather than wrap.
+        // COVERAGE-EXEMPT: proven, not argued. `dart-verify`'s
+        // `dart_every_constructible_window_has_an_end_page` shows over every
+        // `(u64, u64, bool)` that `granted` yields a window with an end page --
+        // it returns `deny_all`, which is 0/0, exactly when `base_page + pages`
+        // would overflow.
         let (Some(self_end), Some(other_end)) = (self.end_page(), other.end_page()) else {
             return false;
         };
