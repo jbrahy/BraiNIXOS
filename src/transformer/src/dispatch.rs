@@ -282,7 +282,7 @@ pub(crate) fn chunk_len(n_out: usize, chunks: usize) -> Result<usize, Transforme
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::{chunk_len, split_threshold_bytes, Dispatch, Serial};
+    use super::{chunk_len, Dispatch, Serial};
     use crate::error::TransformerError;
 
     /// `Serial` is what every existing test gets by default, and that is

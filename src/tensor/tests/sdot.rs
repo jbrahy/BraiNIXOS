@@ -29,10 +29,10 @@ fn values(count: usize, seed: u32) -> Vec<f32> {
 }
 
 fn q8_payload(n_out: usize, n_in: usize, seed: u32) -> Vec<u8> {
-    let len = Q8Weights::derived_payload_len(n_out, n_in).expect("shape");
-    let mut payload = vec![0u8; len];
+    let payload_len = Q8Weights::derived_payload_len(n_out, n_in).expect("shape");
+    let mut payload = vec![0u8; payload_len];
     let blocks = n_out * (n_in / 32);
-    let quant_start = len - blocks * 32;
+    let quant_start = payload_len - blocks * 32;
     for (index, chunk) in payload[..quant_start].chunks_exact_mut(4).enumerate() {
         let scale = 0.005_f32 + (index % 13) as f32 * 0.0007;
         chunk.copy_from_slice(&scale.to_le_bytes());
@@ -143,8 +143,8 @@ fn an_all_zero_block_emits_a_zero_scale() {
 #[test]
 fn a_shape_disagreement_denies() {
     let mut scratch = vec![0u8; Q8Weights::derived_payload_len(1, 32).expect("len")];
-    assert!(quantize_activations(1, 32, &vec![0.0; 31], &mut scratch).is_err());
-    assert!(quantize_activations(1, 32, &vec![0.0; 32], &mut scratch[..4]).is_err());
+    assert!(quantize_activations(1, 32, &[0.0; 31], &mut scratch).is_err());
+    assert!(quantize_activations(1, 32, &[0.0; 32], &mut scratch[..4]).is_err());
 }
 
 #[test]

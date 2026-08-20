@@ -558,7 +558,7 @@ fn teardown_is_idempotent() {
 
 #[test]
 fn a_default_server_handshake_is_a_new_one() {
-    let mut from_default = ServerHandshake::default();
+    let from_default = ServerHandshake::default();
     let mut from_new = ServerHandshake::new();
     assert_eq!(from_default.matched_slot(), from_new.matched_slot());
     assert_eq!(

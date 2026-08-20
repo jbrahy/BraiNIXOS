@@ -19,15 +19,15 @@ mod common;
 use brainix_adt::{AdtWindow, BootArgsError};
 
 /// Byte offset of `boot_args.virt_base` (spec §3).
-const VIRT_BASE_OFFSET: usize = 0x08;
+const VIRT_BASE_OFFSET: usize = 0x0008;
 /// Byte offset of `boot_args.phys_base` (spec §3).
-const PHYS_BASE_OFFSET: usize = 0x10;
+const PHYS_BASE_OFFSET: usize = 0x0010;
 /// Byte offset of `boot_args.mem_size` (spec §3).
-const MEM_SIZE_OFFSET: usize = 0x18;
+const MEM_SIZE_OFFSET: usize = 0x0018;
 /// Byte offset of `boot_args.devtree` (spec §3).
-const DEVTREE_OFFSET: usize = 0x60;
+const DEVTREE_OFFSET: usize = 0x0060;
 /// Byte offset of `boot_args.devtree_size` (spec §3).
-const DEVTREE_SIZE_OFFSET: usize = 0x68;
+const DEVTREE_SIZE_OFFSET: usize = 0x0068;
 /// One byte past `devtree_size` — the shortest buffer `adt_window` reads.
 const MIN_LEN: usize = DEVTREE_SIZE_OFFSET + 4;
 
@@ -55,7 +55,7 @@ fn boot_args(
 /// `virt_base = 0x1000`, `phys_base = 0x8000_0000`, `mem_size = 0x8000_0000`,
 /// `devtree = 0x1100` ⇒ `adt_phys = 0x8000_0100`, `devtree_size = 288` (the
 /// existing golden ADT fixture's length) ⇒ `adt_end = 0x8000_0220`, entirely
-/// inside the DRAM window `[0x8000_0000, 0x1_0000_0000)`.
+/// inside the DRAM window `[0x8000_0000, 0x0001_0000_0000)`.
 fn golden() -> Vec<u8> {
     boot_args(0x1000, 0x8000_0000, 0x8000_0000, 0x1100, 288)
 }
@@ -119,7 +119,7 @@ fn a_devtree_size_not_a_multiple_of_four_denies() {
 ///
 /// This test previously asserted `VirtualAddressUnderflow`. That was wrong, and
 /// hardware said so: m1n1 hands a chainloaded payload
-/// `virt_base = 0xffffffffff020000` with `devtree = 0x161c000`, so the
+/// `virt_base = 0xffff_ffff_ff02_0000` with `devtree = 0x0161_c000`, so the
 /// subtraction underflows on every real boot under m1n1 and the old code
 /// refused the genuine ADT. The arithmetic is modular; the containment check is
 /// what keeps it safe.
@@ -137,28 +137,28 @@ fn a_devtree_address_below_virt_base_wraps_and_is_then_range_checked() {
 /// The real firmware values, as read off the target on 2026-08-16.
 ///
 /// `virt_base` is a sign-extended kernel VA far above `devtree`. The wrapping
-/// result `0x1000361c000` was read back from the machine and begins
+/// result `0x0100_0361_c000` was read back from the machine and begins
 /// `regulatory-model-number`, the real ADT.
 #[test]
 fn the_kernel_va_form_from_the_machine_resolves_to_the_real_adt() {
     let bytes = boot_args(
         0xffff_ffff_ff02_0000, // virt_base
-        0x0001_0001_020000,    // phys_base
-        0x0000_0007_94674000,  // mem_size
-        0x0000_0000_0161c000,  // devtree
-        0x78000,               // devtree_size
+        0x0000_0100_0102_0000, // phys_base
+        0x0000_0007_9467_4000, // mem_size
+        0x0000_0000_0161_c000, // devtree
+        0x0007_8000,           // devtree_size
     );
 
     let window = brainix_adt::adt_window(&bytes).expect("the target's own boot_args must resolve");
 
-    assert_eq!(window.phys_addr, 0x1_0003_61c000);
-    assert_eq!(window.len, 0x78000);
+    assert_eq!(window.phys_addr, 0x0100_0361_c000);
+    assert_eq!(window.len, 0x0007_8000);
 }
 
 /// An address that wraps past the top of the space is still refused.
 ///
 /// Previously `PhysicalAddressOverflow`. With modular arithmetic the sum wraps
-/// to `0x9` instead of failing, and the **alignment** gate rejects it before
+/// to `0x0009` instead of failing, and the **alignment** gate rejects it before
 /// the range gate is reached. The property that matters is unchanged and is
 /// what this asserts: this input yields no window. Which specific gate fires
 /// is an implementation detail, so the test also states the general property.
@@ -177,8 +177,8 @@ fn an_adt_physical_address_that_wraps_past_the_top_denies() {
 
 #[test]
 fn an_unaligned_adt_physical_address_denies() {
-    // adt_phys = 0 + 1 + 0x100 = 0x101, not a multiple of 4.
-    let bytes = boot_args(0, 1, 0x1_0000, 0x100, 8);
+    // adt_phys = 0 + 1 + 0x0100 = 0x0101, not a multiple of 4.
+    let bytes = boot_args(0, 1, 0x0001_0000, 0x0100, 8);
     assert_eq!(
         brainix_adt::adt_window(&bytes).unwrap_err(),
         BootArgsError::AdtPhysMisaligned
@@ -198,7 +198,7 @@ fn an_adt_window_end_that_would_overflow_denies() {
 #[test]
 fn a_dram_window_whose_bounds_would_overflow_denies() {
     // phys_base + mem_size overflows, even though adt_phys + devtree_size does not.
-    let bytes = boot_args(0, 0x10, u64::MAX, 0, 8);
+    let bytes = boot_args(0, 0x0010, u64::MAX, 0, 8);
     assert_eq!(
         brainix_adt::adt_window(&bytes).unwrap_err(),
         BootArgsError::DramWindowOverflow
@@ -208,8 +208,8 @@ fn a_dram_window_whose_bounds_would_overflow_denies() {
 #[test]
 fn an_adt_window_extending_past_the_dram_window_denies() {
     // adt_phys = 0x1000, adt_end = 0x1200, but the DRAM window is only
-    // [0x1000, 0x1100) — the tree claims to run 0x100 bytes past DRAM.
-    let bytes = boot_args(0, 0x1000, 0x100, 0, 0x200);
+    // [0x1000, 0x1100) — the tree claims to run 0x0100 bytes past DRAM.
+    let bytes = boot_args(0, 0x1000, 0x0100, 0, 0x0200);
     assert_eq!(
         brainix_adt::adt_window(&bytes).unwrap_err(),
         BootArgsError::AdtWindowOutsideDram
@@ -222,7 +222,7 @@ fn trailing_bytes_after_devtree_size_are_ignored() {
     // documents cmdline afterwards, and its offset is disputed — OQ-1). A
     // longer buffer must parse identically to the minimal one.
     let mut bytes = golden();
-    bytes.extend_from_slice(&[0xAA; 64]);
+    bytes.extend_from_slice(&[0x00AA; 64]);
     assert_eq!(
         brainix_adt::adt_window(&bytes).unwrap(),
         brainix_adt::adt_window(&golden()).unwrap()

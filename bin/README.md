@@ -26,13 +26,33 @@ it could not see them at all.
 | `coverage-gate.py --stale` | does every explanation still excuse something? | any host |
 | `sdot-gate.sh` | do the `Q8_0` matmuls still compile to `SDOT`? | **aarch64 only** |
 | `lint-suppressions.py` | is every lint suppression justified? | any host |
+| `clippy-all-targets-gate.sh` | do tests, benches and examples lint clean? | any host |
+| `reproducible-build.sh` | are the bare-metal artifacts byte-identical twice? | any host |
 
 ```sh
-./bin/coverage-gate.py           # enforce: 100% of reachable lines
-./bin/coverage-gate.py --list    # every unjustified line, with its source
-./bin/coverage-gate.py --stale   # markers that no longer excuse anything
-./bin/sdot-gate.sh               # skips loudly on non-aarch64, never passes quietly
+./bin/coverage-gate.py                # enforce: 100% of reachable lines
+./bin/coverage-gate.py --list         # every unjustified line, with its source
+./bin/coverage-gate.py --stale        # markers that no longer excuse anything
+./bin/sdot-gate.sh                    # skips loudly on non-aarch64, never passes quietly
+./bin/clippy-all-targets-gate.sh      # the targets CI's clippy step never compiles
 ```
+
+**Why `clippy-all-targets-gate.sh` exists.** CI runs `cargo clippy --workspace
+-- -D warnings`, without `--all-targets`. That compiles libs and bins, so
+`#[cfg(test)]` modules, `tests/`, `benches/` and `examples/` are never linted at
+all. The gap was found on 2026-08-19 by noticing that eight test files added
+over two days each violated the workspace's own denied lints, and that every
+"clippy clean" reported during that stretch had been said after checking only
+the lib.
+
+Turning it on found more than suppressions: a dead import, a `vec!` allocated
+only to be borrowed as a slice, two variables named `len`, and an `assert!`
+whose operands were all `const` -- that last one guarding an exemption in
+`response.rs`, so it is now a `const` item that fails the build rather than a
+test that fails a run. Test code does legitimately need `expect` and `unwrap`;
+those are written down as `#[allow(..)]` on the module, which `lint-suppressions.py`
+deliberately does not count, because its subject is production code. The two
+gates cover disjoint sets and neither alone is the whole picture.
 
 **Why `--stale` exists.** An exemption is granted once and then never re-read.
 When the line it excused becomes covered, the marker stays behind and licenses

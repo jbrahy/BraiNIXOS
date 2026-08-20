@@ -707,11 +707,19 @@ fn the_per_variant_cap_denies_before_the_record_bound_is_reached() {
         .encode(&mut out),
         Err(brainix_bsp::BspError::AuditChunkExceedsMaximum)
     );
-
-    assert!(
-        brainix_bsp::MAX_TOKEN_CHUNK < brainix_bsp::BSP_MAX_RECORD_PLAINTEXT
-            && brainix_bsp::MAX_AUDIT_CHUNK < brainix_bsp::BSP_MAX_RECORD_PLAINTEXT,
-        "if either cap ever reaches the record plaintext, the record bound stops \
-         being unreachable and its exemption in response.rs must be removed"
-    );
 }
+
+/// Both chunk caps stay under the record plaintext bound.
+///
+/// This was a runtime `assert!` inside the test above, and clippy was right to
+/// call it constant: every operand is a `const`, so the comparison is settled at
+/// compile time and running it as a test only delays the answer. As a `const`
+/// item it fails the BUILD, which matters because what it guards is an
+/// exemption in response.rs -- the record bound there is unreachable exactly
+/// while this holds.
+const _: () = assert!(
+    brainix_bsp::MAX_TOKEN_CHUNK < brainix_bsp::BSP_MAX_RECORD_PLAINTEXT
+        && brainix_bsp::MAX_AUDIT_CHUNK < brainix_bsp::BSP_MAX_RECORD_PLAINTEXT,
+    "if either cap ever reaches the record plaintext, the record bound stops \
+     being unreachable and its exemption in response.rs must be removed"
+);

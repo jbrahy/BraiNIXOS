@@ -52,6 +52,7 @@ pub fn forward_frame_to_ip_layer() {}
 pub fn forward_reply_to_device_layer() {}
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::cognitive_complexity)]
 mod tests {
     use super::parse_ethernet_frame;
 

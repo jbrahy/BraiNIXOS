@@ -29,6 +29,7 @@ pub fn transport_server_main_loop() -> ! {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::cognitive_complexity)]
 mod tests {
     use brainix_kernel::capability::capability_rights;
     use brainix_kernel::capability::capability_space::CapabilitySpace;

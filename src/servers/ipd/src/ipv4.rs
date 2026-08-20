@@ -159,6 +159,7 @@ fn build_parsed_ipv4_header(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::cognitive_complexity)]
 mod tests {
     use super::*;
 

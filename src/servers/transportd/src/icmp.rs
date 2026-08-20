@@ -235,6 +235,7 @@ pub fn generate_icmp_echo_reply(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::cognitive_complexity)]
 mod tests {
     use super::{
         compute_icmp_checksum, generate_icmp_echo_reply, parse_icmp_message, IcmpParseError,

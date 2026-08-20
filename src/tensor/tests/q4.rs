@@ -90,16 +90,16 @@ fn a_view_reports_the_shape_it_was_built_with() {
 fn quantization_denies_a_shape_disagreement() {
     let mut payload = vec![0_u8; Q4Weights::derived_payload_len(1, Q4_0_BLOCK).expect("len")];
     // Too few values for the shape.
-    assert!(quantize_q4_0(1, Q4_0_BLOCK, &vec![0.0; Q4_0_BLOCK - 1], &mut payload).is_err());
+    assert!(quantize_q4_0(1, Q4_0_BLOCK, &[0.0; Q4_0_BLOCK - 1], &mut payload).is_err());
     // Right values, payload too short.
     let short = payload.len() - 1;
-    assert!(quantize_q4_0(1, Q4_0_BLOCK, &vec![0.0; Q4_0_BLOCK], &mut payload[..short]).is_err());
+    assert!(quantize_q4_0(1, Q4_0_BLOCK, &[0.0; Q4_0_BLOCK], &mut payload[..short]).is_err());
 }
 
 #[test]
 fn an_all_zero_block_emits_a_zero_scale_and_zero_quants() {
     let mut payload = vec![0xFF_u8; Q4Weights::derived_payload_len(1, Q4_0_BLOCK).expect("len")];
-    quantize_q4_0(1, Q4_0_BLOCK, &vec![0.0; Q4_0_BLOCK], &mut payload).expect("quantize");
+    quantize_q4_0(1, Q4_0_BLOCK, &[0.0; Q4_0_BLOCK], &mut payload).expect("quantize");
 
     // The scale is the first four bytes and must be an exact zero -- not a
     // subnormal, which would multiply into noise. Same rule as Q8_0.

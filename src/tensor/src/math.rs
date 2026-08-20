@@ -433,6 +433,7 @@ pub(crate) fn sin_cos(x: f64) -> (f64, f64) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::cognitive_complexity)]
 mod tests {
     use super::{exp, exp_f32, ln, powf, rsqrt, sin_cos, two_pow, MAX_SIN_COS_ARG};
 

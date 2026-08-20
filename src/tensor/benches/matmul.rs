@@ -108,10 +108,10 @@ const REFERENCE_BANDWIDTH_GB_S: f64 = 200.0;
 /// than it will on real weights. They are otherwise arbitrary and the benchmark
 /// makes no claim about the numerical result.
 fn synthetic_payload(n_out: usize, n_in: usize) -> Vec<u8> {
-    let len = Q8Weights::derived_payload_len(n_out, n_in).expect("shape is valid");
-    let mut payload = vec![0u8; len];
+    let payload_len = Q8Weights::derived_payload_len(n_out, n_in).expect("shape is valid");
+    let mut payload = vec![0u8; payload_len];
     let n_blocks = n_out * (n_in / Q8_0_BLOCK);
-    let scale_plane_len = len - n_blocks * Q8_0_BLOCK;
+    let scale_plane_len = payload_len - n_blocks * Q8_0_BLOCK;
 
     // Scale plane: a small positive binary32 per block, varied so the values
     // are not all identical.
