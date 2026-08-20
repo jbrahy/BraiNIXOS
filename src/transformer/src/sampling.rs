@@ -280,7 +280,9 @@ fn walk_top_k(probabilities: &[f32], top_k: usize, uniform: f32) -> Result<u32, 
             return identifier(candidate.index);
         }
     }
-    // COVERAGE-EXEMPT: the accumulation loop above returns for any distribution whose mass is positive, which the caller guarantees; this is the residual path for floating-point mass that rounds below the target.
+    // Reached at `uniform = 1.0`, where `target` equals the mass and the
+    // comparison above is false at every step. Pinned by
+    // `a_uniform_at_the_top_of_the_range_falls_through_to_the_residual`.
     identifier(last_index(selected)?)
 }
 
@@ -344,7 +346,9 @@ fn bubble_up(candidates: &mut [Candidate], position: usize) {
             candidates.get(current).copied(),
             candidates.get(previous).copied(),
         ) else {
-            // COVERAGE-EXEMPT: the sift walks indices it just obtained from the same array, so both gets always succeed. Kept so the sift is total rather than indexing.
+            // Unreachable from this crate, where every caller sifts an index it
+            // just wrote, but not from the function: a position past the end
+            // lands here and must return rather than index.
             return;
         };
         if !here.outranks(before) {
@@ -400,11 +404,48 @@ fn identifier(index: usize) -> Result<u32, TransformerError> {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
-    use super::{identifier, last_index, Candidate};
+    use super::{bubble_up, identifier, last_index, walk_top_k, Candidate};
     use crate::error::TransformerError;
 
     fn candidate(probability: f32, index: usize) -> Candidate {
         Candidate { probability, index }
+    }
+
+    /// The residual path is not a rounding curiosity, it is the top of the
+    /// range.
+    ///
+    /// `target` is `uniform * mass`, and the loop returns only on
+    /// `target < accumulated`. At `uniform = 1.0` the target IS the mass, so
+    /// the comparison is false at every step including the last and the loop
+    /// runs out. The marker on that line called this "floating-point mass that
+    /// rounds below the target", which made it sound unreachable; a uniform
+    /// draw of exactly 1.0 reaches it every time.
+    #[test]
+    fn a_uniform_at_the_top_of_the_range_falls_through_to_the_residual() {
+        let probabilities = [0.25_f32, 0.25, 0.25, 0.25];
+        let chosen = walk_top_k(&probabilities, 4, 1.0).expect("the residual choice");
+        assert!(
+            chosen < 4,
+            "the residual must still be one of the candidates, got {chosen}"
+        );
+    }
+
+    /// The sift's bound check, reached by the caller it exists for.
+    ///
+    /// Every real caller passes a position it just wrote to, which is why the
+    /// arm is unreachable in the crate. It is not unreachable in the function:
+    /// a position past the end makes the first `get` return `None`, and the
+    /// sift must return rather than index.
+    #[test]
+    fn the_sift_returns_on_a_position_outside_the_array_rather_than_indexing() {
+        let mut candidates = [candidate(0.25, 0), candidate(0.5, 1)];
+        bubble_up(&mut candidates, 99);
+        assert_eq!(
+            candidates.first().map(|entry| entry.index),
+            Some(0),
+            "an out-of-range sift must leave the array alone"
+        );
+        assert_eq!(candidates.get(1).map(|entry| entry.index), Some(1));
     }
 
     #[test]
