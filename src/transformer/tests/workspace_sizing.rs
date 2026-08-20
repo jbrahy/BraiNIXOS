@@ -6,6 +6,12 @@
 //! to kernels that trust the size. If it is wrong, the failure is a shape
 //! mismatch at best and a silently truncated activation plane at worst.
 
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::arithmetic_side_effects
+)]
+
 mod common;
 
 use brainix_tensor::RopePairing;

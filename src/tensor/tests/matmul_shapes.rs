@@ -12,6 +12,13 @@
 //! and the only way to know a kernel obeys it is to hand it sources that
 //! disagree.
 
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::arithmetic_side_effects,
+    clippy::cognitive_complexity
+)]
+
 use brainix_tensor::{
     matmul_q4_0_q8a, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations, quantize_q4_0,
     MatMulShape, Q4Weights, Q8Weights, Q4_0_BLOCK,

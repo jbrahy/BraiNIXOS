@@ -280,6 +280,7 @@ pub(crate) fn chunk_len(n_out: usize, chunks: usize) -> Result<usize, Transforme
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{chunk_len, split_threshold_bytes, Dispatch, Serial};
     use crate::error::TransformerError;

@@ -17,6 +17,13 @@
 //! - the all-zero block rule, shared with `Q8_0`: a zero scale and zero quants
 //!   rather than a subnormal scale that multiplies into noise.
 
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::arithmetic_side_effects,
+    clippy::cognitive_complexity
+)]
+
 use brainix_tensor::{quantize_q4_0, Q4Weights, Q4_0_BLOCK};
 
 /// Deterministic values with both signs and a known peak.

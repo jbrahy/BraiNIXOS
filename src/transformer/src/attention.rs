@@ -518,6 +518,7 @@ fn dot_product(left: &[f32], right: &[f32]) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::arithmetic_side_effects)]
 mod tests {
     use super::{accumulate_weighted, dot_product, softmax_every_head, AttentionShape, DOT_LANES};
     use crate::config::ModelConfig;

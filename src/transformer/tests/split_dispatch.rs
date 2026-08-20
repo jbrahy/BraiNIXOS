@@ -18,6 +18,12 @@
 //! `Q8_0` run is therefore for EQUALITY, and a chunking bug that dropped or
 //! duplicated a row shows up immediately.
 
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::arithmetic_side_effects
+)]
+
 mod common;
 
 use brainix_tensor::RopePairing;

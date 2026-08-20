@@ -46,6 +46,13 @@
 //! so the instruction-throughput conclusion transfers; the bandwidth conclusion
 //! does not, and must be re-measured on the target.
 
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::arithmetic_side_effects,
+    clippy::cognitive_complexity
+)]
+
 use brainix_tensor::{
     matmul_q4_0_q8a, matmul_q8_0, matmul_q8_0_q8a, matmul_q8_0_q8a_rows, quantize_activations,
     quantize_q4_0, rmsnorm, rope, softmax, swiglu, MatMulShape, Q4Weights, Q8Weights, RopePairing,
