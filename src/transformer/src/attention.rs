@@ -355,8 +355,6 @@ fn softmax_every_head<D: Dispatch>(
                         // Only non-finite input is reachable of the three
                         // things `softmax` refuses on, and the serial path
                         // names it -- so this path names the same thing.
-                        // COVERAGE-EXEMPT: needs weights whose dot product
-                        // overflows to infinity; no fixture here does.
                         if softmax(source, target).is_err() {
                             refused.store(true, Ordering::Relaxed);
                         }
@@ -375,7 +373,6 @@ fn softmax_every_head<D: Dispatch>(
             // forwarded -- sound because only one of `softmax`'s refusals is
             // reachable from here, which is what the note at the call site
             // argues.
-            // COVERAGE-EXEMPT: as the store above.
             return Err(TransformerError::Kernel(TensorError::NonFiniteInput));
         }
         if mis_sliced.load(Ordering::Relaxed) {
@@ -522,7 +519,81 @@ fn dot_product(left: &[f32], right: &[f32]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{accumulate_weighted, dot_product, DOT_LANES};
+    use super::{accumulate_weighted, dot_product, softmax_every_head, AttentionShape, DOT_LANES};
+    use crate::config::ModelConfig;
+    use crate::dispatch::Serial;
+    use crate::error::TransformerError;
+    use crate::workspace::{workspace_floats, Workspace};
+    use brainix_tensor::{RopePairing, TensorError};
+
+    /// The same small model the workspace documentation is written against.
+    const CONFIG: ModelConfig = ModelConfig {
+        architecture_id: 1,
+        layer_count: 2,
+        model_width: 32,
+        query_head_count: 4,
+        key_value_head_count: 2,
+        head_width: 8,
+        feed_forward_width: 64,
+        vocabulary_size: 48,
+        maximum_sequence_length: 16,
+        rope_theta: 1.0e4,
+        normalization_epsilon: 1.0e-5,
+        rope_dimensions: 4,
+        rope_pairing: RopePairing::Interleaved,
+    };
+
+    const FLOATS: usize = match workspace_floats(&CONFIG, 8) {
+        Ok(floats) => floats,
+        Err(_) => 0,
+    };
+
+    /// Non-finite scores must be named as such, on both dispatch paths.
+    ///
+    /// The comment at the call site says extreme weights make a dot product
+    /// overflow to infinity, and that this was reachable -- the same model
+    /// decoded with and without a dispatcher named different causes until that
+    /// was fixed. Reaching it through weights would need a fixture built to
+    /// overflow an f32; the score board is the same buffer those weights would
+    /// have written, so writing infinity into it directly tests the refusal
+    /// rather than the arithmetic that produces it.
+    #[test]
+    fn a_non_finite_score_is_refused_as_non_finite_and_not_as_a_sizing_error() {
+        let mut storage = [0.0_f32; FLOATS];
+        let mut quant: [u8; 0] = [];
+        let mut workspace =
+            Workspace::new(&mut storage, &mut quant, &CONFIG, 8).expect("workspace");
+
+        let shape = AttentionShape {
+            head_width: CONFIG.head_width,
+            query_width: CONFIG.query_head_count * CONFIG.head_width,
+            key_value_width: CONFIG.key_value_head_count * CONFIG.head_width,
+            query_head_count: CONFIG.query_head_count,
+            query_heads_per_group: CONFIG.query_head_count / CONFIG.key_value_head_count,
+            scale: 1.0,
+            score_stride: CONFIG.maximum_sequence_length,
+        };
+
+        // A finite board first: the same call must succeed, or the assertion
+        // below would pass for the wrong reason.
+        for slot in workspace.scores.iter_mut() {
+            *slot = 0.0;
+        }
+        assert!(
+            softmax_every_head(&Serial, &mut workspace, 4, shape).is_ok(),
+            "a finite board must not be refused"
+        );
+
+        // One infinity anywhere in the first head's row is enough.
+        if let Some(slot) = workspace.scores.first_mut() {
+            *slot = f32::INFINITY;
+        }
+        assert_eq!(
+            softmax_every_head(&Serial, &mut workspace, 4, shape),
+            Err(TransformerError::Kernel(TensorError::NonFiniteInput)),
+            "an infinite score is a non-finite input, not a workspace sizing error"
+        );
+    }
 
     /// A reference that is deliberately the shape the four-lane kernel replaced.
     fn serial(left: &[f32], right: &[f32]) -> f32 {
