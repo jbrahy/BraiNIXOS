@@ -28,6 +28,7 @@ it could not see them at all.
 | `lint-suppressions.py` | is every lint suppression justified? | any host |
 | `clippy-all-targets-gate.sh` | do tests, benches and examples lint clean? | any host |
 | `reproducible-build.sh` | are the bare-metal artifacts byte-identical twice? | any host |
+| `mutation-sweep.py` | would a wrong answer actually be caught? | any host, not in CI |
 
 ```sh
 ./bin/coverage-gate.py                # enforce: 100% of reachable lines, no stale markers
@@ -36,6 +37,23 @@ it could not see them at all.
 ./bin/sdot-gate.sh                    # skips loudly on non-aarch64, never passes quietly
 ./bin/clippy-all-targets-gate.sh      # the targets CI's clippy step never compiles
 ```
+
+**Why `mutation-sweep.py` exists.** Coverage answers "did this line execute".
+It does not answer "would a wrong answer have been caught", and on 2026-08-20
+the difference was not theoretical twice in one afternoon.
+
+The `Q4_0` prefill split had a fully tested kernel and an unguarded caller:
+every test in `q4_weights.rs` decoded one token, so all of them took the
+row-split branch, and planting an off-by-worker in the token split left the file
+green. Separately, forcing every `worth_splitting` to `false` -- so nothing
+splits and the decode quietly runs on one core -- leaves every answer correct.
+Three tests failed, all refusal tests failing by accident of fixture shape.
+
+Both are in the catalogue now as REGRESSION entries. The sweep is not in CI: a
+full test run per mutation is minutes, and CI already runs nine gates. Run it
+when touching a kernel, a split, or anything else in the catalogue's blast
+radius. Every mutation is restored in a `finally`, so an interrupted run leaves
+the tree as it found it.
 
 **Why `clippy-all-targets-gate.sh` exists.** CI runs `cargo clippy --workspace
 -- -D warnings`, without `--all-targets`. That compiles libs and bins, so
