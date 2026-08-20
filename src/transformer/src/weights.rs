@@ -203,25 +203,21 @@ impl WeightMatrix<'_> {
                                     chunk,
                                 )
                                 .is_err()
-                                // Unreachable. Every shape here came from a
-                                // validated ModelConfig and a chunk_len width,
-                                // so the kernel cannot refuse. The split path
-                                // itself IS tested, in split_dispatch.rs; only
-                                // this refusal cannot be provoked, and the flag
-                                // exists to catch a refactor that breaks the
-                                // agreement between those two.
-                                // COVERAGE-EXEMPT: see the note above.
+                                // Reachable: `shape` is `project`'s parameter,
+                                // not something this function derived, so a
+                                // destination wider than `n_out` gives the split
+                                // a chunk starting past the last weight row.
+                                // Pinned by
+                                // `a_kernel_refusal_inside_the_split_is_reported_rather_than_swallowed`.
                                 {
-                                    // COVERAGE-EXEMPT: see the note above.
                                     failed.store(true, Ordering::Relaxed);
                                 }
                             });
                             if failed.load(Ordering::Relaxed) {
-                                // COVERAGE-EXEMPT: as above. The specific
-                                // kernel error is lost because a `Fn` closure
-                                // shared across threads cannot carry a `Result`
-                                // out without allocating; the flag is the most
-                                // it can set.
+                                // The specific kernel error is lost because a
+                                // `Fn` closure shared across threads cannot
+                                // carry a `Result` out without allocating; the
+                                // flag is the most it can set.
                                 return Err(TransformerError::WeightShapeMismatch);
                             }
                         } else {
@@ -258,22 +254,16 @@ impl WeightMatrix<'_> {
                     let failed = AtomicBool::new(false);
                     dispatch.for_each_chunk(destination, width, |index, chunk| {
                         let start = index.saturating_mul(width);
-                        // Unreachable for the same reason the `Q8_0` arm's
-                        // refusal is: every argument comes from a validated
-                        // shape and a `chunk_len` width. The decomposition
-                        // itself IS covered -- q4_weights.rs asserts the split
-                        // path agrees with `Serial` bit for bit -- and only
-                        // this refusal cannot be provoked.
-                        // COVERAGE-EXEMPT: see the note above.
+                        // Reachable on the same terms as the `Q8_0` arm: the
+                        // shape is `project`'s parameter. Pinned by
+                        // `the_q4_split_reports_a_kernel_refusal_too`.
                         if matmul_q4_0_q8a_rows(shape, weights, &view, start, chunk.len(), chunk)
                             .is_err()
                         {
-                            // COVERAGE-EXEMPT: see the note above.
                             failed.store(true, Ordering::Relaxed);
                         }
                     });
                     if failed.load(Ordering::Relaxed) {
-                        // COVERAGE-EXEMPT: as above.
                         return Err(TransformerError::WeightShapeMismatch);
                     }
                 } else {
@@ -432,5 +422,119 @@ fn expect_vector(values: &[f32], width: usize) -> Result<(), TransformerError> {
         Ok(())
     } else {
         Err(TransformerError::WeightShapeMismatch)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::arithmetic_side_effects)]
+mod tests {
+    use super::{MatMulShape, WeightMatrix};
+    use crate::dispatch::Dispatch;
+    use crate::error::TransformerError;
+    use brainix_tensor::{Q4Weights, Q8Weights};
+
+    /// A dispatcher that splits, so the row-split branch is taken.
+    ///
+    /// `Serial` reports one chunk and never splits, which is why nothing in the
+    /// crate had ever executed the branch below. The chunks run in sequence
+    /// here -- the point is the split arithmetic, not concurrency.
+    struct TwoChunks;
+
+    impl Dispatch for TwoChunks {
+        fn chunks(&self) -> usize {
+            2
+        }
+
+        fn minimum_split_bytes(&self) -> usize {
+            0
+        }
+
+        fn for_each_chunk<F>(&self, out: &mut [f32], chunk_len: usize, body: F)
+        where
+            F: Fn(usize, &mut [f32]) + Sync,
+        {
+            for (index, chunk) in out.chunks_mut(chunk_len.max(1)).enumerate() {
+                body(index, chunk);
+            }
+        }
+    }
+
+    const N_OUT: usize = 64;
+    const N_IN: usize = 64;
+
+    /// A kernel refusal inside the split must surface, not half-write the output.
+    ///
+    /// The marker here said every argument is "derived from shapes this function
+    /// has already validated", so the refusal cannot be provoked. `project` is
+    /// `pub(crate)` and `shape` is its parameter -- the shapes are the caller's,
+    /// not this function's. A destination longer than `n_out` gives the split a
+    /// chunk whose first row is past the last row of the weight matrix, the
+    /// kernel refuses it, and the flag is the only way that refusal escapes a
+    /// `Fn` closure shared across threads.
+    #[test]
+    fn a_kernel_refusal_inside_the_split_is_reported_rather_than_swallowed() {
+        let payload = [0_u8; 4608];
+        let weights = Q8Weights::new(&payload, N_OUT, N_IN).expect("a well formed weight view");
+        let matrix = WeightMatrix::Quantized8(weights);
+
+        let activations = [0.0_f32; N_IN];
+        let mut scratch = [0_u8; 4096];
+        // Twice the output width: the split hands out chunks covering all of
+        // it, so the later ones start past row `n_out`.
+        let mut destination = [0.0_f32; N_OUT * 2];
+
+        let shape = MatMulShape {
+            n_tokens: 1,
+            n_in: N_IN,
+            n_out: N_OUT,
+        };
+
+        assert_eq!(
+            matrix.project(
+                shape,
+                &activations,
+                &mut scratch,
+                &TwoChunks,
+                &mut destination
+            ),
+            Err(TransformerError::WeightShapeMismatch),
+            "a chunk starting past the last weight row must be reported"
+        );
+    }
+
+    /// The `Q4_0` split carries the same three markers, and the same claim.
+    ///
+    /// Its note says the refusal is unreachable "for the same reason the `Q8_0`
+    /// arm's refusal is". That reason was wrong for `Q8_0` and it is wrong here
+    /// for the same reason: the shape belongs to the caller. `Q4_0` is
+    /// `0.625` bytes per element against `Q8_0`'s `1.125`, so this also
+    /// exercises the other payload geometry through the same branch.
+    #[test]
+    fn the_q4_split_reports_a_kernel_refusal_too() {
+        let payload = [0_u8; 2560];
+        let weights = Q4Weights::new(&payload, N_OUT, N_IN).expect("a well formed Q4 view");
+        let matrix = WeightMatrix::Quantized4(weights);
+
+        let activations = [0.0_f32; N_IN];
+        let mut scratch = [0_u8; 4096];
+        let mut destination = [0.0_f32; N_OUT * 2];
+
+        let shape = MatMulShape {
+            n_tokens: 1,
+            n_in: N_IN,
+            n_out: N_OUT,
+        };
+
+        assert_eq!(
+            matrix.project(
+                shape,
+                &activations,
+                &mut scratch,
+                &TwoChunks,
+                &mut destination
+            ),
+            Err(TransformerError::WeightShapeMismatch),
+            "the Q4 split must report a refusal as loudly as the Q8 one"
+        );
     }
 }
