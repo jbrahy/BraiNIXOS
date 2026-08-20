@@ -22,7 +22,6 @@ use brainix_bsp::{LEN_CONFIRM, LEN_LABEL, LEN_NONCE};
 ///
 /// A `const fn` so every label below is a compile-time constant and a label
 /// longer than 16 bytes is a compile error rather than a truncation.
-// COVERAGE-EXEMPT: `label` is a const fn evaluated at COMPILE time to build the label constants, so it has no runtime execution for llvm-cov to observe. Its output is asserted by the known-answer vectors in tests/known_answer.rs.
 const fn label(text: &[u8]) -> [u8; LEN_LABEL] {
     let mut padded = [0u8; LEN_LABEL];
     let mut position = 0usize;
@@ -30,7 +29,6 @@ const fn label(text: &[u8]) -> [u8; LEN_LABEL] {
         padded[position] = text[position];
         position = position.saturating_add(1);
     }
-    // COVERAGE-EXEMPT: const fn, evaluated at compile time - see above.
     padded
 }
 
@@ -152,4 +150,48 @@ pub fn info_client_confirm(
     info[LEN_LABEL] = role;
     info[LEN_LABEL + 1..].copy_from_slice(transcript_two);
     info
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `label` is a `const fn`, so building the constants above happens at
+    /// compile time and llvm-cov never sees it run. That is a property of the
+    /// instrument, not of the code: called from a non-const context it is an
+    /// ordinary function, and these assertions execute the same padding loop
+    /// the constants were built by. The known-answer vectors pin the resulting
+    /// bytes; this pins the rule that produced them.
+    #[test]
+    fn a_short_label_is_nul_padded_to_the_full_width() {
+        let padded = label(b"abc");
+        assert_eq!(&padded[..3], b"abc");
+        assert!(
+            padded[3..].iter().all(|byte| *byte == 0),
+            "every byte past the text must be NUL, got {padded:?}"
+        );
+    }
+
+    /// The boundary the `const fn` exists to police: exactly `LEN_LABEL` bytes
+    /// fills the array with no padding, and one more would not compile.
+    #[test]
+    fn a_label_of_exactly_the_full_width_keeps_every_byte() {
+        let text = [b'x'; LEN_LABEL];
+        assert_eq!(label(&text), text);
+    }
+
+    /// The empty label is all NUL rather than anything else -- the loop must
+    /// not run, and the zero-initialised array is the answer.
+    #[test]
+    fn an_empty_label_is_all_nul() {
+        assert_eq!(label(b""), [0u8; LEN_LABEL]);
+    }
+
+    /// And the constants really are what the rule produces, which is what makes
+    /// the three tests above statements about the shipped labels.
+    #[test]
+    fn the_declared_constants_match_the_rule_that_built_them() {
+        assert_eq!(LABEL_ENROLL_SALT, label(b"BSP2 enroll"));
+        assert_eq!(LABEL_KEY_HANDLE, label(b"BSP2 key-handle"));
+    }
 }

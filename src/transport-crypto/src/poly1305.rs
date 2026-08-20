@@ -308,7 +308,12 @@ fn load_le32(bytes: &[u8], offset: usize) -> u32 {
         Some([first, second, third, fourth]) => {
             u32::from_le_bytes([*first, *second, *third, *fourth])
         }
-        // COVERAGE-EXEMPT: load_le32 is only called on 16-byte-aligned offsets within a block whose length was already checked, so the 4-byte slice always matches. Returning 0 keeps it total instead of indexing.
+        // COVERAGE-EXEMPT: every call site passes a literal offset into a
+        // fixed-size array, and the largest read is `28..32` of a 32-byte key
+        // and `12..16` of a 16-byte block, so the slice is always present.
+        // Not "16-byte-aligned offsets": `clamp_r` reads at 3, 6, 9 and 12,
+        // which is RFC 8439's limb split and is deliberately unaligned.
+        // Returning 0 keeps this total instead of indexing.
         _ => 0,
     }
 }

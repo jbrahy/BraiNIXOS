@@ -79,13 +79,14 @@ fn expand_block(
 /// is taken through `get`/`get_mut`, so the function is total: it cannot panic
 /// and it cannot write past `output`.
 fn copy_block(output: &mut [u8], written: usize, block: &[u8; HMAC_OUTPUT_BYTES]) -> usize {
+    // Zipping the destination against the block copies exactly as many bytes
+    // as both can supply, which is the `min(remaining, HMAC_OUTPUT_BYTES)` the
+    // old form computed and then had to defend with an unreachable arm. There
+    // is no range to build, so there is nothing to be out of range.
     let remaining = output.len().saturating_sub(written);
     let take = remaining.min(HMAC_OUTPUT_BYTES);
-    let end = written.saturating_add(take);
-    match (output.get_mut(written..end), block.get(..take)) {
-        (Some(destination), Some(source)) => destination.copy_from_slice(source),
-        // COVERAGE-EXEMPT: `take` is computed as min(remaining, HMAC_OUTPUT_BYTES) and `end` as written + take, so both slices are in range by construction. The arm keeps copy_block total rather than indexing.
-        _ => return output.len(),
+    for (slot, byte) in output.iter_mut().skip(written).zip(block.iter()) {
+        *slot = *byte;
     }
-    end
+    written.saturating_add(take)
 }
