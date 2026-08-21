@@ -195,6 +195,56 @@ effect immediately before the call. The window title is a good progress signal
 here -- it reads `Terminal - kmutil - sh as-install-boot-object.sh` for as long
 as the tool is working, which is a couple of minutes and looks like a hang.
 
+## pairing (17), and which volume you pick at the picker
+
+Unresolved as of 2026-08-21. Recorded because the next attempt should start
+here rather than rediscovering it.
+
+Answering kmutil's prompts with `jbrahy` and the admin password clears the
+first error -- `not a valid admin user for the volume at /Volumes/Preboot/<VG>/`
+disappears, so the credential is correct. What is left is:
+
+```
+Error Domain=KMErrorDomain Code=71 "Boot policy error: Error updating custom os
+local policy: code pairing (17)"
+```
+
+and `bputil -n -c -v <VG> -u <user> -p <pass>` fails with the same underlying
+error, which is the useful part:
+
+```
+Boot objects update failed for <VG>: Error Domain=BYErrorDomain Code=401
+"Failed to create local policy" NSUnderlyingError=
+  {Domain=com.apple.bootpolicy Code=17 "pairing (17)"}
+```
+
+Two tools, one error, at LocalPolicy creation. So it is not kmutil, and it is
+not the skipped `bputil` step in `as-install-boot-object.sh`.
+
+Ruled out by inspection, so do not spend time re-checking:
+
+| Suspicion | Evidence against |
+| --- | --- |
+| Target is a bare volume, not an OS | `/Volumes/BraiNIX` has Applications, Library, System, Users, bin, usr, var; `System/Library/CoreServices` is populated |
+| Wrong or non-owner credential | `diskutil apfs listUsers /Volumes/BraiNIX` shows 2 cryptographic users on disk3s8, both `Volume Owner: Yes`; `/Volumes/BraiNIX/Users` has a `jbrahy` home |
+| Policy not Permissive | `Security Mode: Permissive (smb0 && smb1): 1`, `Kernel CTRR Status: Disabled (sip2): 1` |
+| Payload wrong | 193857 bytes, matches `payloads.tsv`; kmutil got as far as `found raw boot object, deriving Mach-O boot properties... wrapping boot object payload...` |
+
+**The leading hypothesis is the volume picker.** This file tells you to choose
+Macintosh HD when authenticating, because the scripts live on its data volume.
+That authenticates the 1TR session to *Macintosh HD's* volume group -- and the
+install then tries to rewrite the LocalPolicy of a different group, BraiNIX.
+`bputil -d` reports `OS Pairing Status: Not Paired`. A `cp` onto BraiNIX's data
+volume from that session hung rather than failing, which points the same way.
+
+Next attempt: enter 1TR and pick **BraiNIX** at the picker, then authenticate.
+If Macintosh HD's data volume is still readable at `/Volumes/Data`, run the
+scripts straight from there; if it is not, stage a copy onto BraiNIX first --
+from a session that owns it, so the copy actually completes.
+
+Untested. If it turns out to be wrong, the next thing to look at is whether the
+BraiNIX group's LocalPolicy can be created at all, rather than updated.
+
 ## What still needs a person
 
 **Entering Recovery.** Holding the power button is the only way in. This is not
