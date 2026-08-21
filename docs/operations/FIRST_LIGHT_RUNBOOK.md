@@ -92,6 +92,12 @@ running there fall back to a size check.
 
 ## 4. Enter One True Recovery
 
+> **No hands on the machine?** [`REMOTE_HANDS.md`](REMOTE_HANDS.md) covers
+> driving the picker and Recovery from the laptop with the Flipper as a keyboard
+> and the camera as eyes, including the keyboard rules for Recovery, which are
+> not the ones you would guess. Holding the power button and the admin password
+> still need a person; everything between them does not.
+
 Hold the power button until `Loading startup options` appears. Pick **Options**,
 then the volume whose *data* you need mounted. Pick **Macintosh HD** if your
 scripts live there, because that group's data volume only unlocks if you
