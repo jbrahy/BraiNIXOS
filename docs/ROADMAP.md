@@ -118,13 +118,17 @@ Recorded here because it is the gate on every Track A row that needs hardware.
 one failed before the irreversible step. `Macintosh HD` remains Full Security / Paired / `coih: absent`,
 so the machine still boots macOS and still answers ssh.
 
-**The gate is a boot-policy state, and then a cable.** The `BraiNIX` volume group is `Not Paired` and
-already carries a `coih` from an earlier install; no new LocalPolicy can be written over that, so both
-`kmutil configure-boot` and `bputil` refuse with `com.apple.bootpolicy Code=17 "pairing (17)"`. Clearing
-it requires setting that group back to Full Security, which is personalized against Apple's servers and
-therefore needs real connectivity. recoveryOS has no `networksetup` and Recovery does not inherit the
-Wi-Fi association, so **Ethernet with a route to Apple joins holding the power button on the short list
-of things this project cannot do remotely.**
+**The gate is that the experiment volume was never a real macOS install.** The `BraiNIX` volume group
+has no recoveryOS of its own — `diskutil apfs list` shows one `Recovery` volume in the container and it
+belongs to Macintosh HD. A group carved by adding a volume and copying a system into it is permanently
+`Not Paired`, and a `Not Paired` group's LocalPolicy can never be *downgraded*, so no custom boot object
+can ever be installed on it. Raising to Full Security works (Apple signs it over the network); lowering
+to Permissive does not (signed locally, needs a paired OS). The stale `coih` was a red herring and
+clearing it changed nothing.
+
+**So the next step is to reinstall macOS onto that volume**, letting the installer create the paired
+recoveryOS. recoveryOS has no `startosinstall`, so it is the GUI wizard and needs a person watching the
+disk picker. This is a rig defect, not a kernel defect.
 
 Procedure and the exact command sequence:
 [`operations/FIRST_LIGHT_RUNBOOK.md`](operations/FIRST_LIGHT_RUNBOOK.md) §5.
