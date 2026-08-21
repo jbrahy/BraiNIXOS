@@ -141,6 +141,78 @@ payload in `payloads.tsv` and never copy one payload's value to another.
 creates, and wedged the local policy badly enough to cost a volume group.
 `bputil -n -c -v <uuid> -u <user> -p <pass>` is the whole command.
 
+### `pairing (17)` means the group already carries a boot object
+
+`-k` is one way to reach this error. It is not the only one, and on 2026-08-21
+the *other* way cost a whole evening with `-k` never once passed:
+
+```
+Error Domain=KMErrorDomain Code=71 "Boot policy error: Error updating custom os
+local policy: code pairing (17)"
+```
+
+and `bputil` refuses identically, which is the part that identifies it:
+
+```
+Boot objects update failed for <VG>: Error Domain=BYErrorDomain Code=401
+"Failed to create local policy" NSUnderlyingError=
+  {Domain=com.apple.bootpolicy Code=17 "pairing (17)"}
+```
+
+**Two tools, one error, at LocalPolicy creation.** That rules out kmutil, and it
+rules out the credential -- which is worth stating because the credential error
+looks similar and appears one step earlier.
+
+**Diagnose with `bputil -e`, not `bputil -d`.** In 1TR, `-d` prints the policy
+of the *booted* environment and tells you almost nothing about your target. `-e`
+prints every policy on the machine, and the answer is the two rows side by side:
+
+| | the experiment group | the untouched macOS |
+| --- | --- | --- |
+| OS Pairing Status | **Not Paired** | Paired |
+| Security Mode | Permissive (smb0 && smb1): 1 | Full |
+| coih | `8BABB8ED...D87375F` | absent |
+
+A group that already has a `coih` is **Not Paired**, and a new LocalPolicy
+cannot be written over that state. The same symptom is reported against the
+Asahi installer by someone who also had a custom boot policy already set:
+<https://github.com/AsahiLinux/asahi-installer/issues/50>.
+
+To clear it, set **that group only** back to Full Security -- the operation
+Startup Security Utility performs through the GUI, and reversible:
+
+```sh
+bputil -f -v <uuid> -u <user> -p <pass>
+```
+
+**Never `bputil -r` / `--remove`.** It deletes the LocalPolicy outright. That is
+the shape of the mistake that already cost this project a volume group, and it
+is not what is needed here.
+
+### Full Security needs the Internet, so this step needs a cable
+
+`bputil -f` is personalized against Apple's servers and fails without
+connectivity -- harmlessly, before changing anything:
+
+```
+Boot objects update failed for <VG>: Error Domain=BYErrorDomain Code=102
+"Can't continue because you are not connected to the Internet"
+  {AuthInstallErrorDomain Code=11}, BYErrorHint=NetworkRequired,
+  BYPersonalizationType=os
+```
+
+Permissive and `coih` are signed locally by the SEP and need no network. Only
+the Full Security round trip does.
+
+**recoveryOS has no `networksetup`** -- only `/sbin/ifconfig` and
+`/usr/sbin/ipconfig`. So Wi-Fi cannot be joined from the Terminal, and Recovery
+does not inherit the association from macOS. The menu-bar Wi-Fi picker is the
+only route and it needs a mouse.
+
+**Plug in Ethernet.** `en0` reads `status: inactive` with no cable; then
+`ipconfig set en0 DHCP` and confirm an address before retrying. Add this to the
+short list of things that need a person, next to holding the power button.
+
 ### Answer kmutil's prompts one at a time
 
 `kmutil configure-boot` has **no** `-u`/`-p`. It asks three things in order:
@@ -937,6 +1009,8 @@ remote.
 [ ] separate volume group, and its UUID re-read this session
 [ ] payload staged, hash verified under macOS (not recoveryOS)
 [ ] as-preflight.sh reports READY
+[ ] bputil -e read FIRST: target group Paired, and coih absent
+[ ] if coih is already set: bputil -f to clear it (needs Ethernet), never -r
 [ ] bputil -n -c, no -k
 [ ] bputil -d confirms Permissive before touching the boot object
 [ ] entry point taken from payloads.tsv, per payload

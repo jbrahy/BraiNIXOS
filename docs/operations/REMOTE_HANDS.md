@@ -8,6 +8,13 @@ accepts input from a keyboard plugged into the machine.
 This is how to work it anyway. Written 2026-08-20 after learning all of it the
 slow way in one session.
 
+> **Read [`FIRST_LIGHT_RUNBOOK.md`](FIRST_LIGHT_RUNBOOK.md) §5 before an install,
+> not after.** On 2026-08-21 an evening went into re-deriving, from scratch, two
+> things that file already stated plainly: that `kmutil configure-boot` asks `y`,
+> then `Username:`, then `Password:` on stdin, and that the install script's FIFO
+> block-buffers kmutil's stdout so `Username:` never appears when it is asked.
+> This file is for driving the machine. That one is for what to type.
+
 ## The two instruments
 
 | | |
@@ -198,7 +205,9 @@ as the tool is working, which is a couple of minutes and looks like a hang.
 ## pairing (17): the group already has a custom boot object
 
 Diagnosed 2026-08-21. The install is blocked behind a network requirement, not
-behind anything about the picker or the credentials.
+behind anything about the picker or the credentials. The procedure now lives in
+[`FIRST_LIGHT_RUNBOOK.md`](FIRST_LIGHT_RUNBOOK.md) §5; what follows is the
+evidence trail that produced it.
 
 Answering kmutil's prompts with `jbrahy` and the admin password clears the
 first error -- `not a valid admin user for the volume at /Volumes/Preboot/<VG>/`

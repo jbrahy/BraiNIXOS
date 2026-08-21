@@ -110,6 +110,30 @@ written against.
 
 ---
 
+## 2026-08-21 status: BraiNIX is not yet the mini's boot object
+
+Recorded here because it is the gate on every Track A row that needs hardware.
+
+**Not installed, and nothing broken.** Nine install runs on 2026-08-21 produced no boot object; every
+one failed before the irreversible step. `Macintosh HD` remains Full Security / Paired / `coih: absent`,
+so the machine still boots macOS and still answers ssh.
+
+**The gate is a boot-policy state, and then a cable.** The `BraiNIX` volume group is `Not Paired` and
+already carries a `coih` from an earlier install; no new LocalPolicy can be written over that, so both
+`kmutil configure-boot` and `bputil` refuse with `com.apple.bootpolicy Code=17 "pairing (17)"`. Clearing
+it requires setting that group back to Full Security, which is personalized against Apple's servers and
+therefore needs real connectivity. recoveryOS has no `networksetup` and Recovery does not inherit the
+Wi-Fi association, so **Ethernet with a route to Apple joins holding the power button on the short list
+of things this project cannot do remotely.**
+
+Procedure and the exact command sequence:
+[`operations/FIRST_LIGHT_RUNBOOK.md`](operations/FIRST_LIGHT_RUNBOOK.md) §5.
+
+**No roadmap row changes state on this.** AS-1b remains complete; this is an install/deployment gate,
+not a code gate, and no measurement or design decision below depends on its outcome.
+
+---
+
 ## Status at a glance
 
 **Wave 1 — COMPLETE** (all five deliverables merged; P2-T1's deliverable was later superseded and the task
