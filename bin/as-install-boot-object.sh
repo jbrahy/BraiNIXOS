@@ -259,6 +259,24 @@ if [ "$DRY_RUN" = "1" ]; then
   rm -f "${LOG}.fifo"
   exit 0
 fi
+# kmutil asks "By setting a custom boot object, you will be putting your system
+# into Permissive Security. Are you sure you want to do this? (enter y or n)"
+# and reads the answer from stdin. That is not in any of Apple's documentation
+# for the subcommand and it is the last thing between here and a boot object.
+#
+# It cost a run on 2026-08-21. The install was driven over a one-way keyboard
+# with a camera for eyes, the prompt was not visible in frame, and the next
+# command typed at what looked like a hung shell was consumed as the answer --
+# "grep" is not "y", so kmutil aborted and the script reported a failed
+# configure-boot with no hint that a question had been asked.
+#
+# Say so before it happens, because whoever is driving this cannot necessarily
+# see the prompt.
+printf '\n'
+printf 'kmutil is about to ask for confirmation on stdin:\n'
+printf '  "Are you sure you want to do this? (enter y or n)"\n'
+printf 'Answer y. Type NOTHING else until this command returns -- any other\n'
+printf 'line you send becomes the answer, and anything that is not y aborts.\n\n'
 $SUDO kmutil configure-boot \
   -c "$PAYLOAD" \
   --raw --entry-point "$ENTRY_POINT" --lowest-virtual-address "$LOWEST_VA" \

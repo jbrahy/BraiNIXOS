@@ -85,48 +85,55 @@ shortcut beside the item, and it reads Shift-Cmd-T; the key was added to
 `named_keys[]` on 2026-08-20. There is still no F-key in the table, and nothing
 so far has needed one.
 
-### The camera does not see the whole screen
+### Check the frame covers the whole screen, first, every time
 
-**Roughly the leftmost 24 terminal columns and the entire menu bar sit outside
-the camera frame.** The monitor extends up and to the left of what the lens
-covers, and nothing on the laptop can pan it. This is not a focus or exposure
-problem and no amount of cropping recovers those pixels.
+**The very first shot of a session must show the menu bar and all four edges of
+the display.** On 2026-08-20 it did not: the lens covered one corner of the
+monitor, the leftmost terminal columns and the entire menu bar were outside the
+frame, and roughly an hour went into diagnosing a keyboard that was working
+perfectly. Output was arriving where the camera could not see it.
 
-The consequence is specific and it wasted most of an hour: **short output lines
-are completely invisible.** A shell prompt is ten characters, so it never
-appears; `ok` appears as nothing at all. A screen that has genuinely changed
-looks identical to a screen that has frozen.
+Nothing on the laptop can pan or zoom the camera, so a bad frame is a bad
+session. If the menu bar is not in shot, stop and get the camera re-aimed
+before doing anything else.
 
-So indent everything past the cut, and make every signal long:
+Once framing is confirmed, two habits still pay:
+
+Screens photograph badly at an angle, so crop and upscale before reading
+anything small, and lift the gamma -- terminal text at this distance is a few
+pixels per glyph:
 
 ```sh
-some-command 2>&1 | sed "s/^/                                   /"
+ffmpeg -y -i shot.jpg -vf "crop=680:400:355:240,scale=2720:-1,eq=brightness=0.06:contrast=1.5" crop.jpg
 ```
 
-Thirty-five spaces clears the margin with room to spare. Prefer verdicts that
-survive a blurry photograph -- `GOOD GOOD GOOD` against `BAD BAD BAD` reads at
-a glance where a single digit or an exit code does not.
+And prefer verdicts that survive a blurry photograph. `GOOD GOOD GOOD` against
+`BAD BAD BAD` reads at a glance where a single digit or an exit code does not.
 
 Before trusting "the screen did not change", check the camera is live:
 consecutive JPEGs of an unchanging screen still differ in sensor noise, so
 identical content with differing `md5` means the display really is static.
 
-### The Flipper can report a link it no longer has
+### "The keyboard is dead" was the framing, twice
 
-On 2026-08-20 the mini stopped acting on keystrokes partway through a Recovery
-session. `status` kept saying `ble=linked usb=linked armed`, the `typed=`
-counter kept climbing, and every `type` returned `ok`. Seventy-two characters
-sent in one burst produced no change anywhere on screen.
+On 2026-08-20 I concluded from a static screen that the mini had stopped acting
+on keystrokes, that `furi_hal_hid_is_connected()` was reporting a link the
+Flipper no longer had, and that the session needed a person to replug it. All
+of that was wrong. Every keystroke had landed. The camera was pointed at one
+corner of the monitor and the terminal's output was arriving outside the frame,
+so a working system produced a photograph indistinguishable from a wedged one.
 
-`furi_hal_hid_is_connected()` reports the USB configured state, which is not
-the same claim as "the host is acting on my reports". **An `ok` from the app
-means the report was queued, and nothing more.** Do not read it as delivery.
+The tell I should have used, and did not: **the frame was not the whole
+screen.** If the menu bar is not in shot, nothing about what is in shot can be
+trusted to be all of it. Check the frame covers the display before drawing any
+conclusion from what is missing.
 
-There is no command that re-enumerates USB, so there is no way out of this from
-the laptop: it needs the Flipper unplugged and replugged, or the mini
-power-cycled. Both are hands-on. Adding a `reconnect` verb to the app that
-cycles `furi_hal_usb_set_config` would remove the trip, and is the highest-value
-change left in the app.
+The general failure is worth naming because it has now happened twice in one
+session, both times as an *absence*: no output, no reaction. An absence is the
+weakest evidence there is, because every layer between the key and the pixel
+can produce it. Before concluding a component is broken, make it produce a
+positive signal -- something that must appear if the component works -- and
+only then read silence as failure.
 
 ## Navigating macOS Recovery by keyboard
 
@@ -166,6 +173,27 @@ key space         activate                   -> admin user picker
 
 Pick **Macintosh HD**, not BraiNIX: the scripts live on Macintosh HD's data
 volume, and that group's data only unlocks if you authenticate against it.
+
+## kmutil asks a question, and a stray keystroke answers it
+
+`kmutil configure-boot` prompts on stdin before it installs anything:
+
+```
+By setting a custom boot object, you will be putting your system into
+Permissive Security.
+Are you sure you want to do this? (enter y or n)
+```
+
+It is not in Apple's documentation for the subcommand, and on 2026-08-21 it ate
+a run: the prompt was below the visible fold, the shell looked hung, and the
+next command sent became the answer. `grep` is not `y`, so it aborted and the
+script reported `kmutil configure-boot failed` with nothing about a question.
+
+**Once the install is launched, send nothing until the prompt is on screen.**
+Then send exactly `y`. `as-install-boot-object.sh` now prints a warning to this
+effect immediately before the call. The window title is a good progress signal
+here -- it reads `Terminal - kmutil - sh as-install-boot-object.sh` for as long
+as the tool is working, which is a couple of minutes and looks like a hang.
 
 ## What still needs a person
 
