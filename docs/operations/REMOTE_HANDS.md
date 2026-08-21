@@ -71,22 +71,62 @@ The app accepts exactly these keys, and nothing else:
 
 ```
 enter  tab  esc  space  up  down  left  right  ctrl-c  ctrl-d  cmd-tab
+shift-cmd-t
 ```
 
 `raw <text>` is `type` without the trailing Return, not an escape hatch for
 arbitrary HID codes. There is no way to send a modifier combination the table
 does not already list.
 
-**There are no function keys, and that is the one thing that stops this loop
-being fully autonomous.** Ctrl-F2 focuses the macOS menu bar, and the menu bar
-is the only route to **Utilities > Terminal** in Recovery. Without it, Recovery
-can be driven all the way to its main menu from the laptop and no further: a
-person has to click Utilities > Terminal, once.
+**Terminal in Recovery is Shift-Cmd-T, not a menu-bar trip.** An earlier
+version of this file said the menu bar was the only route and that Ctrl-F2 was
+needed to reach it. That was wrong. Recovery's Utilities menu prints the
+shortcut beside the item, and it reads Shift-Cmd-T; the key was added to
+`named_keys[]` on 2026-08-20. There is still no F-key in the table, and nothing
+so far has needed one.
 
-Adding `{"ctrl-f2", HID_KEYBOARD_F2 | KEY_MOD_LEFT_CTRL}` to `named_keys[]` in
-`brainx_flipper_one.c` would close it. That is a three-line change to the
-Flipper app, and it removes the last hands-on step between the power button and
-a root shell in Recovery. Worth doing before the next install.
+### The camera does not see the whole screen
+
+**Roughly the leftmost 24 terminal columns and the entire menu bar sit outside
+the camera frame.** The monitor extends up and to the left of what the lens
+covers, and nothing on the laptop can pan it. This is not a focus or exposure
+problem and no amount of cropping recovers those pixels.
+
+The consequence is specific and it wasted most of an hour: **short output lines
+are completely invisible.** A shell prompt is ten characters, so it never
+appears; `ok` appears as nothing at all. A screen that has genuinely changed
+looks identical to a screen that has frozen.
+
+So indent everything past the cut, and make every signal long:
+
+```sh
+some-command 2>&1 | sed "s/^/                                   /"
+```
+
+Thirty-five spaces clears the margin with room to spare. Prefer verdicts that
+survive a blurry photograph -- `GOOD GOOD GOOD` against `BAD BAD BAD` reads at
+a glance where a single digit or an exit code does not.
+
+Before trusting "the screen did not change", check the camera is live:
+consecutive JPEGs of an unchanging screen still differ in sensor noise, so
+identical content with differing `md5` means the display really is static.
+
+### The Flipper can report a link it no longer has
+
+On 2026-08-20 the mini stopped acting on keystrokes partway through a Recovery
+session. `status` kept saying `ble=linked usb=linked armed`, the `typed=`
+counter kept climbing, and every `type` returned `ok`. Seventy-two characters
+sent in one burst produced no change anywhere on screen.
+
+`furi_hal_hid_is_connected()` reports the USB configured state, which is not
+the same claim as "the host is acting on my reports". **An `ok` from the app
+means the report was queued, and nothing more.** Do not read it as delivery.
+
+There is no command that re-enumerates USB, so there is no way out of this from
+the laptop: it needs the Flipper unplugged and replugged, or the mini
+power-cycled. Both are hands-on. Adding a `reconnect` verb to the app that
+cycles `furi_hal_usb_set_config` would remove the trip, and is the highest-value
+change left in the app.
 
 ## Navigating macOS Recovery by keyboard
 
