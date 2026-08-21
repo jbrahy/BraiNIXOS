@@ -73,9 +73,20 @@ The app accepts exactly these keys, and nothing else:
 enter  tab  esc  space  up  down  left  right  ctrl-c  ctrl-d  cmd-tab
 ```
 
-There are **no function keys**, so Full Keyboard Access (Ctrl-F1) and VoiceOver
-(Cmd-F5) cannot be toggled from here. Whatever navigation exists by default is
-the navigation you get.
+`raw <text>` is `type` without the trailing Return, not an escape hatch for
+arbitrary HID codes. There is no way to send a modifier combination the table
+does not already list.
+
+**There are no function keys, and that is the one thing that stops this loop
+being fully autonomous.** Ctrl-F2 focuses the macOS menu bar, and the menu bar
+is the only route to **Utilities > Terminal** in Recovery. Without it, Recovery
+can be driven all the way to its main menu from the laptop and no further: a
+person has to click Utilities > Terminal, once.
+
+Adding `{"ctrl-f2", HID_KEYBOARD_F2 | KEY_MOD_LEFT_CTRL}` to `named_keys[]` in
+`brainx_flipper_one.c` would close it. That is a three-line change to the
+Flipper app, and it removes the last hands-on step between the power button and
+a root shell in Recovery. Worth doing before the next install.
 
 ## Navigating macOS Recovery by keyboard
 
