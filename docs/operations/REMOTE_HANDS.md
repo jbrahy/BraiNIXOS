@@ -195,10 +195,10 @@ effect immediately before the call. The window title is a good progress signal
 here -- it reads `Terminal - kmutil - sh as-install-boot-object.sh` for as long
 as the tool is working, which is a couple of minutes and looks like a hang.
 
-## pairing (17), and which volume you pick at the picker
+## pairing (17): the group already has a custom boot object
 
-Unresolved as of 2026-08-21. Recorded because the next attempt should start
-here rather than rediscovering it.
+Diagnosed 2026-08-21. The install is blocked behind a network requirement, not
+behind anything about the picker or the credentials.
 
 Answering kmutil's prompts with `jbrahy` and the admin password clears the
 first error -- `not a valid admin user for the volume at /Volumes/Preboot/<VG>/`
@@ -230,20 +230,55 @@ Ruled out by inspection, so do not spend time re-checking:
 | Policy not Permissive | `Security Mode: Permissive (smb0 && smb1): 1`, `Kernel CTRR Status: Disabled (sip2): 1` |
 | Payload wrong | 193857 bytes, matches `payloads.tsv`; kmutil got as far as `found raw boot object, deriving Mach-O boot properties... wrapping boot object payload...` |
 
-**The leading hypothesis is the volume picker.** This file tells you to choose
-Macintosh HD when authenticating, because the scripts live on its data volume.
-That authenticates the 1TR session to *Macintosh HD's* volume group -- and the
-install then tries to rewrite the LocalPolicy of a different group, BraiNIX.
-`bputil -d` reports `OS Pairing Status: Not Paired`. A `cp` onto BraiNIX's data
-volume from that session hung rather than failing, which points the same way.
+**Use `bputil -e`, not `bputil -d`.** This is the command that ended the
+guessing, and it should be the first one run next time. `-d` prints the policy
+of the *booted* environment, which in 1TR tells you almost nothing; `-e`
+prints every policy on the machine:
 
-Next attempt: enter 1TR and pick **BraiNIX** at the picker, then authenticate.
-If Macintosh HD's data volume is still readable at `/Volumes/Data`, run the
-scripts straight from there; if it is not, stage a copy onto BraiNIX first --
-from a session that owns it, so the copy actually completes.
+| | BraiNIX `5B900D83-...` | Macintosh HD `C40FFC20-...` |
+| --- | --- | --- |
+| OS Pairing Status | **Not Paired** | Paired |
+| Security Mode | Permissive (smb0 && smb1): 1 | Full |
+| coih | `8BABB8ED...D87375F` | absent |
 
-Untested. If it turns out to be wrong, the next thing to look at is whether the
-BraiNIX group's LocalPolicy can be created at all, rather than updated.
+That is the error in plain form: the BraiNIX group is Not Paired and already
+carries a custom boot object from an earlier install, and a new LocalPolicy
+cannot be written over that. The same symptom is reported against the Asahi
+installer by a user who also had a custom boot policy already set:
+<https://github.com/AsahiLinux/asahi-installer/issues/50>.
+
+So the fix is to clear the stale `coih` first, by setting **that group only**
+back to Full Security -- the operation Startup Security Utility performs, and
+reversible. Do NOT reach for `bputil -r/--remove`; it deletes the policy
+outright and is the shape of mistake that already cost this machine a volume
+group.
+
+### and Full Security needs the Internet
+
+`bputil -f` then fails, harmlessly and before changing anything:
+
+```
+Boot objects update failed for <VG>: Error Domain=BYErrorDomain Code=102
+"Can't continue because you are not connected to the Internet"
+  {AuthInstallErrorDomain Code=11}, BYErrorHint=NetworkRequired,
+  BYPersonalizationType=os
+```
+
+Full Security is personalized against Apple's servers, so it needs real
+connectivity. Permissive and `coih` are signed locally by the SEP and do not.
+
+**recoveryOS has no `networksetup`** -- only `/sbin/ifconfig` and
+`/usr/sbin/ipconfig`. There is therefore no way to join Wi-Fi from the Terminal,
+and Recovery does not inherit the Wi-Fi association from macOS. The Wi-Fi picker
+in the menu bar is the only route, and the menu bar needs a mouse.
+
+**So this step needs an Ethernet cable, and that is a physical act.** The mini's
+built-in port is `en0` (`5c:e9:1e:e8:a9:45`) and reads `status: inactive` with
+nothing plugged in. With a cable: `ipconfig set en0 DHCP`, confirm an address,
+then Full Security, then back to Permissive, then install.
+
+Add this to the list of things that need a person, alongside holding the power
+button.
 
 ## What still needs a person
 
