@@ -181,6 +181,46 @@ key space         activate                   -> admin user picker
 Pick **Macintosh HD**, not BraiNIX: the scripts live on Macintosh HD's data
 volume, and that group's data only unlocks if you authenticate against it.
 
+## Getting the mini online in recoveryOS
+
+Recovery has no Wi-Fi from the Terminal, so it is Ethernet or nothing. If the
+cable goes to the laptop rather than a router, macOS Internet Sharing is the
+route, and on 2026-08-21 it needed three fixes before it carried a packet:
+
+1. **It was configured inverted.** `PrimaryInterface.Device` and
+   `SharingDevices` were *both* `en11`, so pf held
+   `nat on en11 ... -> (en11:0)` -- NAT out of the same cable the client is on.
+   The uplink must be the interface with the default route (`en0`, Wi-Fi), and
+   `PrimaryService` must be that service's UUID, from:
+
+   ```sh
+   plutil -convert xml1 -o - /Library/Preferences/SystemConfiguration/preferences.plist
+   ```
+
+2. **`net.inet.ip.forwarding` was `0`.** `bootpd` hands out leases regardless,
+   so the client gets an address and a gateway and still routes nothing --
+   which reads as "sharing is on and broken" rather than "forwarding is off".
+
+3. **SIP blocks restarting the daemon.** `launchctl kickstart` on
+   `com.apple.NetworkSharing` returns `Operation not permitted while System
+   Integrity Protection is engaged`, so an edited plist never takes effect. The
+   toggle in System Settings is the supported way; the rule can also be written
+   straight into the live anchor:
+
+   ```sh
+   echo 'nat on en0 inet from 192.168.2.0/24 to any -> (en0)' \
+     | pfctl -a "com.apple.internet-sharing/shared_v4" -f -
+   ```
+
+**Verify from the mini, not from the laptop.** `/var/db/dhcpd_leases` proves a
+lease was issued and nothing more. The test that matters:
+
+```sh
+curl -m 10 -so /dev/null -w "H%{http_code}\n" http://captive.apple.com
+```
+
+`H000` is no route. `H200` is done.
+
 ## kmutil asks a question, and a stray keystroke answers it
 
 `kmutil configure-boot` prompts on stdin before it installs anything:

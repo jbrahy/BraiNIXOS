@@ -189,6 +189,66 @@ bputil -f -v <uuid> -u <user> -p <pass>
 the shape of the mistake that already cost this project a volume group, and it
 is not what is needed here.
 
+### The real cause: the group has no recoveryOS of its own
+
+**Clearing `coih` is not enough.** On 2026-08-21 `bputil -f` succeeded and left
+the group at `coih: absent`, Full Security -- and the very next downgrade still
+failed with `pairing (17)`, with and without `-c`. What that isolates:
+
+| operation | signed by | result |
+| --- | --- | --- |
+| `bputil -f` (raise to Full) | Apple, over the network | **works** |
+| `bputil -n` (lower to Permissive) | locally, needs a paired OS | `pairing (17)` |
+
+An Apple-personalized change does not care about pairing. A local downgrade
+does. And the group is `Not Paired` because it has no recoveryOS:
+
+```sh
+diskutil apfs list | grep -E "Name:|Roles:"
+```
+
+```
+Macintosh HD, Preboot, Recovery, Data, VM, BraiNIX - Data, BraiNIX, macOS Base System
+```
+
+**One `Recovery` volume, and it belongs to Macintosh HD.** A volume group
+becomes pairable only when it has its own recoveryOS, and a group carved by
+adding a volume and copying a system into it never gets one.
+
+**So the experiment volume must be created by a real macOS install**, not by
+cloning -- §2 of this file says carve a volume group, and this is the part that
+makes it a *bootable, policy-editable* one. Reinstall macOS onto it from
+Recovery and let the installer create the paired recoveryOS. Until then no
+custom boot object can be installed on it, no matter what the security mode says.
+
+recoveryOS has no `startosinstall` and no installer CLI, so this is the GUI
+wizard. Photograph the disk picker and confirm the target by name before every
+confirming keypress; picking wrong installs over the working macOS.
+
+### `exit` in the Recovery Terminal is a one-way door
+
+The Recovery main window does **not** wait behind Terminal. It is gone. Type
+`exit` and you are left with a dead Terminal window, no shell, and no way back:
+Cmd-Q, Cmd-W, Cmd-N and Ctrl-F2 are the only routes to the menu bar, and none of
+them were in the Flipper's key table. That ended a session and cost a
+power-button trip on 2026-08-21. `cmd-q`, `cmd-w` and `cmd-n` were added to
+`named_keys[]` the same night; **check the firmware actually carries them before
+relying on it**, because the table lives in the app and the app has to be
+reflashed.
+
+Do not close the shell until the work is done.
+
+### recoveryOS has pmset
+
+`/usr/bin/pmset` and `/usr/bin/caffeinate` both exist. Before anything long:
+
+```sh
+pmset -a sleep 0 displaysleep 0 disksleep 0
+```
+
+Losing the display to idle sleep looks exactly like a wedged machine, and
+waking it costs keystrokes you may not want to send blind.
+
 ### Full Security needs the Internet, so this step needs a cable
 
 `bputil -f` is personalized against Apple's servers and fails without
@@ -1009,7 +1069,10 @@ remote.
 [ ] separate volume group, and its UUID re-read this session
 [ ] payload staged, hash verified under macOS (not recoveryOS)
 [ ] as-preflight.sh reports READY
+[ ] the experiment group has its OWN Recovery volume (diskutil apfs list)
 [ ] bputil -e read FIRST: target group Paired, and coih absent
+[ ] pmset -a sleep 0 displaysleep 0 disksleep 0
+[ ] do NOT type `exit` in the Recovery Terminal until finished
 [ ] if coih is already set: bputil -f to clear it (needs Ethernet), never -r
 [ ] bputil -n -c, no -k
 [ ] bputil -d confirms Permissive before touching the boot object
