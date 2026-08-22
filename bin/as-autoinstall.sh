@@ -125,6 +125,11 @@ say "4. the precondition that actually blocks installs"
 # custom boot object can never be installed on it -- and no flag, credential or
 # retry changes that. Nine runs on 2026-08-21 failed here, and the error text
 # said so every time.
+run "diskutil apfs listVolumeGroups 2>/dev/null | awk '\''/Volume Group [0-9A-F-]{36}/ { for (i=1;i<=NF;i++) if (\$i ~ /^[0-9A-F-]{36}\$/) u=\$i } /BraiNIX/ && u { print u; exit }'\''"
+VG="$(printf '%s' "$OUT" | tr -d '[:space:]')"
+[ -n "$VG" ] || die "could not resolve the BraiNIX volume group UUID"
+printf '  target volume group: %s\n' "$VG"
+
 run "bputil -e 2>&1 | grep -E 'Volume Group UUID|OS Pairing Status|coih|Security Mode:'"
 printf '%s\n' "$OUT" | sed 's/^/  /'
 if grep -q "Not Paired" <<<"$OUT"; then
@@ -242,7 +247,10 @@ fi
 # Independent confirmation. An installer that says it worked and a policy that
 # disagrees is the case worth catching, and the only way to catch it is to ask
 # the machine a second time by a different route.
-run "bputil -d 2>&1 | grep -E 'coih|Security Mode:'"
+# Per-group, not `bputil -d`. In 1TR `-d` describes the recovery environment,
+# whose coih is always absent -- so verifying with it would report "nothing was
+# installed" after a perfectly successful install on the target group.
+run "bputil -e 2>&1 | awk -v want='\''${VG}'\'' '\''/^ *OS Type/ { if (hit) { printf \"%s\", blk; done=1; exit } blk=\"\"; hit=0 } { blk = blk \$0 \"\\n\"; if (index(\$0, want)) hit=1 } END { if (!done && hit) printf \"%s\", blk }'\'' | grep -E 'coih|Security Mode:'"
 printf '  policy now:\n'; printf '%s\n' "$OUT" | sed 's/^/    /'
 if grep -q "coih): absent" <<<"$OUT"; then
   die "policy says coih is still absent -- nothing was installed"

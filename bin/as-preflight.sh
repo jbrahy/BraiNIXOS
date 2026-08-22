@@ -162,6 +162,21 @@ else
   BP=""
 fi
 
+# Per-group policy, which is NOT what `bputil -d` gives you.
+#
+# `bputil -d` prints the policy of the BOOTED environment. In 1TR that block is
+# headed "OS Type: one true recoveryOS" and its OS Pairing Status describes
+# recovery itself, which is always Not Paired. Reading a target group's pairing
+# out of it means every group looks broken, including good ones -- a false
+# alarm that would block a valid install. `bputil -e` prints one block per
+# volume group; this pulls out the block for the group asked about.
+group_block() {  # $1 = vuid, stdin = bputil -e output
+  awk -v want="$1" '''
+    /^ *OS Type/ { if (hit) { printf "%s", blk; done=1; exit } blk=""; hit=0 }
+    { blk = blk $0 "\n"; if (index($0, want)) hit=1 }
+    END { if (!done && hit) printf "%s", blk }'''
+}
+
 policy_of() {  # $1 = volume group uuid; prints output, returns 1 if unusable
   [ -n "$BP" ] || return 1
   out="$($BP -d -v "$1" 2>&1)"
@@ -206,16 +221,19 @@ else
     # error whose text names the cause and was still read as four other things
     # first. The old line here said "the install script sets it" about
     # Permissive, which is false in exactly this case and read as reassurance.
-    if printf '%s' "$POLICY" | grep -q "OS Pairing Status.*Not Paired"; then
+    # Read pairing from the per-group view, never from $POLICY (which is
+    # `bputil -d` and describes the booted environment).
+    GPOL="$([ -n "$BP" ] && $BP -e 2>&1 | group_block "$VG" || true)"
+    if [ -z "$GPOL" ]; then
+      warn "pairing status UNKNOWN -- no bputil -e block for $VG"
+    elif printf '%s' "$GPOL" | grep -q "OS Pairing Status.*Not Paired"; then
       bad "BraiNIX group is NOT PAIRED -- its policy can never be downgraded"
       printf '  A custom boot object cannot be installed on this group, ever.\n'
       printf '  Cause: the group has no recoveryOS of its own (see below).\n'
       printf '  Fix:   reinstall macOS onto that volume so the installer\n'
       printf '         creates the paired recoveryOS. See FIRST_LIGHT_RUNBOOK.md 5.\n'
-    elif printf '%s' "$POLICY" | grep -q "OS Pairing Status.*Paired"; then
-      ok "BraiNIX group is Paired (its policy can be downgraded)"
     else
-      warn "pairing status UNKNOWN -- bputil printed no OS Pairing Status line"
+      ok "BraiNIX group is Paired (its policy can be downgraded)"
     fi
   else
     warn "policy UNKNOWN for $VG: bputil produced no readable output"
