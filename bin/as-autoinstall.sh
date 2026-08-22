@@ -63,7 +63,9 @@ die()  { printf '\nSTOPPED: %s\n' "$*"; exit 1; }
 OUT=""
 run() {
   local timeout="${2:-900}"
-  OUT="$("$CONSOLE" run "$1" --timeout "$timeout" 2>&1)"
+  # The command goes over stdin, never argv: argv is world-readable through ps,
+  # and a job may carry the admin-password placeholder.
+  OUT="$(printf '%s' "$1" | "$CONSOLE" run --stdin --timeout "$timeout" 2>&1)"
   return $?
 }
 
@@ -154,9 +156,12 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
-[ -n "$ADMIN_USER" ] && [ -n "$ADMIN_PASS" ] \
-  || die "set BRAINX_ADMIN_USER and BRAINX_ADMIN_PASS; kmutil prompts for them
-  and there is no -u/-p on configure-boot"
+[ -n "$ADMIN_USER" ] \
+  || die "set BRAINX_ADMIN_USER; kmutil prompts for it and configure-boot has no -u"
+[ -n "$ADMIN_PASS" ] \
+  || die "set BRAINX_ADMIN_PASS in the environment of the console \`serve\`
+  process, which substitutes it in flight. Exporting it here too is harmless
+  but not sufficient, and not required."
 
 # kmutil asks three questions in order: y, Username, Password. Answering them
 # by hand through a one-way keyboard is what lost two runs -- the prompt is
@@ -193,7 +198,12 @@ if grep -q HAVE-SCRIPT <<<"$OUT"; then
   # its stdin and refuses one.
   #
   # tr -d strips the CRs a pty adds, so the output greps like ordinary text.
-  INSTALL="{ printf '%s\n' y '${ADMIN_USER}' '${ADMIN_PASS}'; sleep 120; } | script -q /dev/null sh ${STAGE}/as-install-boot-object.sh ${PAYLOAD} 2>&1 | tr -d '\r' | tail -40"
+  # The password is NOT interpolated here. The spooled job carries a
+  # placeholder, and the console substitutes the real value from its own
+  # environment at the moment it hands the job to the agent. So the credential
+  # never lands in the spool, never appears in `ps`, and is not left behind in
+  # the run transcript.
+  INSTALL="{ printf '%s\n' y '${ADMIN_USER}' '@@BRAINX_ADMIN_PASS@@'; sleep 120; } | script -q /dev/null sh ${STAGE}/as-install-boot-object.sh ${PAYLOAD} 2>&1 | tr -d '\r' | tail -40"
 else
   bad "no script(1) in this recoveryOS, so kmutil's /dev/tty read cannot be fed"
   cat <<MANUAL
@@ -212,8 +222,9 @@ MANUAL
   die "cannot drive the password prompt unattended on this system"
 fi
 
-# The password reaches the mini over the console channel and is written to disk
-# on neither machine.
+# The password reaches the mini over the console channel, substituted in flight,
+# and is written to disk on neither machine. The console must therefore have
+# BRAINX_ADMIN_PASS in ITS environment -- export it before `serve`, not here.
 say "5b. install"
 printf '  answering: y / %s / <password>\n' "$ADMIN_USER"
 run "$INSTALL"

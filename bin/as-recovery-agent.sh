@@ -72,7 +72,10 @@ while :; do
     ''|*[!0-9]*) log "bad job id '$ID'"; sleep 2; continue ;;
   esac
 
-  log "job $ID: $CMD"
+  # Redacted: a job may carry an admin password, and a logfile is exactly the
+  # place a credential should never come to rest. Length is enough to debug a
+  # truncated command.
+  log "job $ID: ${#CMD} bytes"
 
   # stdout and stderr together, because on this machine the interesting half is
   # almost always stderr: bputil, kmutil and diskutil all report failures there
