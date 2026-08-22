@@ -66,6 +66,26 @@ for tool in curl unzip nvram; do
   if command -v "$tool" >/dev/null 2>&1; then ok "$tool"; else warn "$tool is missing (not fatal)"; fi
 done
 
+# These two decide whether the install can run unattended at all, so the answer
+# belongs in the report rather than in someone's memory.
+#
+#   curl    -- the recovery console's only transport, and the only way to prove
+#              connectivity. A DHCP lease proves nothing.
+#   script  -- allocates a pty. kmutil reads the PASSWORD from /dev/tty, so a
+#              plain pipe feeds y and the username and then waits forever for a
+#              human. With script(1) the whole install is unattended; without
+#              it, that one prompt stays hands-on.
+#   pmset   -- disable idle sleep before anything long. A dark display is
+#              indistinguishable from a wedged machine.
+for tool in script pmset; do
+  if command -v "$tool" >/dev/null 2>&1; then ok "$tool"; else warn "$tool is missing"; fi
+done
+if command -v script >/dev/null 2>&1; then
+  printf '  note: unattended install is possible (script(1) can feed the tty)\n'
+else
+  printf '  note: kmutil password prompt will need a human; see FIRST_LIGHT_RUNBOOK.md 5\n'
+fi
+
 # ---------------------------------------------------------------------------
 say "3. hashing capability"
 # ---------------------------------------------------------------------------
@@ -171,6 +191,32 @@ else
     else
       printf '  note: a custom boot object IS installed; installing again replaces it\n'
     fi
+
+    # THE precondition, and the one this script used to miss.
+    #
+    # Raising a group to Full Security is signed by Apple over the network and
+    # works on anything. LOWERING it to Permissive is signed locally and
+    # requires the group's OS to be Paired -- and a group is Paired only if it
+    # has a recoveryOS of its own. A group carved by adding a volume and
+    # copying a system into it never gets one, and is therefore permanently
+    # uninstallable, no matter what the security mode says.
+    #
+    # 2026-08-21 was spent discovering that the hard way: nine install runs,
+    # every one failing at `com.apple.bootpolicy Code=17 "pairing (17)"`, an
+    # error whose text names the cause and was still read as four other things
+    # first. The old line here said "the install script sets it" about
+    # Permissive, which is false in exactly this case and read as reassurance.
+    if printf '%s' "$POLICY" | grep -q "OS Pairing Status.*Not Paired"; then
+      bad "BraiNIX group is NOT PAIRED -- its policy can never be downgraded"
+      printf '  A custom boot object cannot be installed on this group, ever.\n'
+      printf '  Cause: the group has no recoveryOS of its own (see below).\n'
+      printf '  Fix:   reinstall macOS onto that volume so the installer\n'
+      printf '         creates the paired recoveryOS. See FIRST_LIGHT_RUNBOOK.md 5.\n'
+    elif printf '%s' "$POLICY" | grep -q "OS Pairing Status.*Paired"; then
+      ok "BraiNIX group is Paired (its policy can be downgraded)"
+    else
+      warn "pairing status UNKNOWN -- bputil printed no OS Pairing Status line"
+    fi
   else
     warn "policy UNKNOWN for $VG: bputil produced no readable output"
   fi
@@ -193,6 +239,27 @@ else
       warn "Macintosh HD policy UNKNOWN: bputil produced no readable output"
     fi
   fi
+fi
+
+# ---------------------------------------------------------------------------
+say "5a. recoveryOS ownership"
+# ---------------------------------------------------------------------------
+# The structural reason behind a Not Paired group, checked separately because
+# it is visible even when bputil is unavailable, and because the fix is
+# completely different from every other failure in this file: no flag, no
+# credential and no retry changes it. The volume has to be reinstalled.
+#
+# One Recovery volume in the container means one OS install owns it. On this
+# machine that was Macintosh HD, and BraiNIX -- carved by copying -- had none.
+REC_COUNT="$(diskutil apfs list 2>/dev/null | grep -c "Recovery (Case-insensitive)" || true)"
+printf '  Recovery volumes in the container: %s\n' "${REC_COUNT:-unknown}"
+diskutil apfs list 2>/dev/null | grep -E "Name:" | sed 's/^ */  /' | head -12
+
+if [ "${REC_COUNT:-0}" -le 1 ] && [ -n "${VG:-}" ]; then
+  warn "only one Recovery volume exists; if it belongs to the production OS then"
+  warn "the experiment group has none, and its policy can never be downgraded"
+  printf '  A group needs its OWN recoveryOS to be Paired. Copying a system\n'
+  printf '  volume into a new group does not create one -- installing macOS does.\n'
 fi
 
 # ---------------------------------------------------------------------------

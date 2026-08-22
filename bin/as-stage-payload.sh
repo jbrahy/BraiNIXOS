@@ -90,10 +90,17 @@ if not changed:
 open(path, 'w').write('\n'.join(out))
 PY
 
+# as-recovery-agent.sh is staged with the rest because it is the ONLY thing
+# that has to already be on the machine before the console can be used: it is
+# what turns a one-way keyboard into a two-way one, and it cannot be fetched
+# over a channel that does not exist yet.
 cp "${REPO}/bin/payloads.tsv" \
    "${REPO}/bin/as-install-boot-object.sh" \
    "${REPO}/bin/as-preflight.sh" \
-   "${REPO}/bin/as-verify-install.sh" "${OUT}/"
+   "${REPO}/bin/as-verify-install.sh" \
+   "${REPO}/bin/as-recovery-agent.sh" \
+   "${REPO}/bin/as-recovery-net.sh" "${OUT}/"
+chmod +x "${OUT}"/as-*.sh
 
 # Verify the staged bytes against the staged manifest, the same way the
 # installer will at the machine. A staging step that does not check is a staging

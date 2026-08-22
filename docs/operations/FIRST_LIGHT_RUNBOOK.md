@@ -289,10 +289,34 @@ Three failure modes, all of which happened:
    like a policy fault rather than a missed prompt.
 2. **A wrong password** fails as `Code=71 "Unable to set credentials, possibly
    wrong name or password"`. These are different messages; read which one you got.
-3. **The password prompt reads `/dev/tty` directly.** You can pipe `y` and the
-   username into kmutil's stdin, and the pipe will be consumed correctly, and
-   then it will still stop and wait for a human at `Password:`. There is no way
-   around this. Someone has to type it.
+3. **The password prompt reads `/dev/tty` directly**, so a plain pipe feeds `y`
+   and the username and then waits forever at `Password:`. Confirmed: a pipe on
+   `/dev/tty` gives `Device not configured`.
+
+   This file used to end that paragraph "There is no way around this. Someone
+   has to type it." **That was wrong**, and it is the sentence that kept the
+   install manual. `script(1)` allocates a pty, which satisfies the `/dev/tty`
+   read, and the answers can be fed in:
+
+   ```sh
+   { printf '%s\n' y "$ADMIN_USER" "$ADMIN_PASS"; sleep 120; } \
+     | script -q /dev/null sh as-install-boot-object.sh brainix-kernel 2>&1 | tr -d '\r'
+   ```
+
+   Two details, both established by experiment on 2026-08-22 and both easy to
+   get wrong:
+
+   * **The `sleep` is load-bearing, not padding.** Without it the pipe hits EOF
+     before kmutil issues its reads and every answer comes back empty. Measured:
+     bare pipe gives `got:[]`; held pipe gives the value.
+   * **A fifo does not work.** macOS `script` calls `tcgetattr` on its stdin and
+     refuses anything that is not a tty or a pipe.
+
+   The pipeline finishes only when the holder does, so the sleep sets a floor on
+   runtime -- 120s is well under kmutil's own duration and is absorbed entirely.
+
+   `bin/as-autoinstall.sh` does this, and falls back to the manual procedure if
+   `script(1)` turns out to be missing from recoveryOS rather than hanging.
 
 ### Output buffering will make it look hung
 

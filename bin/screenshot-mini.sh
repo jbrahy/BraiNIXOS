@@ -15,8 +15,12 @@
 #   ffmpeg -f avfoundation -list_devices true -i ""
 set -eu
 
-DEVICE="${1:-1}"          # 1 is usually the Continuity Camera; 0 is the built-in
-OUT="${2:-/private/tmp/claude-501/-Users-jbrahy-OtherProjects-brainix/3aab4a38-fd47-451e-9a65-11f8a595da95/scratchpad/mini-$(date +%H%M%S).jpg}"
+# 0, not 1. Device 1 is the Continuity Camera -- an iPhone -- which is only
+# present while the phone is. When it leaves, the index becomes a /dev/null
+# placeholder and ffmpeg hangs forever instead of failing, which reads exactly
+# like a dead machine. Device 0 is the built-in camera and is always there.
+DEVICE="${1:-0}"
+OUT="${2:-${TMPDIR:-/tmp}/mini-$(date +%H%M%S).jpg}"
 
 # -update 1 because a single still is not an image sequence, which ffmpeg
 # otherwise warns about at length while doing the right thing anyway.
