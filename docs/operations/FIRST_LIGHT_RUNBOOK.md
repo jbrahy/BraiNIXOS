@@ -1087,6 +1087,54 @@ remote.
 - **Note:** `clear` does not exist in recoveryOS, so you cannot scroll output
   back to the top of the window that way.
 
+## 10a. The automated path
+
+Everything below section 4 that does not need a person is now scripted, and the
+two things that do are named rather than discovered halfway through.
+
+```sh
+# once, under macOS, before the trip
+./bin/as-stage-payload.sh brainix-kernel
+
+# laptop, with the mini in 1TR and Ethernet plugged in
+export BRAINX_ADMIN_USER=jbrahy BRAINX_ADMIN_PASS=...   # console substitutes it in flight
+./bin/as-recovery-console.py serve                      # prints the bootstrap line
+#   type that one line into the mini's Terminal, once
+./bin/as-autoinstall.sh --dry-run brainix-kernel
+./bin/as-autoinstall.sh brainix-kernel
+./bin/as-watch-boot.sh
+```
+
+| tool | closes |
+| --- | --- |
+| `as-recovery-console.py` + `as-recovery-agent.sh` | no return channel: results are text with an exit status, not a photograph |
+| `as-recovery-net.sh` | "has an address" mistaken for "has a route"; proves reachability with a fetch |
+| `as-preflight.sh` | the pairing precondition, which used to be unchecked |
+| `as-autoinstall.sh` | ordering, kmutil's three prompts, and an independent post-install verdict |
+| `as-verify-install.sh` | a recorded verdict; it existed for weeks and was never run during an install |
+| `as-watch-boot.sh` | timing the reboot ladder by eye |
+| `as-gui.py` | pressing keys at a screen nobody has read |
+
+**`as-gui.py` is the one to reach for on the GUI screens**, because it will not
+press a key until OCR confirms the screen it thinks it is on:
+
+```sh
+./bin/as-gui.py read                                   # what is on screen
+./bin/as-gui.py expect 'Reinstall macOS'
+./bin/as-gui.py key down --require 'Macintosh HD' --expect 'BraiNIX'
+```
+
+`--require` is checked before the key is sent and `--expect` after, so a step
+that cannot confirm its screen refuses rather than guesses. Use it at the disk
+picker especially: that is the screen where a misread installs over the
+production OS.
+
+**`as-gui.py keys` probes the flashed firmware** rather than the source tree,
+because the key table lives in the app and having added a key to
+`brainx_flipper_one.c` proves nothing about the device in the room. It presses
+every key it tests, including `cmd-q`, so run it at the startup picker and
+never at a Terminal.
+
 ## 11. Checklist
 
 ```
@@ -1097,6 +1145,8 @@ remote.
 [ ] bputil -e read FIRST: target group Paired, and coih absent
 [ ] pmset -a sleep 0 displaysleep 0 disksleep 0
 [ ] do NOT type `exit` in the Recovery Terminal until finished
+[ ] as-gui.py keys run at the PICKER (not a Terminal) if firmware is unproven
+[ ] as-verify-install.sh --record run, so the install leaves evidence
 [ ] if coih is already set: bputil -f to clear it (needs Ethernet), never -r
 [ ] bputil -n -c, no -k
 [ ] bputil -d confirms Permissive before touching the boot object

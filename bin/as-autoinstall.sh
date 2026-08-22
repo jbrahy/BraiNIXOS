@@ -249,6 +249,16 @@ if grep -q "coih): absent" <<<"$OUT"; then
 fi
 ok "a custom boot object is present in the policy"
 
+# ---------------------------------------------------------------------------
+say "7. recorded verification"
+# ---------------------------------------------------------------------------
+# as-verify-install.sh exists and was never once run as part of an install, so
+# no install in this project's history left a machine-checked record of what
+# was installed. Wire it in: a verdict nobody stores is a verdict nobody can
+# contradict later.
+run "sh ${STAGE}/as-verify-install.sh --record ${PAYLOAD} 2>&1 | tail -20" 300
+printf '%s\n' "$OUT" | sed 's/^/  /'
+
 cat <<'DONE'
 
 Installed. Reboot and choose BraiNIX at the startup picker.
@@ -258,10 +268,8 @@ a dummy that is never scanned out. Watch the USB bus instead -- _start re-arms
 the watchdog four seconds longer at each rung, so the interval between reboots
 is the report:
 
-    while :; do ls /dev/cu.usbmodem* >/dev/null 2>&1 && echo up || echo down; sleep 1; done
+    ./bin/as-watch-boot.sh
 
-  ~5s   device tree parsed, watchdog armed
-  ~13s  pmgr translated
-  ~26s  MMU and caches on -- the whole ladder
-  never it did not reach the first rung
+which times the interval for you and names the rung, rather than asking you to
+eyeball a while-loop and mistake 17s for 21s.
 DONE
