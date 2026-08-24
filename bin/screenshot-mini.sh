@@ -19,7 +19,12 @@ set -eu
 # present while the phone is. When it leaves, the index becomes a /dev/null
 # placeholder and ffmpeg hangs forever instead of failing, which reads exactly
 # like a dead machine. Device 0 is the built-in camera and is always there.
-DEVICE="${1:-0}"
+# "auto" asks as-capture-device.sh, which prefers an HDMI capture dongle over
+# the camera and never picks the Continuity placeholder that makes ffmpeg hang.
+DEVICE="${1:-auto}"
+if [ "$DEVICE" = "auto" ]; then
+  DEVICE="$("$(dirname "$0")/as-capture-device.sh" 2>/dev/null || echo 0)"
+fi
 OUT="${2:-${TMPDIR:-/tmp}/mini-$(date +%H%M%S).jpg}"
 
 # -update 1 because a single still is not an image sequence, which ffmpeg

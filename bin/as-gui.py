@@ -57,7 +57,7 @@ def norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip().lower()
 
 
-def capture(device: str = "0") -> Path:
+def capture(device: str = "auto") -> Path:
     out = Path(tempfile.mkdtemp(prefix="brainx-gui-")) / "screen.jpg"
     subprocess.run([str(SHOT), device, str(out)], check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -74,7 +74,7 @@ def ocr(img: Path) -> str:
     return r.stdout
 
 
-def read_screen(device: str = "0", tries: int = 2) -> str:
+def read_screen(device: str = "auto", tries: int = 2) -> str:
     """OCR the screen, retrying once: a single frame can catch a redraw."""
     best = ""
     for _ in range(tries):
@@ -114,7 +114,8 @@ def matches(text: str, pattern: str) -> bool:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--device", default="0", help="camera index (0 = built-in)")
+    p.add_argument("--device", default="auto",
+                   help="avfoundation index, or 'auto' to prefer an HDMI capture dongle")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("read")
