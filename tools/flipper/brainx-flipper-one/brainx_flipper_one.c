@@ -269,6 +269,10 @@ static const struct {
     {"ctrl-c", HID_KEYBOARD_C | KEY_MOD_LEFT_CTRL},
     {"ctrl-d", HID_KEYBOARD_D | KEY_MOD_LEFT_CTRL},
     {"cmd-tab", HID_KEYBOARD_TAB | KEY_MOD_LEFT_GUI},
+    {"shift-cmd-t", HID_KEYBOARD_T | KEY_MOD_LEFT_GUI | KEY_MOD_LEFT_SHIFT},
+    {"cmd-q", HID_KEYBOARD_Q | KEY_MOD_LEFT_GUI},
+    {"cmd-w", HID_KEYBOARD_W | KEY_MOD_LEFT_GUI},
+    {"cmd-n", HID_KEYBOARD_N | KEY_MOD_LEFT_GUI},
 };
 
 /* ------------------------------------------------------------- commands -- */

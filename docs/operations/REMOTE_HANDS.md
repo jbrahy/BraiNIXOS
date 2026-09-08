@@ -284,6 +284,12 @@ guessing, and it should be the first one run next time. `-d` prints the policy
 of the *booted* environment, which in 1TR tells you almost nothing; `-e`
 prints every policy on the machine:
 
+**And only from within 1TR.** `OS Pairing Status` reads `Not Paired` for every group,
+including healthy ones, when `bputil -e` runs from a normally-booted OS — that's expected
+Apple behavior, not a fault. Checking it over SSH from regular macOS on 2026-08-24 read a
+fine, previously-Paired Macintosh HD as broken and triggered an unneeded policy write
+against production before anyone caught the mistake.
+
 | | BraiNIX `5B900D83-...` | Macintosh HD `C40FFC20-...` |
 | --- | --- | --- |
 | OS Pairing Status | **Not Paired** | Paired |

@@ -167,6 +167,14 @@ looks similar and appears one step earlier.
 of the *booted* environment and tells you almost nothing about your target. `-e`
 prints every policy on the machine, and the answer is the two rows side by side:
 
+**Only trust `OS Pairing Status` from `bputil -e` when run from within 1TR.** Run from a
+normally-booted macOS (e.g. over SSH), it reads `Not Paired` for *every* volume group by
+design — that is Apple's documented behavior, not evidence of anything wrong. Cost a
+session on 2026-08-24: a healthy, previously-`Paired` Macintosh HD read as `Not Paired`
+over SSH, was treated as new damage, and got an unnecessary `bputil -f` write against the
+production volume group before the mistake was caught. See
+`ASAHI_STUB_BOOTSTRAP.md` "What actually happened" for the full incident.
+
 | | the experiment group | the untouched macOS |
 | --- | --- | --- |
 | OS Pairing Status | **Not Paired** | Paired |
