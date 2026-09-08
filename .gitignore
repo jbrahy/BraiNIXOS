@@ -45,6 +45,9 @@ private-key*
 /build/
 /dist/
 
+# Flipper app build output (ufbt writes the .fap and debug ELF here)
+tools/flipper/brainx-flipper-one/dist/
+
 # IDE and editor artifacts
 .idea/
 .vscode/
